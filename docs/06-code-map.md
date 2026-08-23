@@ -27,7 +27,11 @@ every reference beyond 255 bytes.
 |---|---|---|
 | `0x00f6d4` | **LoadFloor** — `AllFloor`, the tile map and the lake palettes | *"$Floor/AllFloor"* |
 | `0x00fd60` | **AnimateLakePalette** — cycles floor tile 9's PLUT | writes `0x5fa68[0x48]` |
+| `0x00f66c` | **BuildHorizonTable(height)** — fills `0x8f334` from `0x8c16c` | 400 iterations at `0xf6bc` |
 | `0x00fe30` | **DrawFloor** — the 16 x 16 ground patch around the camera | reads the tile map at `0x58bd4` |
+| `0x01428c` | BuildHorizonTable8_8 — fills `0x8b8ec` and `0x8bb2c` | |
+| `0x014348` | **BuildReciprocalTable** — 1,600 calls to Operamath slot -28 | `0x143c0` |
+| `0x056a34` | **MulSF16** — open-coded 16.16 multiply | `mla r0, r2, r1, r3` |
 | `0x013e4c` | **LoadWorld** — loads and indexes `CondensedPerfectWorld.B3D` | *"Starting to load the world..."* |
 | `0x015c08` | LoadStaticObjects | *"Loaded static objects ..."* |
 | `0x0018a4c` | **OpenAllFolios** — math, graphics, audio, event broker | its four failure messages |
@@ -92,7 +96,11 @@ confirmation of the header layout.
 | `0x08db34` | the 16 x 16 ground lattice template, 256 points in 16.16 |
 | `0x08e334` | the same lattice, camera-relative and transformed |
 | `0x08eb34` | the lattice projected to screen |
-| `0x08c16c`, `0x08f334` | depth-keyed tables the floor renderer indexes |
+| `0x08c16c` | 1,600-entry reciprocal table, depth 2.0 … 401.75 in 0.25 steps |
+| `0x08f334` | 400-entry horizon table, screen Y of the ground at depth 2.0 … 201.5 |
+| `0x08b8ec`, `0x08bb2c` | the same two, at 8.8 precision |
+| `0x058a18` | camera height, 16.16; the two builders re-run when it changes |
+| `0x0581d4` | the ground's 16-step distance fade, as `PIXC` words |
 | `0x058bac` | frame delta, ticks |
 | `0x088a40` | scratch: 2D footprint vertices, `(x, y)` pairs |
 | `0x088ce0` | scratch: 3D vertices, `(footprintIndex, z)` pairs |

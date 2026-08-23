@@ -77,7 +77,11 @@ Early, but moving. Nothing is playable yet.
 - **The ground is solved too.** It is not in the world file at all: a 4-bit
   256 x 256 tile map lives in the pixels of the last cel of
   `Perfect/Floor/AllFloor`, one nibble per 16-unit tile, and the lake animates
-  by palette cycling.
+  by palette cycling. The whole ground pipeline now reads end to end: a
+  precomputed reciprocal table for the perspective divide, a precomputed
+  horizon curve per camera height, the 52-unit switch between the two tile
+  detail levels, and a sixteen-step distance fade written straight into each
+  quad's pixel-processor word.
 - The overworld therefore renders: a top-down city plan, a Wavefront OBJ, and a
   textured perspective view with walls and ground — all from the disc, with no
   ARM emulation.

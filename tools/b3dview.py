@@ -122,9 +122,12 @@ class Raster:
                     continue
                 self.z[i] = iz
                 j = t * 3
-                self.col[i * 3] = (tex.px[j] * shade) >> 8
-                self.col[i * 3 + 1] = (tex.px[j + 1] * shade) >> 8
-                self.col[i * 3 + 2] = (tex.px[j + 2] * shade) >> 8
+                c0 = (tex.px[j] * shade) >> 8
+                c1 = (tex.px[j + 1] * shade) >> 8
+                c2 = (tex.px[j + 2] * shade) >> 8
+                self.col[i * 3] = 255 if c0 > 255 else c0
+                self.col[i * 3 + 1] = 255 if c1 > 255 else c1
+                self.col[i * 3 + 2] = 255 if c2 > 255 else c2
 
     def png(self, path):
         raw = bytearray()
@@ -134,6 +137,32 @@ class Raster:
             for x in range(self.w):
                 raw += row[x * 3:x * 3 + 3] + b'\xff'
         write_png(path, bytes(raw), self.w, self.h)
+
+
+# The ground's distance fade, from the sixteen PIXC words at 0x581d4 that the
+# renderer writes to each floor CCB. Decoded as PPMPC: MF in bits 12-10 gives
+# a multiplier of 1..8 and SF in bits 9-8 a divisor of 16, 2, 4 or 8, so the
+# ramp is 2.0 at the camera down to 1/16 at the horizon. Index 16 is the
+# beyond-the-ramp entry the loop at 0x101f4 falls out to.
+FADE_PIXC = (0x1e00, 0x1a00, 0x1600, 0x1200, 0x1f00, 0x1b00, 0x1700, 0x1300,
+             0x1c00, 0x1800, 0x1400, 0x1000, 0x0c00, 0x0800, 0x0400, 0x0000,
+             0x0000)
+_SF = (16, 2, 4, 8)
+FADE = tuple((((v >> 10) & 7) + 1) / _SF[(v >> 8) & 3] for v in FADE_PIXC)
+
+NEAR_DETAIL = 52.0          # 0x340000 in 16.16, the compare at 0x10260
+
+
+def fade_level(depth, lateral, step=6):
+    """The loop at 0x101e8: count down from 16 by `step` world units."""
+    d = (abs(lateral) + depth) * 0.5
+    level, limit = 16, 72.0
+    for _ in range(16):
+        if d >= limit:
+            break
+        limit -= step
+        level -= 1
+    return level
 
 
 # wall quad corner order is (far top, near top, near bottom, far bottom)
@@ -166,13 +195,18 @@ def render(path, out, eye, yaw, pitch, fov=70.0, size=(800, 500), far=6000.0,
         cache[tid] = t
         return t
 
-    def floor_tex(t):
-        if t not in fcache:
+    def floor_tex(t, near):
+        """The game's two detail levels: cel t is 16x16, cel t + 15 is 32x32.
+
+        `0x10260` picks between them on the quad's mean camera-space depth,
+        with the near set used at 52 world units or less."""
+        key = (t, near)
+        if key not in fcache:
             try:
-                fcache[t] = Texture(*ground.image(t + 15))    # the 32x32 set
+                fcache[key] = Texture(*ground.image(t + 15 if near else t))
             except Exception:
-                fcache[t] = None
-        return fcache[t]
+                fcache[key] = None
+        return fcache[key]
 
     W, H = size
     r = Raster(W, H)
@@ -207,16 +241,21 @@ def render(path, out, eye, yaw, pitch, fov=70.0, size=(800, 500), far=6000.0,
                 if (x0 + 8 - ex) ** 2 + (y0 + 8 - ey) ** 2 > far * far:
                     continue
                 t = ground.tile_at_world(x0, y0)
-                if t >= 15:
-                    continue
-                tex = floor_tex(t)
+                if t == 15:           # never occurs in the shipping map
+                    continue              # (floor.py already maps off-map to 13)
                 corners = ((x0, y0, 0), (x0 + TILE, y0, 0),
                            (x0 + TILE, y0 + TILE, 0), (x0, y0 + TILE, 0))
                 p = [project(c, UV_FLOOR[k]) for k, c in enumerate(corners)]
                 if any(q is None for q in p):
                     continue
-                r._span(p[0], p[1], p[2], 256, tex, (60, 60, 60))
-                r._span(p[0], p[2], p[3], 256, tex, (60, 60, 60))
+                # camera-space depth and lateral offset of the quad centre
+                dx, dy = x0 + TILE / 2 - ex, y0 + TILE / 2 - ey
+                depth = (dx * cy + dy * sy) * cp - ez * sp
+                lateral = -dx * sy + dy * cy
+                tex = floor_tex(t, depth <= NEAR_DETAIL)
+                shade = min(1024, int(FADE[fade_level(depth, lateral)] * 256))
+                r._span(p[0], p[1], p[2], shade, tex, (60, 60, 60))
+                r._span(p[0], p[2], p[3], shade, tex, (60, 60, 60))
                 nf += 1
 
     nq = 0
