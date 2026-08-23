@@ -146,12 +146,33 @@ code reconciles them by hand, twice:
 ```
 
 Which means **row 12 — boss id 6, Medusa — is the one row no caller can
-select. It is also the only empty one.** The other nine boss rows hold 4 to
-10 answers each and there is no `All<Name>Marks` on the disc to speak them.
+select. It is also the only empty one.**
 
-Asking *who is* a character plays a film instead: the same table of ten names
-at `0x93f0`, indexed `0x93d8 + 4*id`, which the `$Perfect/Film/` prefix at
-`0x1fc8` turns into a path into the Cinepak stream.
+The other nine boss rows are not orphans, though: they are answered with
+**film**, not speech. `main` splits on the id before anything else:
+
+```
+0020b4  ldr r0, [r5, #0x34]     ; the character id, straight out of argv[1]
+0020b8  cmp r0, #6
+0020bc  blt 0x20c8              ; a head: talk to it
+0020c0  teq r0, #0xb
+0020c4  bne 0x20d0              ; a boss that is not Riberto: play film
+0020c8  bl 0x19c8               ; the conversation
+0020d0  bl 0x1e08               ; the film
+```
+
+Both paths build the same menu out of the same table. The film path just
+resolves the answer number against a Cinepak file instead of a Marks file —
+the ten names at `0x93f0`, indexed `0x93d8 + 4*id`, with the `$Perfect/Film/`
+prefix at `0x1fc8` in front — and seeks it with **the same ten-thousand-tick
+slot rule as the speech**, two slots in rather than a hundred:
+
+```
+001f70  r0 = 625 * n            ; n = answer + question - 1
+001f7c  r1 = 0x4e20             ; 20,000
+001f84  r1 = 20000 + (r0 << 4)  ; = 20000 + 10000*n
+001f88  (*fn)(0x2200, r1)
+```
 
 ```sh
 python tools/speech.py --doa      # the whole tree: question, subject, answer
@@ -314,6 +335,35 @@ where owhere Iask you do you havean ounce to spare
 ```
 
 Cut lines that survived in the marks file after the voice track was rebuilt.
+
+## Talking to `p`
+
+`SpeechSubroutine` is a program, not a library, and everything it cannot do
+itself it asks for through **one function pointer it is handed at startup**:
+
+```
+00205c  ldr r0, [r4]     ; argv[0] -> [0x939c + 4]
+002064  ldr r0, [r4, #4] ; argv[1] -> [0x939c + 0x34]   the character id
+00206c  ldr r0, [r4, #8] ; argv[2] -> [0x939c + 0]      the callback
+```
+
+Every call is `(*callback)(command, argument)`, and the command is a verb and
+a target packed into one word — `verb << 12 | target << 8`:
+
+| | speech stream | film |
+|---|---|---|
+| open | `0x1000` | `0x1200` |
+| seek | `0x2000` | `0x2200` |
+| play | `0x3000` | `0x3200` |
+| stop | `0x4000` | `0x4200` |
+
+`0x5000` is the fifth verb, tail-called out of `SpeakLine` when a global
+reads `0x1000000` — the abort path when the player cuts the line short.
+
+That is the whole interface between the two programs: three words in, one
+function pointer, eight commands. A port that wants to keep the subroutine
+programs as separate programs has to reproduce exactly this, and a port that
+wants to fold them in has to implement exactly these eight verbs.
 
 ## The faces
 

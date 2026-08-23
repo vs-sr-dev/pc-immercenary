@@ -41,6 +41,18 @@ open-ended research.
   11 lines and the stream holds 9 slots; lines 9 and 10 — *"hex dear hex the
   one we all search for and never find"* and *"where owhere Iask you do you
   havean ounce to spare"* — survived the marks and not the voice track.
+- **The interface between `p` and the subroutine programs is three words and
+  one function pointer.** `main` takes `argv[0]`, the character id from
+  `argv[1]` and a callback from `argv[2]`, and everything else goes through
+  `(*callback)(verb << 12 | target << 8, arg)`: open/seek/play/stop against
+  either the speech stream or the film, plus a fifth verb `0x5000` for the
+  abort path. Eight commands total. `CinepakSubroutine` is the other end of
+  the same idea and is the obvious place to check it.
+- **`main` splits on the character id before anything else.** Ids 0-5 and 11
+  get a talking head; the other nine bosses get a **film**, resolved from the
+  same answer table and seeked with the same ten-thousand-tick slot rule
+  (`20000 + 10000*n`). That is why nine of the boss rows have no Marks file
+  and are not orphans.
 - **The mouth map is one table, not seven.** All seven face renderers index
   `0x9090`, 44 words, doubling the result because a mouth position is two
   cels; anything past the table takes the rest pose. It collapses the 43
@@ -65,8 +77,10 @@ open-ended research.
   voice — and he is speaker 6, so `0x19e4` rewrites 11 to 6 going in and
   `0x1b0c` rewrites 6 back to 11 for the menu. The row that falls out of the
   collision, row 12 (boss id 6), is the only unreachable row *and* the only
-  empty one. The other nine boss rows hold 4 to 10 answers that no file on the
-  disc can speak.
+  empty one. The other nine boss rows are answered with **film**, not speech:
+  `main` sends ids 6-15 other than 11 to `0x1e08`, which resolves the same
+  answer number against a Cinepak file and seeks it with the same
+  ten-thousand-tick slot rule.
 - **Picasso has two more orphan recordings**, lines 9 and 10 — *"The silver
   lady, she is nine, she's our ally, she protects us from Balkan"* and *"Ummm,
   the residential districts"*. One subject's pair was lifted out of the answer
@@ -238,12 +252,6 @@ camera in about 1.5 seconds a frame. What is missing:
   is left. Its strings are `$Perfect/film/…`, and the film subjects the DOA
   menu asks for — `MedusaFiles`, `TeslaFiles` and eight more — are its input,
   so [docs/16](docs/16-speech-and-doa.md) is the way in.
-- **How `p` and the subroutine programs talk.** `SpeechSubroutine` reaches the
-  DataStream through a *function pointer* in a global, with command codes
-  `0x2000` (seek), `0x3000` and `0x5000` in `r0`. That is a message protocol
-  between two tasks, and it is the interface a port has to reproduce to keep
-  the subroutine programs as separate programs. `0x7c8` and `0x97c` are the
-  call sites.
 - **The far horizon table overruns the reciprocal table** for depths above
   402.0. Harmless in the ground lattice — but `ProjectPoint` *can* reach it.
   It rejects depth at or below 2.0 and then indexes `0x08c16c` by
