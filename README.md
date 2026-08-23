@@ -70,9 +70,9 @@ Early, but moving. Nothing is playable yet.
 - The executable is being mapped: the world loader, the record parser and all
   seven of its sub-handlers, the CEL bank loader, the floor renderer, the object
   id table and the world globals are identified.
-- **The OS surface is enumerated**: 90 entry points — 42 direct SWIs and 48
-  folio function vectors — across the Kernel, Graphics, audio, File, timer,
-  SPORT and Operamath folios. That is the exact set a port must implement.
+- **The OS surface is enumerated**: 671 call sites reaching at most 146 entry
+  points — 42 direct SWIs plus the folio function vectors, 46 of them audio,
+  22 Graphics, 8 Operamath. That is the exact set a port must implement.
 
 See [docs/04-roadmap.md](docs/04-roadmap.md).
 

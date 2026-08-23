@@ -15,12 +15,13 @@ Two mechanisms reach the operating system and a port has to cover both:
     python tools/swiscan.py extracted/p
     python tools/swiscan.py extracted/p --sites
 """
-import sys, os, re, argparse, collections
+import sys, os, re, struct, argparse, collections
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from armxref import Image
 
 VECTOR = re.compile(r'^pc, \[(\w+), #(-?(?:0x[0-9a-fA-F]+|\d+))\]$')
 PCREL = re.compile(r'^(\w+), pc, #(-?(?:0x[0-9a-fA-F]+|\d+))(?:, #(\d+))?$')
+LITPOOL = re.compile(r'^(\w+), \[pc, #(-?(?:0x[0-9a-fA-F]+|\d+))\]$')
 
 FOLIO = {1: 'Kernel', 3: 'file / C runtime glue', 4: 'audio',
          5: 'Operamath'}
@@ -38,6 +39,22 @@ def pcrel_target(insn, addr):
         r = int(m.group(3)) & 31
         d = ((d >> r) | (d << (32 - r))) & 0xFFFFFFFF
     return addr + 8 + (d if insn.mnemonic[:3] == 'add' else -d)
+
+
+def pool_values(im, start, end):
+    """Every literal-pool value an instruction in [start, end) loads."""
+    out = []
+    for b in range(start, end, 4):
+        i = im.insns.get(b)
+        if not i or not i.mnemonic.startswith('ldr'):
+            continue
+        m = LITPOOL.match(i.op_str)
+        if not m:
+            continue
+        l = b + 8 + int(m.group(2), 0)
+        if 0 <= l + 4 <= len(im.d):
+            out.append(struct.unpack_from('>I', im.d, l)[0])
+    return out
 
 
 def scan(path, show_sites=False):
@@ -67,6 +84,7 @@ def scan(path, show_sites=False):
 
     # which folios get opened, and by which helper
     opens = []
+    opens_at = []
     for a in im.order:
         i = im.insns[a]
         if not i.mnemonic.startswith('svc'):
@@ -86,6 +104,7 @@ def scan(path, show_sites=False):
                 name = s
                 break
         opens.append((im.func_of(a), name))
+        opens_at.append((a, im.func_of(a), name))
 
     print("%s\n" % path)
     print("Direct SWIs: %d real sites (%d decoded, the rest are data), "
@@ -103,17 +122,87 @@ def scan(path, show_sites=False):
                 print("      fn %-3d x%-4d %s" % (fn, n,
                       ' '.join('%#x' % s for s in sites[:8])))
 
-    print("\nFolio function vectors: %d sites, %d distinct slots"
-          % (sum(vectors.values()), len(vectors)))
-    if show_sites:
-        for off in sorted(vectors):
-            fs = sorted(x for x in vec_funcs[off] if x is not None)
-            print("  slot %5d  x%-3d  %s"
-                  % (off, vectors[off], ' '.join('%#x' % x for x in fs[:8])))
-
     print("\nFolios opened by name, via FindNamedItem(0x104, name):")
+    openers = {}
     for f, name in opens:
         print("  %#08x  %s" % (f, name if name else '(name not literal)'))
+        if name:
+            openers[f] = name
+
+    # A folio pointer is cached in a global straight after the lookup:
+    #     ldr rN, [pc, #imm]      ; the global's address
+    #     str r0, [rN]            ; the folio pointer
+    # Find those pairs and the global names the folio. Each vector wrapper can
+    # then be attributed by the global it reads before its tail call.
+    ptr_global = {}
+    store = re.compile(r'^r0, \[(\w+)(?:, #(\d+))?\]!?$')
+    for a, f, name in opens_at:
+        if not name:
+            continue
+        for b in range(a + 4, a + 0x60, 4):
+            i = im.insns.get(b)
+            if not i or not i.mnemonic.startswith('str'):
+                continue
+            m = store.match(i.op_str)
+            if not m:
+                continue
+            reg = m.group(1)
+            disp = int(m.group(2), 0) if m.group(2) else 0
+            for c in range(b - 4, a, -4):         # where did that register come from?
+                j = im.insns.get(c)
+                if not j or not j.mnemonic.startswith('ldr'):
+                    continue
+                mm = LITPOOL.match(j.op_str)
+                if mm and mm.group(1) == reg:
+                    l = c + 8 + int(mm.group(2), 0)
+                    if 0 <= l + 4 <= len(im.d):
+                        base = struct.unpack_from('>I', im.d, l)[0]
+                        ptr_global[base + disp] = name
+                    break
+
+    attributed = collections.defaultdict(set)
+    unattributed = set()
+    for a in im.order:
+        i = im.insns[a]
+        if not i.mnemonic.startswith('ldr'):
+            continue
+        m = VECTOR.match(i.op_str)
+        if not m:
+            continue
+        off = int(m.group(2), 0)
+        f = im.func_of(a) or a
+        folio = None
+        for b in range(f, a, 4):                  # opened inline?
+            j = im.insns.get(b)
+            if j and j.mnemonic == 'bl':
+                try:
+                    t = int(j.op_str.lstrip('#'), 0)
+                except ValueError:
+                    continue
+                if t in openers:
+                    folio = openers[t]
+        if folio is None:                         # or read from the cache?
+            for v in pool_values(im, f, a + 4):   # the last one is in the reg
+                if v in ptr_global:
+                    folio = ptr_global[v]
+        if folio:
+            attributed[folio].add((off, f))
+        else:
+            unattributed.add((off, f))
+
+    total = sum(len(set(o for o, _ in v)) for v in attributed.values())
+    print("\nFolio function vectors: %d sites, %d attributed entry points"
+          % (sum(vectors.values()), total))
+    for k in sorted(attributed):
+        v = sorted(attributed[k])
+        print("  %-10s %2d slots" % (k, len(set(o for o, _ in v))))
+        if show_sites:
+            print("      " + ' '.join('%d@%#x' % (o, f) for o, f in v))
+    u = sorted(unattributed)
+    print("  %-10s %2d slots, %d wrappers"
+          % ('(unknown)', len(set(o for o, _ in u)), len(u)))
+    if show_sites and u:
+        print("      " + ' '.join('%d@%#x' % (o, f) for o, f in u))
 
 
 def main():

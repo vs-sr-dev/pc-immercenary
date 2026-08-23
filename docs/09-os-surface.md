@@ -40,11 +40,26 @@ at *negative* word offsets from the returned pointer. Every call site is a
 | | Sites | Entry points |
 |---|---|---|
 | Direct SWIs | 561 | 42 |
-| Folio vectors | 110 | 48 |
-| **Total** | **671** | **90** |
+| Folio vectors | 110 | up to 104 |
+| **Total** | **671** | **~146** |
 
-`p1e`, the second executable, uses 435 + 105 sites across 40 + 48 entry points
-— the same surface, minus a handful.
+Slot numbers are per folio, so a folio vector entry point is a *(folio, slot)*
+pair. 76 of the 110 sites resolve to a named folio:
+
+| folio | slots |
+|---|---|
+| audio | 46 |
+| Graphics | 22 |
+| Operamath | 8 |
+| unattributed (File, timer, SPORT, mac) | 28 |
+
+`p1e`, the second executable, uses 435 + 105 sites and the same folio split —
+22 Graphics slots become 23, everything else is identical. The two binaries
+share a runtime.
+
+Attribution is mechanical: each opener caches its folio pointer in a global
+with a `ldr rN, [pc, #imm]` / `str r0, [rN, #d]` pair, and every wrapper reads
+one of those globals before its tail call. `swiscan.py` follows that chain.
 
 ### Direct SWIs, by folio
 
@@ -102,19 +117,35 @@ what names them:
 The remaining 36 entry points are enumerated by `swiscan.py --sites` with their
 call sites but are not yet named.
 
+## One graphics vector identified
+
+`0x4d840` — Graphics folio slot −160 — is the busiest of the 22, 52 calls from
+all over the game including the world and floor renderers:
+
+```
+0004d840  ldr r2, [pc, #4]      ; = 0x5d51c, the cached Graphics folio
+0004d844  ldr r2, [r2]
+0004d848  ldr pc, [r2, #-0xa0]
+```
+
+Every call site passes `(screenItem, 0)`, where `screenItem` comes out of a
+table of screen contexts at `+0x10`. That is **`DisplayScreen(screen, 0)`** —
+the frame flip.
+
 ## Why this matters
 
 A hybrid port — run the ARM code, replace the machine underneath it — has to
-implement or intercept exactly these 90 entry points, and the distribution says
-where the work is:
+implement or intercept exactly this set, and the distribution says where the
+work is:
 
 - **Kernel, 446 calls.** Signals, items, memory, debug output. Mostly
   mechanical; signals and `WaitSignal` are the only part that needs real
   thought, because they are how the game blocks on streamed loads.
-- **Audio, 101 calls.** Fifteen functions. The DSP instrument model behind them
-  is the hard part, not the call interface.
-- **Graphics, 0 SWIs but the bulk of the vector slots.** This is the CEL engine
-  and it is the real work — as expected, and as true of any 3DO port.
+- **Audio, 101 SWI calls over 15 functions plus 46 vector slots.** The widest
+  surface by entry-point count. The DSP instrument model behind it is the hard
+  part, not the call interface.
+- **Graphics, no SWIs at all and 22 vector slots.** Small in count and by far
+  the largest in effort: this is the CEL engine, as true of any 3DO port.
 - **Operamath, one function.** A single matrix-by-vectors multiply. Trivial.
 - **File, timer, SPORT, mac.** Thin. `SPORT` is the Opera SPORT bus used for
   fast framebuffer clears and copies; `mac` can be stubbed out entirely.
