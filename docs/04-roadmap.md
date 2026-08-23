@@ -56,9 +56,9 @@ CPU — it is the CEL engine, and all three approaches need it.
 | Phase | State |
 |---|---|
 | 0 — Tooling and inventory | ✅ done |
-| 1 — Asset decoders | 🟡 CEL, `.anim`, `.img` and the CEL banks decode; fonts, streams and audio pending |
+| 1 — Asset decoders | 🟡 CEL, `.anim`, `.img`, the CEL banks, the fonts and the whole DataStream (Cinepak + SDX2) decode; `.Maps` and the DSP instruments remain |
 | 2 — B3D world format | ✅ done, see [05-b3d-format.md](05-b3d-format.md) — geometry and textures both |
-| 3 — Code map | 🟡 the world loader, the record parser and the CEL bank loader are mapped |
+| 3 — Code map | 🟡 the world loader, the record parser, the CEL bank loader, the whole ground pipeline and the font blitter are mapped; `tools/symbols.py` names 243 functions |
 | 4 — Runtime | ⬜ not started |
 | 5 — Native systems | ⬜ not started |
 | 6 — Beyond parity | ⬜ not started |
@@ -74,12 +74,15 @@ Opera FS reader, full extraction, AIF/ARM metrics, string dumps, format survey.
 Turn the disc into modern formats. Each decoder is independently verifiable by
 looking at the output.
 
-1. `.img` → PNG *(trivial, format confirmed)*
-2. 3DO CEL decoder → PNG, all bit depths, PLUT, packed and literal
-3. `.anim` → PNG sequences / sprite sheets
-4. Font files → glyph atlases
-5. DataStream demuxer → Cinepak video + audio tracks
-6. `.music`, `.aiff` → WAV
+1. `.img` → PNG ✅
+2. 3DO CEL decoder → PNG, all bit depths, PLUT, packed and literal ✅
+3. `.anim` → PNG sequences / sprite sheets ✅
+4. Font files → glyph atlases ✅ `tools/font.py`
+5. DataStream demuxer → Cinepak video + audio tracks ✅ `tools/strm.py`
+6. `.music`, `.aiff` → WAV — `.music` needs no decoder at all: the three files
+   in `Perfect/Music` are plain AIFF, mono 16-bit at 44.1 kHz, uncompressed
+7. `.Maps` — the six HUD map files, 1 MiB and 4 MiB each, not yet looked at
+8. `System/Audio/dsp/*.dsp` — 64 DSP instruments; the audio folio needs them
 
 Deliverable: a browsable dump of every visual and audio asset. This alone makes
 the rest of the work far faster, because from then on we can *see* what the code
