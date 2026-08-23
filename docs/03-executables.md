@@ -54,6 +54,10 @@ project.
 - **`launchme`** — the 3DO shell entry point. Minimal; loads `p`.
 - **`p`** — the game: overworld, all nine boss encounters, HUD, inventory,
   DOASys, streaming, audio.
+- **`Film/CinepakSubroutine`** — not just a film player: the game's **front
+  end**. EA logo, title screen, main menu, practice mode, stats pages, NVRAM
+  save and load, and a music thread. Mapped in
+  [17-the-front-end.md](17-the-front-end.md).
 - **`DOASys/SpeechSubroutine`** — not a speech player. It is the DOA
   conversation menu and the *lip sync*: an English letter-to-sound ruleset,
   323 rules, that turns each word of dialogue into phonemes and each phoneme

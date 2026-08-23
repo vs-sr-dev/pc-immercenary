@@ -41,6 +41,18 @@ open-ended research.
   11 lines and the stream holds 9 slots; lines 9 and 10 — *"hex dear hex the
   one we all search for and never find"* and *"where owhere Iask you do you
   havean ounce to spare"* — survived the marks and not the voice track.
+- **`CinepakSubroutine` turns out to be the front end, not a film player**,
+  and it is mapped: logo, title, menu, practice, stats, NVRAM and music, each
+  entry pinned by a string reference. See [docs/17](docs/17-the-front-end.md).
+  It takes the same `argv` shape as the speech program — a selector in
+  `argv[1]`, the callback in `argv[2]` — with one extra argument.
+- **Nine films and eight of the ten music tracks are named and absent.**
+  `I05.strm`–`I13.strm` are a contiguous run in the film table (indices
+  16-24) and exist nowhere on the disc; the music table names ten and
+  `Perfect/Music` holds `Intro`, `Menu` and `silence`. **Nothing on the disc
+  names `silence.music`** — not `p`, not `p1e`, not either subroutine, not
+  `launchme`. Every other film on the disc *is* accounted for: 31 through the
+  table and 5 named directly. `tools/frontend.py --verify` is 7 checks.
 - **The interface between `p` and the subroutine programs is three words and
   one function pointer.** `main` takes `argv[0]`, the character id from
   `argv[1]` and a callback from `argv[2]`, and everything else goes through
@@ -246,12 +258,20 @@ camera in about 1.5 seconds a frame. What is missing:
   and it shares the world format, the `.Maps` format and — proven byte for
   byte — the whole math module, so it stays the cheapest cross-check on
   anything uncertain in `p`.
-- **`CinepakSubroutine` is the last certainly-unread game code on the disc.**
-  86 KiB, 437 measured functions of which **120 have no counterpart in `p`**
-  (`docs/15`'s own table). `SpeechSubroutine`'s 90 are done; these are what
-  is left. Its strings are `$Perfect/film/…`, and the film subjects the DOA
-  menu asks for — `MedusaFiles`, `TeslaFiles` and eight more — are its input,
-  so [docs/16](docs/16-speech-and-doa.md) is the way in.
+- **`CinepakSubroutine` is mapped but not read.** It is not a film player: it
+  is the game's **front end** — logo, title, main menu, practice mode, stats
+  pages, NVRAM save/load and a music thread — 447 functions and 72 KiB
+  outside the C runtime. [docs/17](docs/17-the-front-end.md) has the
+  subsystem map, every entry pinned by a string reference. The pieces worth
+  an hour each, in order:
+  - **The NVRAM save format.** `0x005a00`–`0x006400`, self-contained, the
+    only code on the disc that writes anything, and its slots are named
+    `Immerce  %d (%d)`. Nothing else on the disc will verify it, so read it
+    against the 3DO device conventions and say so.
+  - **The main menu at `0x37c0`** and the stats pages at `0x166c`: what a
+    port has to draw before the game starts.
+  - **The music thread at `0x2c88`** and the spooler at `0x3260`. The same
+    object is linked into `p` and `p1e`, so it cross-checks three ways.
 - **The far horizon table overruns the reciprocal table** for depths above
   402.0. Harmless in the ground lattice — but `ProjectPoint` *can* reach it.
   It rejects depth at or below 2.0 and then indexes `0x08c16c` by

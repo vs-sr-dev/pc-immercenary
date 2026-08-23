@@ -142,9 +142,9 @@ three quarters. `StorageTuner`'s 54 are the library, and they are most of the
 
 `SpeechSubroutine`'s 90 unmatched functions have since been opened, and they
 were the game's own after all: the DOA conversation menu and a letter-to-sound
-engine for lip sync. See [16-speech-and-doa.md](16-speech-and-doa.md). That
-leaves `CinepakSubroutine`'s 120 as the last certainly-Immercenary,
-certainly-unread code on the disc.
+engine for lip sync. See [16-speech-and-doa.md](16-speech-and-doa.md). `CinepakSubroutine` has since been
+mapped too — it is the game's front end, not a film player — see
+[17-the-front-end.md](17-the-front-end.md), though only mapped, not read.
 
 ## Using it
 
