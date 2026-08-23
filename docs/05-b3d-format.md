@@ -110,6 +110,19 @@ the encounter arenas and the overworld can use one addressing scheme.
 Cell `i` covers `[grid[i], grid[i+1])` of section C; `-1` marks an empty cell.
 The overworld populates **241 of 256 cells**, `P1EncWorld` 235.
 
+The index is **column-major, and both axes count from the far corner**:
+
+```
+i = (15 - col) * 16 + (15 - row)
+col = (x - minX) / 256          row = (maxY - y) / 256
+```
+
+Checked against the data: a record in a cell whose `i >> 4` is *k* has its X
+inside the 256-unit band `[minX + 256*(15-k), minX + 256*(16-k))`, and the same
+for `i & 15` against Y. All sixteen bands line up on both axes, with 42 of the
+overworld's 2,680 records straying into a neighbouring band — objects whose
+anchor point sits just past a cell edge.
+
 Every encounter file has all 256 cells empty. Their section C still holds a
 valid record stream — it simply is not reached through the grid, which makes
 sense for a single-arena fight where nothing needs spatial culling.
@@ -161,6 +174,8 @@ means everywhere else.
 coordinate array in the file becomes X instead of Y. That is why the handler
 swaps `nx` and `ny` at `0x39a54` before the common tail.
 
+`k3` is a bounding radius — see [below](#k3-k4-and-the-sub-2-byte).
+
 ### Section B — prism templates
 
 ```
@@ -185,6 +200,44 @@ once and reused at every storey. `TeslaEncounter`'s first template is
 `flags & 2` and `flags & 4` on the placement mirror the footprint in X and in Y,
 and the same bits transform the facing angle (`0x80 - a`, then `-(a - 1)`).
 
+`k4` is a bounding radius — see [below](#k3-k4-and-the-sub-2-byte).
+
+### `k3`, `k4` and the `sub = 2` byte
+
+Three fields that looked unrelated are one field. `ParseWorldRecord`'s handlers
+all funnel them into the same stack slot, shifted into 16.16:
+
+```
+0x3957c   ldrb r0, [sp, #0x18]   ; sub = 2, the byte at +15
+0x39580   lsl  r0, r0, #0x10
+0x3958c   str  r0, [sp, #0x2c]
+
+0x3998c   ldrb r0, [sp, #0x47]   ; section A, k3
+0x39990   lsl  r0, r0, #0x10
+0x39994   str  r0, [sp, #0x2c]
+
+0x39fc8   ldrb r0, [sp, #0x18]   ; section B, k4
+0x39fcc   lsl  r0, r0, #0x10
+0x39fd8   str  r0, [sp, #0x2c]
+```
+
+and `0x3abf8` copies that slot into the last word of the six-word display
+record. So whatever it is, it is a per-object scalar in world units that the
+renderer needs and the parser never inspects.
+
+The data says it is a **bounding radius**. Against the 181 section A templates
+of the overworld, `k3` correlates at **0.979** with the largest distance from
+the template's own origin to a footprint corner, and at **0.975** with
+`hypot(radius, height/2)` — a sphere around the box's centre — with a mean
+ratio of 0.98. Section B's `k4` behaves the same way against its own footprint,
+correlating at **0.955** with the radius at a mean ratio of 1.21. Height alone
+correlates at 0.37 and 0.41, so it is not height.
+
+No exact formula reproduces every value, which is what one expects of a radius
+an exporter rounded up with a margin. But correlation this strong across the
+overworld's 391 templates, on a quantity the renderer wants once per object and
+never recomputes, leaves little else it could be.
+
 ## Section C — object placement
 
 A stream of variable-length records. Every record starts with the same 8 bytes:
@@ -193,8 +246,92 @@ A stream of variable-length records. Every record starts with the same 8 bytes:
 u8  type        culling class
 u8  sub         record kind, selects the parser
 i16 skipLength  see below
-u32 field       purpose not yet known
+u32 field       the record's own grid cell, unary-encoded
 ```
+
+### `type` is the lieutenant who owns this record
+
+`type` is not a bitmask of visibility classes. It is a **territory tag**, and
+the game uses it to make a defeated lieutenant's structures disappear.
+
+The live render-flags word is `[0x6bed0 + 0x78]` = `[0x6bf48]`, mirrored from
+the saved-state word `[0x89d40 + 0x9c]`. A new game initialises it at
+`0x01c738`:
+
+```
+0x1c738   mov r0, #0x3f8
+0x1c73c   add r0, r0, #0xc00     ; 0xff8 = bits 3 .. 11 all set
+0x1c740   str r0, [r4, #0x9c]    ; r4 = 0x89d40
+```
+
+and `0x0000b774` clears one bit when a character with id greater than 5 is
+finished with:
+
+```
+0xb754   cmp r4, #5              ; r4 = character id
+0xb75c   ble 0xb784
+0xb760   r0 = 1 << (r4 - 3)
+0xb774   bic r0, [0x6bf48], r0
+```
+
+The cull test draws when the bit is **set**, so every conditional record is
+visible at the start of the game and vanishes when its owner falls. Character
+ids 6 … 13 map to bits 3 … 10, which is exactly `type << 3` for the eight
+values `1, 2, 4, 8, 16, 32, 64, 128` — and ids 6 … 13 in
+[`PerfectMovers.B3D`](10-second-b3d-family.md) are the eight lieutenants:
+
+| `type` | Bit | Mover | Records | All inside that mover's patrol rectangle |
+|---|---|---|---|---|
+| 0 | — | — | 2585 | always drawn |
+| 1 | 3 | Medusa | 9 | 9 / 9 |
+| 2 | 4 | Tesla | 2 | 2 / 2 |
+| 4 | 5 | Balkan | 3 | 3 / 3 |
+| 5 | 11 | Loki | 8 | *(Loki has no rectangle)* |
+| 8 | 6 | Silva | 23 | 23 / 23 |
+| 16 | 7 | Fly | 8 | 8 / 8 |
+| 32 | 8 | Riberto | 1 | 1 / 1 |
+| 64 | 9 | Chameleon | 4 | 4 / 4 |
+| 128 | 10 | Chance | 37 | 37 / 37 |
+
+Every one of the 87 tagged records on the overworld lies inside its owner's
+patrol rectangle. That is the confirmation: `type` is territory.
+
+`type = 5` is the ninth marker and it is special-cased, because a ninth power
+of two does not fit in a byte:
+
+```
+0x393b8   teq type, #5 ; bne 0x393dc
+0x393c4   tst renderFlags, #0x800 ; bne draw
+0x393cc   b cull
+```
+
+Bit 11 is character id 14, which is Loki. So the exporter reused the otherwise
+unused value 5 rather than widen the field.
+
+Types 3, 6 and 7 occur only inside the encounter files, where the same test
+would read them as unions of two or three bits.
+
+### `field` is the record's own grid cell
+
+Two 16-bit halves, each with exactly one bit set on 2,678 of the overworld's
+2,680 records:
+
+```
+field = (1 << (i >> 4)) << 16 | (1 << (i & 15))
+```
+
+where `i` is the section C grid index the record is stored under. It matches
+**2,677 of 2,680** records in `CondensedPerfectWorld` and **2,648 of 2,649** in
+`P1EncWorld`; the exceptions are the very first record, which has `field = 0`,
+one record that names its neighbour's column, and one with no row bit at all.
+
+Unary-encoding column and row separately is what makes the field worth its four
+bytes: a camera's visible cells are a rectangle of the grid, so a renderer can
+build one 16-bit mask of visible columns and one of visible rows and test
+membership with two ANDs instead of a comparison per axis. The parser itself
+does not test it — it copies the word straight into the display record, at
+`0x3ac00` and four sibling sites, where it becomes the first of the six words
+handed to `0x60cdc`.
 
 ### `skipLength` is a culling hint, not the record length
 
@@ -222,6 +359,29 @@ So for `type == 0` records the length field is dead data, and the exporter did
 not always fill it in correctly: on the overworld it is wrong for **1,876 of
 4,047** records. Walking section C by trusting it works on the small encounter
 files and desyncs on the two large worlds.
+
+The failure has a shape. Every wrong value is on a `sub = 0` record, and every
+one of them is **29** — `17 + 3*4`, a four-faced box — whatever the record's
+real face count. 447 of the overworld's 916 `sub = 0` records carry it; the
+other 469 are correct. `sub = 1`, `2`, `3` and `6` are right everywhere.
+
+Since only a record with `type != 0` can ever reach the cull path, the bug is
+**reachable on exactly five records**, the same five in both large worlds:
+
+| Offset | `type` | Owner | Real length | `skipLength` |
+|---|---|---|---|---|
+| 0x00ad7 | 64 | Chameleon | 65 | 29 |
+| 0x021a7 | 64 | Chameleon | 89 | 29 |
+| 0x02200 | 64 | Chameleon | 65 | 29 |
+| 0x02241 | 64 | Chameleon | 35 | 29 |
+| 0x143c0 | 2 | Tesla | 119 | 29 |
+
+The four Chameleon records stand in a row at `y = 483`, `x = 1728 … 1933`. And
+the path *is* reachable: the render flags start at `0xff8` with bit 9 set, so
+the records draw normally — until Chameleon is defeated, `0xb774` clears bit 9,
+and from then on the parser advances 29 bytes into the middle of a 65-byte
+record. The shipping game desynchronises its own world parser in Chameleon's
+plaza, and again in Tesla's, once you have beaten them.
 
 **To walk section C you must implement the per-`sub` parsers.** There is no
 shortcut in the data.

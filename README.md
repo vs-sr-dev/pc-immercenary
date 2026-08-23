@@ -34,6 +34,7 @@ python tools/celbatch.py extracted/Perfect png
 
 # Parse the world and encounter geometry files
 python tools/b3d.py -r "extracted/Perfect/**/*.B3D"
+python tools/b3d.py --check extracted/Perfect/CondensedPerfectWorld.B3D
 
 # ...and the second .B3D family, which is a different format again
 python tools/b3d2.py extracted/Perfect
@@ -67,6 +68,9 @@ Early, but moving. Nothing is playable yet.
 - **The `.B3D` world format is solved**, every rule taken from the game's own
   parser rather than fitted to the data. All seven files of the family walk to
   the last byte of every cell — the overworld is 2,680 records and 8,463 quads.
+  Every header field is now read: `type` is a lieutenant's territory tag,
+  `field` is the record's own grid cell, and the shipping game's `skipLength`
+  bug is reachable on exactly five records — after you beat Chameleon.
 - **The texture pipeline is solved.** `PerfectWorld.CELS` is a bank of 3,603
   bare 3DO CCBs; each wall face names one by index, at one texture pixel per
   world unit.

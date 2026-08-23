@@ -15,6 +15,20 @@ Container (all big-endian i32):
 Sections A and B hold geometry *templates*; section C places instances of
 them. Every record length and field offset below is taken from the game's own
 parser, `ParseWorldRecord` at 0x03929c in `p`. See docs/05-b3d-format.md.
+
+The grid index is column-major and counts from the far corner:
+
+    i = (15 - col) * 16 + (15 - row)
+    col = (x - minX) / 256      row = (maxY - y) / 256
+
+A section C record's header is `u8 type, u8 sub, i16 skipLength, u32 field`.
+`type` is a territory tag: it names the lieutenant who owns the record, and
+the game clears that lieutenant's bit in the render flags when he is beaten,
+so his structures vanish. `field` is the record's own grid index, with the
+column unary-encoded in the high half and the row in the low half.
+
+    python tools/b3d.py -r "extracted/Perfect/**/*.B3D"
+    python tools/b3d.py --check extracted/Perfect/CondensedPerfectWorld.B3D
 """
 import struct, sys, os
 
@@ -377,6 +391,40 @@ class B3D:
 
 
 
+# type -> the character id whose render-flag bit gates it, from 0x0393dc
+# and 0x0000b774: bit = id - 3, and type 5 is special-cased to bit 11.
+TYPE_OWNER = {1: (3, 'Medusa'), 2: (4, 'Tesla'), 4: (5, 'Balkan'),
+              8: (6, 'Silva'), 16: (7, 'Fly'), 32: (8, 'Riberto'),
+              64: (9, 'Chameleon'), 128: (10, 'Chance'), 5: (11, 'Loki')}
+RENDER_FLAGS_INIT = 0xff8          # set at 0x01c738
+
+
+def check(b):
+    """Verify `field` against the grid, and report reachable bad skipLengths."""
+    good = bad = 0
+    for i, gx, gy, (a, e) in b.cells():
+        off = a
+        want = ((1 << (i >> 4)) << 16) | (1 << (i & 15))
+        while off < e:
+            L = b.record_length(off)
+            if L is None or L < 8 or off + L > e:
+                break
+            f = struct.unpack_from('>I', b.secC, off + 4)[0]
+            good, bad = (good + 1, bad) if f == want else (good, bad + 1)
+            off += L
+    recs, _ = b.walk()
+    risky = [r for r in recs if r.skiplen != r.length and r.type != 0]
+    print("    field: %d match, %d differ" % (good, bad))
+    print("    skipLength: %d of %d records wrong, %d of them on a cullable "
+          "type" % (sum(1 for r in recs if r.skiplen != r.length), len(recs),
+                    len(risky)))
+    for r in risky:
+        bit, who = TYPE_OWNER.get(r.type, ('?', '?'))
+        print("      %#7x type=%-3d %-10s bit %-2s len %3d skipLength %3d "
+              "at (%d,%d)" % (r.off, r.type, who, bit, r.length, r.skiplen,
+                              r.x, r.y))
+
+
 # backwards-compatible free function
 def walk_section_c(b):
     return b.walk()
@@ -386,6 +434,7 @@ if __name__ == '__main__':
     import glob
     args = [a for a in sys.argv[1:] if not a.startswith('-')]
     detail = '-r' in sys.argv
+    docheck = '--check' in sys.argv
     pats = args or ['extracted/Perfect/**/*.B3D']
     files = sorted({p for pat in pats for p in glob.glob(pat, recursive=True)})
     for p in files:
@@ -401,5 +450,7 @@ if __name__ == '__main__':
                 print("    section C: %d records, subs=%s, %d quads, "
                       "%d unwalked ranges"
                       % (len(recs), dict(sorted(kinds.items())), nq, len(failed)))
+            if docheck and b.exact:
+                check(b)
         except Exception as e:
             print("%-28s -- %s: %s" % (os.path.basename(p), type(e).__name__, e))
