@@ -7,6 +7,7 @@ bank, and one world unit is one texture pixel.
 
     python tools/b3dview.py extracted/Perfect/CondensedPerfectWorld.B3D view.png \
         --cels extracted/Perfect/PerfectWorld.CELS \
+        --floor extracted/Perfect/Floor/AllFloor \
         --eye -279 640 30 --yaw 90 --pitch 2
 
 Angles are degrees; the eye is in world units (X east, Y north, Z up), and
@@ -17,10 +18,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from b3d import B3D
 from cel import write_png, rgb555
 
-try:
-    from celbank import Bank
-except ImportError:
-    Bank = None
+from celbank import Bank
+from floor import Floor, TILE
 
 
 def flat_hue(texid):
@@ -137,16 +136,20 @@ class Raster:
         write_png(path, bytes(raw), self.w, self.h)
 
 
-# quad corner order is (far top, near top, near bottom, far bottom)
+# wall quad corner order is (far top, near top, near bottom, far bottom)
 UV = ((1.0, 0.0), (0.0, 0.0), (0.0, 1.0), (1.0, 1.0))
+# floor quads are emitted south-west, south-east, north-east, north-west
+UV_FLOOR = ((0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0))
 
 
 def render(path, out, eye, yaw, pitch, fov=70.0, size=(800, 500), far=6000.0,
-           cels=None):
+           cels=None, allfloor=None, floor_radius=40):
     b = B3D(path)
     recs, failed = b.walk()
-    bank = Bank(cels) if (cels and Bank) else None
+    bank = Bank(cels) if cels else None
+    ground = Floor(allfloor) if allfloor else None
     cache = {}
+    fcache = {}
 
     def texture(tid):
         if tid is None or bank is None:
@@ -162,6 +165,14 @@ def render(path, out, eye, yaw, pitch, fov=70.0, size=(800, 500), far=6000.0,
             t = None
         cache[tid] = t
         return t
+
+    def floor_tex(t):
+        if t not in fcache:
+            try:
+                fcache[t] = Texture(*ground.image(t + 15))    # the 32x32 set
+            except Exception:
+                fcache[t] = None
+        return fcache[t]
 
     W, H = size
     r = Raster(W, H)
@@ -181,6 +192,32 @@ def render(path, out, eye, yaw, pitch, fov=70.0, size=(800, 500), far=6000.0,
         iz = 1.0 / fz
         return (W / 2 - rx * f * iz, H / 2 - uz * f * iz, iz,
                 uv[0] * iz, uv[1] * iz)
+
+    nf = 0
+    if ground:
+        # the game walks a 16 x 16 patch of tiles around the camera; we widen
+        # it to the draw distance, on the same world-aligned 16-unit lattice.
+        cx0 = int(ex // TILE)
+        cy0 = int(ey // TILE)
+        rad = min(floor_radius, int(far // TILE))
+        for ty in range(cy0 - rad, cy0 + rad + 1):
+            y0 = ty * TILE
+            for tx in range(cx0 - rad, cx0 + rad + 1):
+                x0 = tx * TILE
+                if (x0 + 8 - ex) ** 2 + (y0 + 8 - ey) ** 2 > far * far:
+                    continue
+                t = ground.tile_at_world(x0, y0)
+                if t >= 15:
+                    continue
+                tex = floor_tex(t)
+                corners = ((x0, y0, 0), (x0 + TILE, y0, 0),
+                           (x0 + TILE, y0 + TILE, 0), (x0, y0 + TILE, 0))
+                p = [project(c, UV_FLOOR[k]) for k, c in enumerate(corners)]
+                if any(q is None for q in p):
+                    continue
+                r._span(p[0], p[1], p[2], 256, tex, (60, 60, 60))
+                r._span(p[0], p[2], p[3], 256, tex, (60, 60, 60))
+                nf += 1
 
     nq = 0
     for rec in recs:
@@ -202,8 +239,9 @@ def render(path, out, eye, yaw, pitch, fov=70.0, size=(800, 500), far=6000.0,
             r._span(p[0], p[2], p[3], shade, tex, flat)
             nq += 1
     r.png(out)
-    print("%s: %d quads from (%d,%d,%d) yaw=%g pitch=%g%s -> %s"
-          % (os.path.basename(path), nq, ex, ey, ez, yaw, pitch,
+    print("%s: %d wall quads%s from (%d,%d,%d) yaw=%g pitch=%g%s -> %s"
+          % (os.path.basename(path), nq,
+             ", %d floor tiles" % nf if ground else "", ex, ey, ez, yaw, pitch,
              ", %d textures" % len([t for t in cache.values() if t]) if bank else "",
              out))
     if failed:
@@ -215,6 +253,8 @@ def main():
     ap.add_argument('b3d')
     ap.add_argument('png')
     ap.add_argument('--cels', help='CEL bank, e.g. extracted/Perfect/PerfectWorld.CELS')
+    ap.add_argument('--floor', help='the ground, e.g. extracted/Perfect/Floor/AllFloor')
+    ap.add_argument('--floor-radius', type=int, default=40, help='tiles each way')
     ap.add_argument('--eye', nargs=3, type=float, default=[0, -200, 40])
     ap.add_argument('--yaw', type=float, default=90.0)
     ap.add_argument('--pitch', type=float, default=-5.0)
@@ -223,7 +263,7 @@ def main():
     ap.add_argument('--far', type=float, default=6000.0)
     a = ap.parse_args()
     render(a.b3d, a.png, a.eye, a.yaw, a.pitch, a.fov, tuple(a.size), a.far,
-           a.cels)
+           a.cels, a.floor, a.floor_radius)
 
 
 if __name__ == '__main__':

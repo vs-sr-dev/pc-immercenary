@@ -16,7 +16,7 @@ only shipping build is the 3DO ARM6 executable on the retail CD.
 | Path | Contents |
 |---|---|
 | `tools/` | Opera (3DO) filesystem reader, CEL/anim decoder, CEL bank reader, B3D world parser, OBJ exporter, textured software renderer, ARM cross-referencer |
-| `docs/` | Findings: disc layout, file formats, executables, roadmap, B3D format, code map, CEL banks |
+| `docs/` | Findings: disc layout, file formats, executables, roadmap, B3D format, code map, CEL banks, the ground |
 
 ## Quick start
 
@@ -56,8 +56,13 @@ Early, but moving. Nothing is playable yet.
 - **The texture pipeline is solved.** `PerfectWorld.CELS` is a bank of 3,603
   bare 3DO CCBs; each wall face names one by index, at one texture pixel per
   world unit.
+- **The ground is solved too.** It is not in the world file at all: a 4-bit
+  256 x 256 tile map lives in the pixels of the last cel of
+  `Perfect/Floor/AllFloor`, one nibble per 16-unit tile, and the lake animates
+  by palette cycling.
 - The overworld therefore renders: a top-down city plan, a Wavefront OBJ, and a
-  textured perspective view — all from the disc, with no ARM emulation.
+  textured perspective view with walls and ground — all from the disc, with no
+  ARM emulation.
 - The executable is being mapped: the world loader, the record parser and all
   seven of its sub-handlers, the CEL bank loader, the object id table and the
   world globals are identified.

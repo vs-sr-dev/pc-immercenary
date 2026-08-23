@@ -25,8 +25,12 @@ every reference beyond 255 bytes.
 
 | Address | What it is | Identified by |
 |---|---|---|
+| `0x00f6d4` | **LoadFloor** — `AllFloor`, the tile map and the lake palettes | *"$Floor/AllFloor"* |
+| `0x00fd60` | **AnimateLakePalette** — cycles floor tile 9's PLUT | writes `0x5fa68[0x48]` |
+| `0x00fe30` | **DrawFloor** — the 16 x 16 ground patch around the camera | reads the tile map at `0x58bd4` |
 | `0x013e4c` | **LoadWorld** — loads and indexes `CondensedPerfectWorld.B3D` | *"Starting to load the world..."* |
 | `0x015c08` | LoadStaticObjects | *"Loaded static objects ..."* |
+| `0x01cc58` | LoadCelGroup(name, out, count) | splits a chunked cel file |
 | `0x036ca8` | LoadWorldCels — opens `PerfectWorld.Cels` | *"$Perfect/PerfectWorld.Cels"* |
 | `0x037dd8` | **ObjectAnimById** — id to `.anim` dispatcher | *"Unrecognized anim ID %d!"* |
 | `0x038c00` | **RandomBelow(n)** — `(n * rand()) >> 16` | called from `ParseSub1` |
@@ -74,6 +78,14 @@ confirmation of the header layout.
 | `0x07b6e0` | animation pointer table, indexed by object id |
 | `0x07b758` | object records, 44 bytes each, indexed by object id |
 | `0x08988c` | the 257-word spatial grid |
+| `0x05fa68` | 15 floor tile pairs, `[i*8]` far 16x16 and `[i*8+4]` near 32x32 |
+| `0x058bd4` | the 256x256 4bpp floor tile map cel |
+| `0x057d88` | five PLUT pointers: four lake palettes plus the base |
+| `0x08db34` | the 16 x 16 ground lattice template, 256 points in 16.16 |
+| `0x08e334` | the same lattice, camera-relative and transformed |
+| `0x08eb34` | the lattice projected to screen |
+| `0x08c16c`, `0x08f334` | depth-keyed tables the floor renderer indexes |
+| `0x058bac` | frame delta, ticks |
 | `0x088a40` | scratch: 2D footprint vertices, `(x, y)` pairs |
 | `0x088ce0` | scratch: 3D vertices, `(footprintIndex, z)` pairs |
 | `0x089220` | scratch: quad faces, four indices each, stride 16 |
@@ -153,3 +165,10 @@ format:
   34 traffic cones, 27 `FMOegg`, 24 `DOASys`, and so on.
 - One texture id is swapped at load time: `0x476` becomes `0x47d` when a bit in
   the render flags word is clear (`0x3a2a0`).
+
+## The ground is not in the world file
+
+Worth stating in the code map because it is easy to look for in the wrong
+place: `ParseWorldRecord` never emits a horizontal quad. The floor comes from
+`LoadFloor` / `DrawFloor` and a 4-bit 256 x 256 tile map, described in
+[08-the-ground.md](08-the-ground.md).

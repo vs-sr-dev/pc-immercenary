@@ -3,6 +3,15 @@
 Everything below has a concrete starting address or file. Nothing here is
 open-ended research.
 
+## Done in session 3
+
+- The ground: not in the world file at all. A 4-bit 256 x 256 tile map hidden
+  in the pixels of the last cel of `Perfect/Floor/AllFloor`, 15 materials at
+  two detail levels, water animated by palette cycling.
+  See [docs/08-the-ground.md](docs/08-the-ground.md) and `tools/floor.py`.
+- `armxref.py` gained `-a/--addr`, which finds every instruction that
+  materialises a given address. That is what found the floor renderer.
+
 ## Done in session 2
 
 The whole of item 1 and item 2 from the previous list, plus most of item 4's
@@ -21,18 +30,21 @@ first half:
 
 ## 1. The interactive viewer  *(closest to a real artefact)*
 
-`tools/b3dview.py` already draws the textured world from an arbitrary camera in
-under a second per frame. What is missing to make it walkable:
+`tools/b3dview.py` draws the textured world and its ground from an arbitrary
+camera in about 1.5 seconds a frame. What is missing to make it walkable:
 
-- **Ground and sky.** There is no floor geometry in section C at all — every
-  quad is a wall. Find what draws the ground: probably a fixed grid textured
-  from a small set of CELs, set up outside `ParseWorldRecord`. Start from
-  `TraverseCells` at `0x03b11c` and see what it emits besides parsed records.
 - **Object sprites.** `sub = 1` / `3` / `6` place `.anim` props by object id;
   the assets are already decoded to PNG. Billboard them at the recorded
   position, scale and angle.
+- **Collision.** The walls are quads and the ground is a tile map, so a simple
+  2D segment sweep against the section C quads of the current cell is enough.
+  The game itself culls per grid cell already.
+- **The 16 x 16 patch.** The game draws exactly 225 ground quads regardless of
+  draw distance, using the two depth tables at `0x8c16c` and `0x8f334` to fake
+  the rest. Reading those would explain how the horizon is handled — and would
+  make the viewer's own ground much cheaper.
 - Real-time interaction means leaving Python for the inner loop, or accepting
-  a few frames a second. Either is fine; the data side is done.
+  a frame or two a second. Either is fine; the data side is done.
 
 ## 2. The second `.B3D` family
 

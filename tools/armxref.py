@@ -86,6 +86,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('image')
     ap.add_argument('-s', '--string', help='find code referencing strings matching this regex')
+    ap.add_argument('-a', '--addr', help='find code referencing this hex address')
     ap.add_argument('-d', '--dis', help='disassemble from this hex address')
     ap.add_argument('-n', '--count', type=int, default=80)
     a = ap.parse_args()
@@ -109,6 +110,18 @@ def main():
                 print(f"           <- {r:#08x}   in func {f:#08x}")
             if not refs:
                 print("           <- no direct literal reference")
+
+    if a.addr:
+        want = int(a.addr, 16)
+        refs = sorted(im.litrefs.get(want, []))
+        print(f"{want:#08x}  {len(refs)} reference(s)")
+        byfunc = collections.defaultdict(list)
+        for r in refs:
+            byfunc[im.func_of(r)].append(r)
+        for f in sorted(byfunc, key=lambda x: (x is None, x)):
+            fs = f"{f:#08x}" if f is not None else "  (none)"
+            sites = ' '.join(f"{r:#x}" for r in byfunc[f])
+            print(f"  func {fs}   {len(byfunc[f]):>3}x   {sites}")
 
     if a.dis:
         start = int(a.dis, 16)
