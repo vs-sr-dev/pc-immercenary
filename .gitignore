@@ -1,0 +1,17 @@
+# ---- Never commit game data ----
+*.img
+*.iso
+*.bin
+*.cue
+extracted/
+assets/
+*.html
+*_files/
+
+# ---- Tool output ----
+tools/*_strings.txt
+tools/disc_listing.txt
+build/
+__pycache__/
+*.pyc
+.venv/
