@@ -33,6 +33,17 @@ open-ended research.
   product, `MapCelFixed`. The shape of a slightly larger engine than shipped.
 - **`swiscan.py` paired slot numbers with the wrong wrapper addresses** for
   four of the 76 slots; runs of three-instruction thunks are now recognised.
+- **The OS surface is closed.** The 24 folio slots with no folio beside them
+  were the kernel's, reached through `KernelBase` at `0x057b0c` — which the
+  AIF startup caches from `r7`, and which is exactly where the assembler
+  module ends. 42 SWIs plus 109 folio slots, nothing unattributed.
+- **Library code is interleaved with the game's, not banded.** 71 functions
+  in `p` are proved 3DO library by exact shape match against executables on
+  the disc that contain no Immercenary code; `RandomBelow` at `0x038c00` is
+  one, far below where the SDK was assumed to sit. Two corrections fell out:
+  `0x04e348` is a folio thunk, not `memcpy`, and `0x04e274` is printf's
+  varargs prologue, not printf. See [docs/15](docs/15-library-and-game.md)
+  — including, at equal length, what the method cannot reach.
 - **The last unread asset format is read**: the 64 `.dsp` instruments. Plain
   IFF, and the stock 3DO Portfolio library rather than the game's own work.
   `tools/dsp.py --verify` walks all 64 to the last byte and checks every
@@ -87,10 +98,12 @@ camera in about 1.5 seconds a frame. What is missing:
 
 ## 3. Code map, wider  *(the call graph is new, use it)*
 
-- **Name the remaining 72 folio vector slots.** `swiscan.py --sites` lists
-  every one with its wrapper, and the addresses are right now: 46 audio, 22
-  Graphics, 8 Operamath. Four are named. The Graphics folio's slots are the
-  CEL engine — the single largest piece of work in any port.
+- **Name the remaining 105 folio vector slots.** Every one is now attributed
+  to a folio — 46 audio, 23 Kernel, 22 Graphics, 10 File, 8 Operamath, none
+  left over — and `swiscan.py --sites` lists each with the wrapper that calls
+  it. Four are named. The Graphics folio's 22 are the CEL engine, the single
+  largest piece of work in any port; the Kernel folio's 23 are the cheapest,
+  since slot −56 is already pinned as the block copy.
 - **The DSP instruction set.** `tools/dsp.py` reads everything around the
   code and not one word of the code itself: 1,950 sixteen-bit instructions
   across the 64 files, of which a port needs the 21 named instruments'
@@ -106,15 +119,18 @@ camera in about 1.5 seconds a frame. What is missing:
 - **Name the remaining kernel/audio SWIs.** Six are identified in
   [docs/09](docs/09-os-surface.md); the rest have call sites listed and need
   one context read each.
-- **Identify the 3DO Portfolio SDK library code inside `p`** and mark it *not
-  to be reversed*. A first pass by string vocabulary is not enough: the SDK's
-  own DataStream code sits at `0x4ae5c`–`0x562f4`, but the game's own
-  `FMOData` subscriber implementations at `0x2c5b4`, `0x2e0e8`, `0x2f940`,
-  `0x31488` and `0x3443c` use the same words. Reachability from a hand-checked
-  seed set is the way to do it properly — and now that `bl` targets resolve,
-  reachability is a five-line script. The Cinepak routines are a worked
-  example of the trap: they *look* like game code because `GetCPakCel` is,
-  but the decoder itself is library.
+- **The library/game split is answered as far as the disc allows**, and
+  [docs/15](docs/15-library-and-game.md) says where the wall is. 71 functions
+  are proved library by exact shape match against the 38 executables on the
+  disc that carry no Immercenary code. Do **not** spend another session
+  pushing that number: the corpus links the C runtime and folio glue only,
+  and nothing here links the audio, Graphics, DataStream or Cinepak libraries
+  without game code beside it. `CinepakSubroutine` looks like the corpus you
+  want and is disqualified — its strings are `$Perfect/film/…`.
+  What *is* still open is the 24 functions in the weakest tier (in `p`,
+  `CinepakSubroutine` and `SpeechSubroutine` alike, touching no game string):
+  one context read each says whether they are the SDK's or Immercenary's own
+  utility layer.
 - **356 functions still have no direct caller.** Some are entry points and some
   are called through tables; a pass over them would find the dispatch
   mechanism, which is the last blind spot in the call graph. `SetHUDPixel` at
@@ -187,6 +203,11 @@ camera in about 1.5 seconds a frame. What is missing:
   turned the Cinepak-style tail of the font decoder inside out for an hour.
   When a decode almost works, re-read the branch senses before re-reading the
   data.
+- **An anchor that refuses to match is worth more than one that does.**
+  `memcpy` and `printf` failed the library check, and both failures were
+  right: one is a folio thunk and the other a two-instruction prologue. Two
+  documented "functions" were wrong. Explain a failing check before relaxing
+  it.
 - **A "last unread format" can turn out not to be the game's.** The 64
   `.dsp` files are the stock Portfolio instrument library, shipped whole
   because libraries ship whole. Reading the format was still worth it, but

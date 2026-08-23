@@ -117,6 +117,34 @@ what names them:
 The remaining 36 entry points are enumerated by `swiscan.py --sites` with their
 call sites but are not yet named.
 
+## Every vector slot is attributed now
+
+The folio vector table used to have a bucket of 24 slots nobody could name.
+They were all the **kernel folio**, reached through `KernelBase` at
+`0x057b0c`, and `swiscan.py` could not see it for two reasons: the kernel
+folio is never opened with `FindNamedItem`, so there was no name string to
+attach to it, and its wrappers use a `push {sb, lr}` / `mov lr, pc` /
+`ldr pc, [sb, #-slot]` / `pop` shape instead of a bare tail call. The scanner
+now derives the pointer from the AIF startup — the folio the boot stub calls
+through, before any other, is the kernel's — and drops the positive offsets
+that were never folio vectors at all.
+
+`p`'s surface is therefore closed:
+
+| | entry points | call sites |
+|---|---|---|
+| direct SWIs | 42 | 561 |
+| audio folio vectors | 46 | |
+| Kernel folio vectors | 23 | |
+| Graphics folio vectors | 22 | |
+| File folio vectors | 10 | |
+| Operamath folio vectors | 8 | |
+| **folio vectors, total** | **109** | **109** |
+
+151 entry points, 670 call sites, **nothing unattributed**. See
+[15-library-and-game.md](15-library-and-game.md) for how the kernel pointer
+was pinned.
+
 ## Named vector slots
 
 Four of the 76 folio slots are now pinned to a name, each by what the game's

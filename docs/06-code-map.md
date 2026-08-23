@@ -88,8 +88,9 @@ every reference beyond 255 bytes.
 | `0x04d850` | OpenGraphicsFolio | *"unable to open GraphicsFolio!"* |
 | `0x04d960` | OpenSportFolio | `FindNamedItem(0x104, "SPORT")` |
 | `0x04e274` | printf | varargs, formats through `0x4ef5c` |
-| `0x04e348` | memcpy(dst, src, n) | ubiquitous |
+| `0x04e348` | **KernelCopyMem** — not a function at all but a folio thunk to Kernel slot −56, the kernel's own block copy; see [15](15-library-and-game.md) | `ldr pc, [r3, #-0x38]` |
 | `0x04e488` | the 32-bit RNG `RandomBelow` draws from | |
+| `0x038c00` | **RandomBelow — library, not the game's**: instruction for instruction the same function as one in `System/Programs/organus` | `tools/libscan.py` |
 | `0x016014` | **ProjectFace** — projects a face's four corner records and gathers the four rejects into a nibble; `0xf` culls the face | four `ProjectPoint` calls |
 | `0x046774` | **GetCPakCel** — the `FHDR`/`FRME` handler for the DataStream video channel | *"GetCPakCel: Unknown Chunk Type"* |
 | `0x04cce8` | **OperamathMulSF16** — the folio's own 16.16 multiply, slot −8 | `0x56c58` and `0x56ea8` are the same routine, one calling this and one the open-coded `MulSF16` |
@@ -292,6 +293,7 @@ that the released game does in C instead.
 
 | Address | Holds |
 |---|---|
+| `0x057b0c` | **KernelBase** — the AIF startup caches it here from `r7`; every kernel folio vector call reads it, and it is the first zero-initialised global, which is why the assembler module ends exactly there |
 | `0x057db4` | loaded world file base pointer |
 | `0x058434` … `0x058440` | minX, maxY, maxX, minY |
 | `0x058444`, `0x058448` | cellW, cellH |

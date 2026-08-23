@@ -102,7 +102,7 @@ def scan(path, show_sites=False):
                 swi_funcs[v].add(im.func_of(a))
         elif i.mnemonic.startswith('ldr'):
             m = VECTOR.match(i.op_str)
-            if m:
+            if m and int(m.group(2), 0) < 0:
                 off = int(m.group(2), 0)
                 vectors[off] += 1
                 vec_funcs[off].add(im.func_of(a))
@@ -185,6 +185,25 @@ def scan(path, show_sites=False):
                         ptr_global[base + disp] = name
                     break
 
+    # The kernel folio is never opened by name: the AIF startup gets its
+    # pointer from the boot SWI and caches it before anything else runs. So
+    # the folio pointer that the startup stub -- everything before the first
+    # real function -- calls through is the kernel's, and that is derivable
+    # rather than something to hard-code.
+    first = im.fstarts[0] if im.fstarts else 0x200
+    for a in im.order:
+        if a >= first:
+            break
+        i = im.insns[a]
+        m = VECTOR.match(i.op_str)
+        if i.mnemonic.startswith('ldr') and m:
+            for v in pool_values(im, im.code_start, a + 4):
+                if v in ptr_global:
+                    break
+            else:
+                for v in pool_values(im, im.code_start, a + 4):
+                    ptr_global[v] = 'Kernel'
+
     attributed = collections.defaultdict(set)
     unattributed = set()
     for a in im.order:
@@ -195,7 +214,12 @@ def scan(path, show_sites=False):
         if not m:
             continue
         off = int(m.group(2), 0)
-        f = thunk_start(im, a, m.group(1)) or im.func_of(a) or a
+        if off >= 0:                              # not a folio vector
+            continue
+        # A call before the first function is in the AIF startup, which has
+        # no enclosing function to scan: start from the top of the image.
+        f = (thunk_start(im, a, m.group(1)) or im.func_of(a) or
+             (im.code_start if a < im.fstarts[0] else a))
         folio = None
         for b in range(f, a, 4):                  # opened inline?
             j = im.insns.get(b)

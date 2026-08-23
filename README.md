@@ -15,8 +15,8 @@ only shipping build is the 3DO ARM6 executable on the retail CD.
 
 | Path | Contents |
 |---|---|
-| `tools/` | Opera (3DO) filesystem reader, CEL/anim decoder, CEL bank reader, B3D world parser, ground tile map reader, OBJ exporter, textured software renderer, font decoder, DataStream demuxer with Cinepak and SDX2 decoders, HUD radar map decoder, ARM cross-referencer and call-graph reader, symbol-file builder, OS-surface scanner, DSP instrument reader, the hand-written ARM math module reimplemented and self-checking |
-| `docs/` | Findings: disc layout, file formats, executables, roadmap, B3D format, code map, CEL banks, the ground, the OS surface, the second B3D family, the fonts, the DataStream, the HUD maps, the DSP instruments |
+| `tools/` | Opera (3DO) filesystem reader, CEL/anim decoder, CEL bank reader, B3D world parser, ground tile map reader, OBJ exporter, textured software renderer, font decoder, DataStream demuxer with Cinepak and SDX2 decoders, HUD radar map decoder, ARM cross-referencer and call-graph reader, symbol-file builder, OS-surface scanner, DSP instrument reader, library-versus-game classifier, the hand-written ARM math module reimplemented and self-checking |
+| `docs/` | Findings: disc layout, file formats, executables, roadmap, B3D format, code map, CEL banks, the ground, the OS surface, the second B3D family, the fonts, the DataStream, the HUD maps, the DSP instruments, library versus game code |
 
 ## Quick start
 
@@ -76,6 +76,9 @@ python tools/dsp.py extracted/System/Audio/dsp --used extracted/p
 
 # What of the 3DO OS does the game actually touch?
 python tools/swiscan.py extracted/p
+
+# Which functions are 3DO library code rather than Immercenary's?
+python tools/libscan.py extracted/p --check
 
 # The game's own 3D and CEL math, reimplemented and checked against real maths
 python tools/armmath.py extracted/p --verify
@@ -162,9 +165,19 @@ Early, but moving. Nothing is playable yet.
   part that matters to a port is that the game names only **21** of them, of
   which its own code asks for four by name and the audio folio picks the rest
   to match a sample's format. It also asks for two the disc does not carry.
-- **The OS surface is enumerated**: 671 call sites reaching at most 146 entry
-  points — 42 direct SWIs plus the folio function vectors, 46 of them audio,
-  22 Graphics, 8 Operamath. That is the exact set a port must implement.
+- **The OS surface is closed.** 670 call sites reaching 151 entry points: 42
+  direct SWIs plus 109 folio vector slots — 46 audio, 23 Kernel, 22 Graphics,
+  10 File, 8 Operamath — with nothing left unattributed. The 24 slots that
+  used to have no folio beside them were the kernel's, reached through
+  `KernelBase`, which the AIF startup caches at `0x057b0c`.
+- **Library code and the game's are interleaved, not banded.** A function that
+  appears in `p` *and* in one of the disc's 38 executables that contain no
+  Immercenary code is library, proved. 71 come out that way — and one of them,
+  `RandomBelow`, sits at `0x038c00`, three hundred kilobytes below where the
+  SDK was assumed to live. No address rule separates the two. The method's
+  ceiling is written down as plainly as its result: the corpus links the C
+  runtime and folio glue, and nothing on the disc links the audio, Graphics,
+  DataStream or Cinepak libraries without game code beside it.
 
 See [docs/04-roadmap.md](docs/04-roadmap.md).
 
