@@ -11,6 +11,7 @@ assets/
 # ---- Tool output ----
 tools/*_strings.txt
 tools/disc_listing.txt
+tools/*.sym
 build/
 __pycache__/
 *.pyc

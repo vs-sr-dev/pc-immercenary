@@ -10,6 +10,7 @@ import struct, sys, re, bisect, argparse, collections
 from capstone import *
 
 STR = {}
+SYM = {}
 LITPOOL = re.compile(r'^\w+, \[pc, #(-?(?:0x[0-9a-fA-F]+|\d+))\]$')
 PCREL   = re.compile(r'^\w+, pc, #(-?(?:0x[0-9a-fA-F]+|\d+))(?:, #(\d+))?$')
 
@@ -89,11 +90,17 @@ def main():
     ap.add_argument('-a', '--addr', help='find code referencing this hex address')
     ap.add_argument('-d', '--dis', help='disassemble from this hex address')
     ap.add_argument('-n', '--count', type=int, default=80)
+    ap.add_argument('-S', '--symbols', help='a symbol file from tools/symbols.py')
     a = ap.parse_args()
 
     im = Image(a.image)
-    global STR
+    global STR, SYM
     STR = im.strings()
+    if a.symbols:
+        for line in open(a.symbols, encoding='utf-8'):
+            parts = line.split('#')[0].split()
+            if len(parts) == 2:
+                SYM[int(parts[0], 16)] = parts[1]
     print(f"# {a.image}: {len(im.insns)} insns, {len(im.fstarts)} function starts, "
           f"{len(im.litrefs)} distinct literal values\n")
 
@@ -107,7 +114,8 @@ def main():
             print(f"{off:#08x}  {s!r}")
             for r in refs:
                 f = im.func_of(r)
-                print(f"           <- {r:#08x}   in func {f:#08x}")
+                nm = f"  {SYM[f]}" if f in SYM else ""
+                print(f"           <- {r:#08x}   in func {f:#08x}{nm}")
             if not refs:
                 print("           <- no direct literal reference")
 
@@ -120,6 +128,8 @@ def main():
             byfunc[im.func_of(r)].append(r)
         for f in sorted(byfunc, key=lambda x: (x is None, x)):
             fs = f"{f:#08x}" if f is not None else "  (none)"
+            if f in SYM:
+                fs = f"{fs} {SYM[f]}"
             sites = ' '.join(f"{r:#x}" for r in byfunc[f])
             print(f"  func {fs}   {len(byfunc[f]):>3}x   {sites}")
 
@@ -135,6 +145,15 @@ def main():
                 v = struct.unpack_from('>I', im.d, l)[0]
                 txt = STR.get(v)
                 lit = f"   ; = {v:#x}" + (f'  "{txt}"' if txt else '')
+            if m in ('bl', 'b') and not lit:
+                try:
+                    nm = SYM.get(int(ops.lstrip('#'), 0))
+                except ValueError:
+                    nm = None
+                if nm:
+                    lit = f"   ; {nm}"
+            if addr in SYM:
+                print(f"\n{SYM[addr]}:")
             print(f"  {addr:08x}  {m:<10} {ops}{lit}{mark}")
 
 if __name__ == '__main__':

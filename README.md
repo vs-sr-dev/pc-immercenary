@@ -15,7 +15,7 @@ only shipping build is the 3DO ARM6 executable on the retail CD.
 
 | Path | Contents |
 |---|---|
-| `tools/` | Opera (3DO) filesystem reader, CEL/anim decoder, CEL bank reader, B3D world parser, ground tile map reader, OBJ exporter, textured software renderer, font decoder, DataStream demuxer with Cinepak and SDX2 decoders, ARM cross-referencer, OS-surface scanner |
+| `tools/` | Opera (3DO) filesystem reader, CEL/anim decoder, CEL bank reader, B3D world parser, ground tile map reader, OBJ exporter, textured software renderer, font decoder, DataStream demuxer with Cinepak and SDX2 decoders, ARM cross-referencer, symbol-file builder, OS-surface scanner |
 | `docs/` | Findings: disc layout, file formats, executables, roadmap, B3D format, code map, CEL banks, the ground, the OS surface, the second B3D family, the fonts, the DataStream |
 
 ## Quick start
@@ -47,6 +47,10 @@ python tools/b3dmap.py extracted/Perfect/CondensedPerfectWorld.B3D worldmap.png 
 python tools/armxref.py extracted/p -s 'load the world'
 python tools/armxref.py extracted/p -d 13e4c -n 60
 python tools/armxref.py extracted/p -a 89680
+
+# ...and with names: build a symbol file, then read the disassembly through it
+python tools/symbols.py extracted/p -o tools/p.sym
+python tools/armxref.py extracted/p -S tools/p.sym -d fe30
 
 # Decode the ten anti-aliased fonts
 python tools/font.py extracted/Perfect --verify -o sheets/fonts
@@ -100,7 +104,9 @@ Early, but moving. Nothing is playable yet.
   rectangles and the boss ladder's numbers.
 - The executable is being mapped: the world loader, the record parser and all
   seven of its sub-handlers, the CEL bank loader, the floor renderer, the object
-  id table and the world globals are identified.
+  id table and the world globals are identified. `tools/symbols.py` turns the
+  code map plus the image's own strings into a symbol file that
+  `armxref.py -S` reads, which names 243 of the 2,164 functions.
 - **The OS surface is enumerated**: 671 call sites reaching at most 146 entry
   points — 42 direct SWIs plus the folio function vectors, 46 of them audio,
   22 Graphics, 8 Operamath. That is the exact set a port must implement.
