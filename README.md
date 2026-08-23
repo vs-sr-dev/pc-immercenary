@@ -35,6 +35,10 @@ python tools/celbatch.py extracted/Perfect png
 # Parse the world and encounter geometry files
 python tools/b3d.py -r "extracted/Perfect/**/*.B3D"
 
+# Render a top-down map of the overworld
+python tools/b3dmap.py extracted/Perfect/CondensedPerfectWorld.B3D worldmap.png \
+                       extracted/Perfect/PerfectLocation.Init
+
 # Cross-reference the executable: which code uses which string?
 python tools/armxref.py extracted/p -s 'load the world'
 python tools/armxref.py extracted/p -d 13e4c -n 60
@@ -47,7 +51,10 @@ Early, but moving. Nothing is playable yet.
 - The Opera filesystem is fully readable: 747 files, 552 MiB.
 - The 3DO CEL format decodes: 449 asset files to 5,874 PNGs, no failures.
 - The `.B3D` world container is solved and confirmed against the game's own
-  loader, disassembled.
+  loader, disassembled. Object placements walk: all five encounter files
+  completely, the overworld at 228 of 241 cells.
+- The overworld renders as a recognisable city map, cross-checked against the
+  developer warp coordinates left in the shipping build.
 - The executable is being mapped: the world loader, the record parser, the
   object id table and the world globals are identified.
 

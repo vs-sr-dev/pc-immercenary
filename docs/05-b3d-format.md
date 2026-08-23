@@ -274,12 +274,81 @@ id through the dispatcher at `0x037dd8`, whose full table is recovered in
 [06-code-map.md](06-code-map.md) — 27 ids covering the world props and the
 twelve weapon pickups.
 
+### Walking section C
+
+The length rule that actually works is the game's own:
+
+```python
+if record.type != 0:
+    length = record.skipLength        # cullable, so the field is maintained
+else:
+    length = {1: 18, 2: 48, 3: 19, 6: 43}[sub]     # fixed-size kinds
+    # sub 0: 17 + 3*N, where N comes from the referenced template
+    #   flags & 1 == 1  ->  N = tableB[index][3]
+    #   flags & 1 == 0  ->  N = len(tableA[index]) - 10
+```
+
+Results, walking cell by cell so a desync is contained to one cell:
+
+| File | Records | Coverage |
+|---|---|---|
+| `TeslaEncounter` | 80 | complete |
+| `LokiEncounter` | 91 | complete |
+| `balkanencounter` | 40 | complete |
+| `chanceencounter` | 35 | complete |
+| `flyencounter` | 34 | complete |
+| `CondensedPerfectWorld` | 2,650 | 228 of 241 cells |
+| `P1EncWorld` | 2,619 | 222 of 235 cells |
+
+All five encounters walk to the last byte. The two large worlds leave 13 cells
+each, where a `sub = 0` tail is sized by a rule the two template paths have not
+fully given up yet.
+
+### X and Y are common to every record kind
+
+Every record carries `i16 X` at +8 and `i16 Y` at +10, not just `sub = 0`.
+Checked against the world bounding box on the overworld:
+
+| `sub` | inside the box |
+|---|---|
+| 1 | 1176 / 1176 |
+| 3 | 311 / 311 |
+| 6 | 62 / 62 |
+| 2 | 178 / 188 |
+
+### The map
+
+[`tools/b3dmap.py`](../tools/b3dmap.py) plots every placement top-down, coloured
+by `sub`, with the 16x16 cell grid drawn behind it. The result is unmistakably a
+city: a stadium, a plaza, blocks of buildings, streets on the grid, a ring of
+objects, scattered props.
+
+The strongest check available is `Perfect/PerfectLocation.Init`, the developer
+warp table left in the shipping build. Overlaying its points:
+
+- the four **transporter** entries — northwest `(-1900, 2580)`, northeast
+  `(2100, 2580)`, southeast `(2100, -1480)`, southwest `(-1900, -1480)` — land
+  exactly on the four corners of the plotted map;
+- *"This is entering the stadium"* `(-279, 913)` lands on the large curved
+  structure near the centre;
+- *"right in front of the Mansion"* `(1698, 482)` lands on a building outline on
+  the east side.
+
+That confirms the coordinate system, the axis order and the Y direction
+(`maxY` is at the top) all at once.
+
+```sh
+python tools/b3dmap.py extracted/Perfect/CondensedPerfectWorld.B3D worldmap.png \
+                       extracted/Perfect/PerfectLocation.Init
+```
+
 ### What is left
 
-The per-`sub` handlers still need reading end to end to produce a complete
-walker: the tail loops of `sub = 0`, and the fixed layouts of `sub = 1`, `2`
-and `3`. Those are bounded, well-located tasks now — the handlers are at
-`0x398a4`, `0x3a32c`, `0x3945c` and `0x3a660`.
+The two `sub = 0` template paths need reading to the end — the tail loop in the
+tableA path is gated on `flags & 2`, and the tableB path at `0x39f5c` has its own
+loop. That is what the 13 unwalked cells are waiting on. The fixed layouts of
+`sub = 1`, `2` and `3` are also still unread; their handlers are at `0x3a32c`,
+`0x3945c` and `0x3a660`.
 
 ## Two families
 

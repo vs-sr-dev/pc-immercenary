@@ -88,6 +88,84 @@ class B3D:
             off += L
 
 
+
+# --- section C record walking -------------------------------------------------
+#
+# Records are u8 type / u8 sub / i16 skipLength / u32 field, but skipLength is a
+# culling hint that the game only reads when it skips a record, and type 0
+# records are never skipped -- so it is unreliable. Lengths come from the sub
+# byte instead. See docs/05-b3d-format.md.
+
+FIXED_LEN = {1: 18, 2: 48, 3: 19, 6: 43}
+
+class Record:
+    __slots__ = ('off', 'type', 'sub', 'skiplen', 'field', 'length', 'body',
+                 'x', 'y', 'flags', 'index', 'name')
+    def __repr__(self):
+        return f"<rec {self.off:#x} {self.type}.{self.sub} len={self.length}>"
+
+
+def _sub0_len(b, s, off, A, B):
+    flags = s[off+12]
+    index = struct.unpack_from('>I', s, off+13)[0]
+    tbl = B if flags & 1 else A
+    if index >= len(tbl):
+        return None
+    tpl = tbl[index]
+    n = tpl[3] if flags & 1 else len(tpl) - 10
+    if n < 0:
+        return None
+    return 17 + 3*n
+
+
+def walk_section_c(b):
+    """Walk section C. Returns (records, failedRanges).
+
+    Grid-indexed files are walked cell by cell so that a desync is contained to
+    one cell; files whose grid is empty are walked as a single run."""
+    s = b.secC
+    A = b.recs(b.secA, b.tableA, b.sizeA)
+    B = b.recs(b.secB, b.tableB, b.sizeB)
+    ranges = [(b.grid[i], b.grid[i+1]) for i in range(256)
+              if b.grid[i] >= 0 and b.grid[i+1] > b.grid[i]]
+    if not ranges:
+        ranges = [(0, len(s))]
+    out, failed = [], []
+    for a, e in ranges:
+        off = a
+        while off < e:
+            sub = s[off+1]
+            # Mirror the game: a record whose type byte is non-zero can be
+            # culled, so its skipLength is meaningful and authoritative.
+            # Type 0 records are never culled, so their skipLength is dead
+            # data and the length has to come from the sub byte.
+            if s[off]:
+                L = struct.unpack_from('>H', s, off+2)[0]
+            else:
+                L = FIXED_LEN.get(sub)
+                if L is None:
+                    L = _sub0_len(b, s, off, A, B) if sub == 0 else None
+            if L is None or L < 4 or off + L > e:
+                failed.append((a, e, off))
+                break
+            r = Record()
+            r.off, r.type, r.sub, r.length = off, s[off], sub, L
+            r.skiplen = struct.unpack_from('>h', s, off+2)[0]
+            r.field = struct.unpack_from('>I', s, off+4)[0]
+            r.body = s[off:off+L]
+            r.x = r.y = r.flags = r.index = r.name = None
+            if sub == 0:
+                r.x, r.y = struct.unpack_from('>hh', s, off+8)
+                r.flags = s[off+12]
+                r.index = struct.unpack_from('>I', s, off+13)[0]
+            elif sub == 6:
+                r.x, r.y = struct.unpack_from('>hh', s, off+8)
+                r.name = r.body[23:].split(bytes(1))[0].decode('latin1')
+            out.append(r)
+            off += L
+    return out, failed
+
+
 if __name__ == '__main__':
     import glob
     pats = sys.argv[1:] or ['extracted/Perfect/**/*.B3D']
@@ -99,11 +177,10 @@ if __name__ == '__main__':
             b = B3D(p)
             print(b.summary())
             if detail and b.exact:
-                ok = 0
-                for off, t, sub, L, body in b.records():
-                    if body is None:
-                        print(f"    desync at {off} (type {t}.{sub} len {L})"); break
-                    ok += 1
-                print(f"    section C: {ok} records walked")
+                recs, failed = walk_section_c(b)
+                kinds = {}
+                for r in recs: kinds[r.sub] = kinds.get(r.sub, 0) + 1
+                print(f"    section C: {len(recs)} records, subs={dict(sorted(kinds.items()))}, "
+                      f"{len(failed)} unwalked ranges")
         except Exception as e:
             print(f"{os.path.basename(p):28} -- {type(e).__name__}: {e}")
