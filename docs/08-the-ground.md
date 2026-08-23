@@ -200,6 +200,25 @@ a half-screen of 160 pixels.
 bit `0x10000` is clear. `0x0001428c` builds two more of the same shape,
 `0x8b8ec` and `0x8bb2c`, at 8.8 precision (`0xa000` is 160.0 in 8.8).
 
+Those two are **one array in two resolutions**, and they are not the ground's.
+`0x8b8ec` holds 144 entries at 0.25-unit steps covering depth 2.0 to 37.75,
+`0x8bb2c` holds 400 at 1.0-unit steps covering 38.0 to 437.0, and
+`0x8b8ec + 144*4` is exactly `0x8bb2c`, whose own end is exactly `0x8c16c`, the
+reciprocal table. All three are contiguous.
+
+The consumer is `ProjectPoint`, `0x0568a8`, in the hand-written assembler
+module past `image_ro_size` — see [06](06-code-map.md). Given a point it
+computes the horizon two ways, once exactly through the reciprocal table and
+once by looking it up, picking `0x8bb2c` above depth 38 and `0x8b8ec` below,
+and returns a clip flag. `0x016014` calls it four times over the four corners
+of a quad and combines the flags. Its callers are object and character
+placement, not the floor: the ground has its own 16.16 pair and its own loop.
+
+One rough edge: the far table's last 36 entries, depth 402.0 and up, index the
+1,600-entry reciprocal table past its end. Nothing in the lattice reaches that
+far — the farthest ground corner is 181 units — but a port that reimplements
+the table builder literally will read whatever follows it.
+
 Both tables comfortably cover the lattice: its farthest corner is
 `sqrt(128² + 128²)` ≈ 181 units away, inside 201.5 and 401.75.
 

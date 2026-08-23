@@ -20,7 +20,12 @@ class Image:
         d = open(path, 'rb').read()
         self.d = d
         self.ro, self.rw, self.dbg, self.bss = struct.unpack_from('>4I', d, 0x14)
-        self.code_start, self.code_end = 0x80, self.ro
+        # `image_ro_size` is not where the code stops.  A hand-written
+        # assembler module -- MulSF16, the horizon helpers, the routine that
+        # turns four corners into a CCB's HDX/HDY/VDX/VDY -- is linked past
+        # it, 276 call sites' worth, and stopping at `ro` hides all of it.
+        # The module ends where the zero-initialised globals begin.
+        self.code_start, self.code_end = 0x80, self.tail_end()
 
         self.md = Cs(CS_ARCH_ARM, CS_MODE_ARM | CS_MODE_BIG_ENDIAN)
         self.md.detail = True
@@ -63,7 +68,10 @@ class Image:
                     t = int(ops.lstrip('#'), 0)
                 except ValueError:
                     t = None
-                if t is not None:
+                # A literal pool word decodes as an instruction under a
+                # linear sweep, and one beginning 0x?B is a BL to nowhere.
+                # Keep only targets inside the image's own code.
+                if t is not None and self.code_start <= t < self.code_end:
                     self.funcs.add(t)
                     self.calls[t].append(a)
             # literal pool load:  ldr rD, [pc, #imm]
@@ -86,6 +94,22 @@ class Image:
                     delta = ((delta >> rot) | (delta << (32 - rot))) & 0xFFFFFFFF
                 self.litrefs[a + 8 + (delta if m[:3] == 'add' else -delta)].append(a)
         self.fstarts = sorted(self.funcs)
+
+    def tail_end(self, zeros=8):
+        """Where the code past `image_ro_size` stops.
+
+        Walk on from `ro` to the first run of `zeros` zero words.  On `p`
+        every threshold from 4 to 16 gives the same answer, `0x57b0c`,
+        which is the first zero-initialised global and one instruction
+        past the module's last `ldmdb fp, {..., pc}`.
+        """
+        d, a = self.d, self.ro
+        while a + zeros * 4 <= len(d):
+            if not any(struct.unpack_from('>I', d, a + i * 4)[0]
+                       for i in range(zeros)):
+                return a
+            a += 4
+        return self.ro
 
     def func_of(self, addr):
         k = bisect.bisect_right(self.fstarts, addr) - 1

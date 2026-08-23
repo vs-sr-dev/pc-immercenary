@@ -275,7 +275,10 @@ finished with:
 ```
 
 The cull test draws when the bit is **set**, so every conditional record is
-visible at the start of the game and vanishes when its owner falls. Character
+visible at the start of the game and vanishes when its owner falls. Bits 12 to
+23 of the same word are not characters at all — they are the player's weapon
+inventory, one bit a weapon type, set by the pickup handler at `0x043d0c`; see
+[13](13-hud-maps.md). Character
 ids 6 … 13 map to bits 3 … 10, which is exactly `type << 3` for the eight
 values `1, 2, 4, 8, 16, 32, 64, 128` — and ids 6 … 13 in
 [`PerfectMovers.B3D`](10-second-b3d-family.md) are the eight lieutenants:

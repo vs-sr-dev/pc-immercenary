@@ -71,6 +71,7 @@ every reference beyond 255 bytes.
 | `0x01e118` | **DrawHUDMap** — rotates and places the two radar CCBs | four `MulSF16` a layer |
 | `0x01e908` | **LoadHUDMaps(cellX, cellY)** — the radar's two tiles | *"Couldn't load HUD map!!"* |
 | `0x01ec44` | **HUDMapIsEncounter(cellX, cellY)** — the eight territories | render flag bits 3-10 |
+| `0x043d0c` | **PickUpWeapon** — sets render-flag bit `weaponType + 11` | *"YOU PICKED UP ..."* |
 | `0x03b11c` | **TraverseCells** — walks grid cells, drives the parser | *"Bailed Out with CurrentQuad at %d"* |
 | `0x03b470` | WorldStats debug print | *"B_Objects:%d S_Objects:%d ..."* |
 | `0x03d430` | **LoadEncounterB3D** | *"Couldn't load the encounter B3D file!"* |
@@ -94,6 +95,42 @@ every reference beyond 255 bytes.
 does not need: every encounter shares the same bounding box and cell size, so it
 reads only `countA, countB, sizeA, sizeB, sizeC`. That is independent
 confirmation of the header layout.
+
+## The assembler module past `image_ro_size`
+
+`p`'s AIF header says the read-only image ends at `0x565ec`. **The code does
+not.** A hand-written ARM module is linked after it and runs to `0x57b0c`,
+where the zero-initialised globals start — 1,350 instructions that a
+cross-referencer stopping at `image_ro_size` never sees, and that the rest of
+the executable calls **265 times**.
+
+It is easy to tell apart from the compiler's output: no APCS frame on most of
+it, `push {r4-fp, lr}` / `pop {..., pc}` instead of the `mov ip, sp` prologue,
+and constants kept in registers across whole routines.
+
+`armxref.py` now walks on from `image_ro_size` to the first run of eight zero
+words, which lands on `0x57b0c` for every threshold from 4 to 16.
+
+| Address | What it is | Calls |
+|---|---|---|
+| `0x05664c` | **MapCel2x2** — the `MapCel` fast path when `ccb_Width` and `ccb_Height` are both 2; anything else tail-calls `0x04d8f8` | 2 |
+| `0x0566e0` | **RejectByBounds** — four-component reject: returns 1 as soon as `b[i] > abs(a[i])` | 10 |
+| `0x056738` | **SignCount** — sign count of four words, `-4 .. +4` — all four corners on one side of a plane | 26 |
+| `0x056778` | gathers four indirect vertex pairs into two four-word vectors | 10 |
+| `0x0568a8` | **ProjectPoint** — the reader of the two 8.8 horizon tables | 8 |
+| `0x056a04` | **HorizonY(height, depth)** — `0xa000 - 0.625 * height / depth`, the divide done through the reciprocal table | 42 |
+| `0x056a34` | **MulSF16** — 16.16 multiply | 63 |
+| `0x056d00` | **MulFast** — fixed-point multiply with fast paths when either operand is whole | 14 |
+| `0x056ff8` | **Cos(angle)** — `add #0x400000`, then falls into `Sin` | 21 |
+| `0x056ffc` | **Sin(angle)** — quadrant fold, `0x0594fc` table on `angle >> 10`, linear interpolation on the low ten bits | 23 |
+| `0x0578c4` | **CelLogSize** — replaces `ccb_Width`/`ccb_Height` with their base-2 logarithms when both are powers of two | 26 |
+| `0x05795c` | **MapCel** — four corners to `ccb_HDX`/`HDY`/`VDX`/`VDY`/`HDDX`/`HDDY` | 10 |
+| `0x057a24` | the same again for the non-power-of-two case | — |
+
+Nine more routines in the module are only reached from inside it.
+
+This is the game's 3D and CEL math library, which is precisely the part a port
+has to reimplement first.
 
 ## Known globals
 
@@ -135,7 +172,9 @@ confirmation of the header layout.
 | `0x057f00`, `0x057f04` | the near and far radar CCBs; `[+8]` is the tile buffer |
 | `0x05844c`, `0x058450` | near radar tile origin, world units |
 | `0x058454`, `0x058458` | far radar tile origin |
-| `0x06bed0` + `0x78` | the render flags word the cull test reads |
+| `0x06bed0` + `0x78` | the render flags word the cull test reads: bits 3-11 the lieutenants, 12-23 the weapon inventory |
+| `0x058fd4` | 12 weapon names, long form; `+0x30` the short form |
+| `0x089d40` + `0xf4` | weapon inventory slots, one word each |
 
 ## The object id table
 

@@ -113,10 +113,13 @@ Early, but moving. Nothing is playable yet.
   seven of its sub-handlers, the CEL bank loader, the floor renderer, the object
   id table and the world globals are identified. `tools/symbols.py` turns the
   code map plus the image's own strings into a symbol file that
-  `armxref.py -S` reads, which names 252 of the 1,503 functions. The call
-  graph is readable too, now that the cross-referencer knows an APCS function
-  starts one instruction before its `push`: without that, half the executable
-  looked unreachable.
+  `armxref.py -S` reads, which names 264 of the 1,477 functions. The call
+  graph is readable too, after two fixes: an APCS function starts one
+  instruction before its `push`, and the code does not stop where the AIF
+  header's `image_ro_size` says it does. Past that boundary sits a
+  hand-written assembler module — `MulSF16`, `Sin`, `Cos`, `MapCel`, the point
+  projector — that the rest of the executable calls 265 times, and that the
+  cross-referencer had never looked at.
 - **The HUD radar is solved**, the last unread asset format on the disc. The
   six `.Maps` files are 256 raw CEL tiles each, one per world grid cell — 2 bpp
   at two world units a pixel up close, 1 bpp at eight further out, both drawn

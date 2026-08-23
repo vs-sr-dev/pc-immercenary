@@ -3,37 +3,29 @@
 Everything below has a concrete starting address or file. Nothing here is
 open-ended research.
 
-## Done in session 4
+## Done in session 5
 
-- **The fonts.** All ten `.font` files are one private format — three bits of
-  coverage per pixel, compressed by a 16-bit token stream that the blitter at
-  `0x1b76c` dispatches through the ARM condition-code flags. 851 glyphs, every
-  one consuming exactly the bytes up to the next glyph's offset.
-  See [docs/11](docs/11-fonts.md) and `tools/font.py`.
-- **The DataStream.** The 37 `.strm` files and the eight `*Files` blobs are all
-  3DO DataStreams. Video decodes (Cinepak, one constant six-byte quirk), audio
-  decodes (SDX2), the `DACQ` marker table indexes the multi-film containers —
-  that was the `*Files` "unknown index format" — and **`FMOData` is a file
-  pipe**, not per-frame data: 61 cel files ride down `AllCinepaks.strm`, every
-  one reassembling to its declared length.
-  See [docs/12](docs/12-datastream.md) and `tools/strm.py`.
-- **The second `.B3D` family is finished**, twelve of twelve.
-  `MedusaEncounter`'s tail is a group count and a wall count applied to every
-  group; `PerfectMovers` is column-major, and read that way it is the game's
-  whole cast table — patrol rectangles, sprite sizes, speeds and the boss
-  ladder's stats. See [docs/10](docs/10-second-b3d-family.md).
-- **The world record header is fully read.** `type` is a lieutenant's territory
-  tag (all 87 tagged records lie inside their owner's patrol rectangle),
-  `field` is the record's own grid cell unary-encoded, `k3`/`k4`/the `sub = 2`
-  byte are one bounding radius, and the `skipLength` bug is reachable on
-  exactly five records. See [docs/05](docs/05-b3d-format.md).
-- **The ground pipeline, end to end.** The two depth tables are built at
-  runtime: a 1,600-entry reciprocal table so the perspective divide never
-  happens, and a 400-entry horizon curve rebuilt per camera height. Near/far
-  tiles switch at 52 world units; the fade is sixteen `PIXC` words.
-  `tools/b3dview.py` now does all three. See [docs/08](docs/08-the-ground.md).
-- `tools/symbols.py` builds a symbol file that `armxref.py -S` reads; 243 of
-  2,164 functions are named or labelled.
+- **The HUD radar, the last unread asset format.** The six `.Maps` files are
+  256 raw CEL tiles each, one per world grid cell: 256 x 256 at 2 bpp and two
+  world units a pixel up close, 160 x 160 at 1 bpp and eight further out, both
+  drawn at the same screen scale, which is why every far tile is blank over
+  exactly the square the near map covers. Verified twice — overlapping tiles
+  agree 99.99%, and 99.86% of the world file's 94,581 wall pixels land on a
+  non-open map pixel. See [docs/13](docs/13-hud-maps.md) and `tools/hudmap.py`.
+- **The eight territories that choose between the plain and the `NoEncounter`
+  file are the lieutenants' patrol rectangles**, so the render-flag bit is the
+  mover index minus three, from the HUD side as well as from `0xb760`.
+- **Render-flag bits 12-23 are the weapon inventory**, one bit per weapon type,
+  set by `PickUpWeapon` at `0x043d0c`. The twelve names are at `0x058fd4`.
+- **The cross-referencer was blind twice over.** An APCS function starts at the
+  `mov ip, sp` before its `push`, not at the push — that off-by-four made 1,111
+  of 2,164 functions look unreachable. And the code does not end where the AIF
+  header's `image_ro_size` says: a hand-written assembler module runs on to
+  `0x57b0c`, 265 call sites' worth. `armxref.py -c` now prints callers and
+  callees, and `docs/06` has the module's thirteen routines.
+- **`0x8b8ec` and `0x8bb2c` are answered**: one horizon array in two
+  resolutions, read by `ProjectPoint` at `0x0568a8` — the object and character
+  projector, not the ground's.
 
 ## 1. The interactive viewer  *(closest to a real artefact)*
 
@@ -47,35 +39,42 @@ camera in about 1.5 seconds a frame. What is missing:
   movers can be placed to the same rule.
 - **Collision.** The walls are quads and the ground is a tile map, so a simple
   2D segment sweep against the section C quads of the current cell is enough.
-  The game itself culls per grid cell already.
+  The game itself culls per grid cell already. The near `.Maps` are a
+  ready-made second opinion: value 1 is open ground at two units a pixel, and
+  they agree with the geometry to within a pixel.
+- **The radar.** `tools/hudmap.py` gives the tile, the world-to-pixel
+  transform and the rotation the CCB applies. A viewer can draw the real HUD
+  map with no further reversing.
 - Real-time interaction means leaving Python for the inner loop, or accepting
   a frame or two a second. Either is fine; the data side is done.
 
-## 2. The last unread asset formats
+## 2. The last unread asset format
 
-- **`HUD/*.Maps`** — six files, `FarHUD` and `NoEncounterFarHUD` 1 MiB each,
-  `NearHUD` and `NoEncounterNearHUD` 4 MiB each, plus the two `P1E` variants.
-  1,048,576 = 1024², 4,194,304 = 2048², so an 8 bpp map at two zoom levels is
-  the obvious first guess — but check it against the loader, not against the
-  size. `NearHUD.Maps` opens `9555 5555 …`, which is a repeating 2-bit
-  pattern, so the depth may well be smaller and the map larger.
-- **`System/Audio/dsp/*.dsp`** — 64 3DO DSP instruments. Any port needs them,
-  and the audio folio's 46 vector slots are the other half of that job.
+- **`System/Audio/dsp/*.dsp`** — 64 3DO DSP instruments, the only asset format
+  left. Any port needs them, and the audio folio's 46 vector slots are the
+  other half of that job.
 - `Floor/Highlight.cel` and `Floor/SpirePad.Cel`, loaded at `0x014b4c` and
-  `0x03238c` — small overlays drawn on top of the ground.
+  `0x03238c` — small overlays drawn on top of the ground. Not a format, just
+  unread call sites.
 - The arena floor grids: `Fly/FlyFloorGrid.cel`, `Loki/LokiFloorGrid.cel`,
   `Loki/AllFloorPatterns.%d`.
 - `Perfect/Music/*.music` needs no work — it is plain uncompressed AIFF, mono
   16-bit at 44.1 kHz.
 
-## 3. Code map, wider
+## 3. Code map, wider  *(the call graph is new, use it)*
 
+- **Read the rest of the assembler module.** Thirteen of its routines are named
+  in [docs/06](docs/06-code-map.md); nine more are only reached from inside it
+  and none of them is read. This is the game's 3D and CEL math library and a
+  port reimplements it first, so it is worth finishing properly. Start at
+  `0x05704c`, `0x057574`, `0x05769c` and `0x057824`, the four one-call-site
+  entry points.
+- **`0x04d8f8`**, the general `MapCel` the 2x2 fast path falls back to.
 - **Name the 76 folio vector slots.** `swiscan.py --sites` lists every one with
   its wrapper: 46 audio, 22 Graphics, 8 Operamath. Slot number plus folio
   identifies a 3DO SDK function exactly, and the Graphics folio's slots are the
-  CEL engine — the single largest piece of work in any port. One is already
-  pinned by use: Operamath slot **-28 is a 16.16 reciprocal**, and `0x56a34` is
-  an open-coded `MulSF16`.
+  CEL engine — the single largest piece of work in any port. Operamath slot
+  **-28 is a 16.16 reciprocal**.
 - **Name the remaining kernel/audio SWIs.** Six are identified in
   [docs/09](docs/09-os-surface.md); the rest have call sites listed and need
   one context read each.
@@ -84,24 +83,32 @@ camera in about 1.5 seconds a frame. What is missing:
   own DataStream code sits at `0x4ae5c`–`0x562f4`, but the game's own
   `FMOData` subscriber implementations at `0x2c5b4`, `0x2e0e8`, `0x2f940`,
   `0x31488` and `0x3443c` use the same words. Reachability from a hand-checked
-  seed set is the way to do it properly.
+  seed set is the way to do it properly — and now that `bl` targets resolve,
+  reachability is a five-line script.
+- **356 functions still have no direct caller.** Some are entry points and some
+  are called through tables; a pass over them would find the dispatch
+  mechanism, which is the last blind spot in the call graph. `SetHUDPixel` at
+  `0x012060` and the far-radar probe at `0x011180` are two concrete examples.
 - Feed named functions back into `docs/06-code-map.md`, not into the symbol
-  file: `tools/symbols.py` reads the doc, so the doc stays the authority.
+  file: `tools/symbols.py` reads the doc, so the doc stays the authority. Put
+  the **name first** in the description column, or the harvester takes the
+  leading word as the name.
 
 ## 4. Loose ends worth an hour each
 
-- **`0x8b8ec` and `0x8bb2c`**, the two 8.8-precision horizon tables built at
-  `0x01428c`. The 16.16 pair is understood; these are presumably the HUD's or
-  the sprite layer's, and finding who reads them names another subsystem.
-- **The render-flag bits above 11.** `0x43dc0` sets bit `(x + 11)` for some
-  per-encounter `x`. Bits 3-10 are the lieutenants and 11 is Loki; what 12 and
-  up gate is unread.
 - **`0x89f40`'s runtime fields.** `PerfectMovers` fills bits 24-31 of the word
   at `+0x20` and the bytes at `+0x1c`-`+0x1f`; `0xb784` reads bits 13-20 of the
   same word, which nothing on disc writes. That is where the live boss state
   lives.
+- **The weapon slots.** `0x043840` returns the slot index `PickUpWeapon` fills,
+  and `0x0438c8` clears bit 0 of it first. How many slots there are, and what
+  the other bits of `[0x89d40 + 0xf4 + slot*4]` hold, is two reads away.
 - **`p1e`.** The encounter executable has never been walked. It shares the
-  world format and should be a cheap cross-check on anything uncertain in `p`.
+  world format and the `.Maps` format — `P1ENearHUD.Maps` stitches at 100.00%
+  — and should be a cheap cross-check on anything uncertain in `p`.
+- **The far horizon table overruns the reciprocal table** for depths above
+  402.0. Harmless in the ground lattice; check whether `ProjectPoint` can
+  reach it.
 
 ## Notes to self
 
@@ -109,12 +116,21 @@ camera in about 1.5 seconds a frame. What is missing:
   including ARM rotated immediates printed by Capstone as `#imm, #rot`.
   Forgetting the rotation silently loses most string references.
 - `-S tools/p.sym` makes a disassembly far easier to read; build it first.
+- Capstone spells a conditional `BL` `bleq`/`bllt`, which the mnemonic alone
+  cannot tell from the plain branch `blt`. Read bits 27-24 of the encoding.
+- A literal pool word decodes as an instruction under a linear sweep, and one
+  starting `0x?B` looks like a `BL` to nowhere. Filter targets by the code
+  range or the call graph fills with ghosts.
 - The Opera FS gotcha: multi-block directories use consecutive LBAs, and
   `next`/`prev` in the block header are indices inside the extent, not LBAs.
 - `.img` files are frame-buffer dumps, not rasters. De-interleave before
   looking at them.
 - The CEL `WOFFSET` field moves with bit depth: bits 16-25 at bpp >= 8, bits
   24-31 below.
+- **CEL pixel data is MSB first.** The `.Maps` read the right way round give a
+  clean city plan; read LSB first every diagonal shatters into four-pixel
+  sawteeth. That is the fastest way to tell a wrong bit order from a wrong
+  stride.
 - When a length rule "fits" the data, check it against the code anyway. The
   section A rule `N = len(template) - 10` was a fit that happened to be exactly
   right; the section C `sub = 2` rule was a fit that was wrong, and that is

@@ -84,6 +84,21 @@ why it shipped.
 
 The far map is one bit: 14.4% set, 85.6% clear.
 
+All six files, and how they stitch:
+
+| File | 0 | 1 | 2 | 3 | tiles agree |
+|---|---|---|---|---|---|
+| `NearHUD` | 14.41% | 74.03% | 8.48% | 3.09% | 99.99% |
+| `NoEncounterNearHUD` | 15.41% | 76.30% | 7.97% | 0.31% | 100.00% |
+| `P1ENearHUD` | 14.36% | 77.76% | 7.89% | 0.00% | 100.00% |
+| `FarHUD` | 85.58% | 14.42% | | | 99.99% |
+| `NoEncounterFarHUD` | 87.02% | 12.98% | | | 99.99% |
+| `P1EFarHUD` | 88.19% | 11.81% | | | 100.00% |
+
+The `P1E` pair has **no encounter sites at all**, and the `NoEncounter` pair
+keeps 0.31% — one landmark that is drawn in the encounter colour but is not an
+encounter, and does not change when the lieutenants fall.
+
 ## Verification
 
 Two independent checks, both in `tools/hudmap.py`:
@@ -153,10 +168,10 @@ the bits name themselves:
 | 9 | 12 | Chameleon | 0-2 | 5-9 |
 | 10 | 13 | Chance | 8-13 | 3-8 |
 
-**The render-flag bit is the mover index minus three.** That extends the note
-in [06](06-code-map.md) that bits 3-10 are the lieutenants and 11 is Loki:
-mover 14 *is* Loki, and by the same rule bit 12 is Raven and bits 13, 14 and 15
-are `P1Male`, `pfemale` and `probot`, the three player forms.
+**The render-flag bit is the mover index minus three**, the same rule
+[05](05-b3d-format.md) reads out of `0x0000b760`, arrived at from the other
+end. It stops at Loki: mover 14 is bit 11, and bit 12 upward belongs to
+something else entirely — the weapon inventory, see below.
 
 Diffing the two files confirms it from the data side. Of 256 tiles, 80 differ
 on the near map, and every differing pixel inside a territory is a
@@ -196,3 +211,32 @@ whatever marks him is a dot rather than a building.
   cel, and the code that builds them has not been located. Nothing depends on
   it: `SetHUDPixel` and the reader give the same dimensions, and the decoded
   images agree.
+
+## What bits 12 and up are
+
+Not more characters. The weapon pickup at `0x043d0c` — *"YOU PICKED UP ..."* —
+takes the four-bit weapon type out of its inventory slot,
+`([0x89d40 + 0xf4 + slot*4] >> 2) & 0xf`, and sets bit **type + 11** of the same
+render-flags word, testing it first to tell a new weapon from a duplicate:
+
+```
+00043d90   type = ([slot] >> 2) & 0xf
+00043d94   bit  = type + 0xb
+00043da0   tst  [0x89d40 + 0x9c], 1 << bit      ; already have it?
+00043dc0   orr  [0x89d40 + 0x9c], 1 << bit
+00043dcc   str  -> [0x6bed0 + 0x78]             ; mirror to the live word
+```
+
+The types are one-based, so they occupy **bits 12 to 23** and never collide
+with Loki's bit 11. Their names sit in two parallel tables at `0x058fd4`, an
+article-prefixed long form and a bare short form:
+
+| | | | |
+|---|---|---|---|
+| 1 BOOMERANG | 2 HEX | 3 NUKE | 4 STUNYA |
+| 5 PUSHYA | 6 ICE | 7 OFA | 8 SWITCHYA |
+| 9 ANNABALLS | 10 ASHFLAY | 11 CHAFF | 12 PEMS |
+
+So the one word at `[0x89d40 + 0x9c]` carries the lieutenants in bits 3-11 and
+the player's weapon inventory in bits 12-23, and the renderer's cull test reads
+the same word — which is why the two had to be told apart.
