@@ -41,6 +41,12 @@ open-ended research.
   11 lines and the stream holds 9 slots; lines 9 and 10 — *"hex dear hex the
   one we all search for and never find"* and *"where owhere Iask you do you
   havean ounce to spare"* — survived the marks and not the voice track.
+- **The launch chain is written down.** `launchme` creates `ShellMsgPort`,
+  loads `$Perfect/Film/CinepakSubroutine`, then executes `$boot/p p` and
+  `$boot/p1E g` as subtasks; `p` in turn loads `$DOAsys/SpeechSubroutine`.
+  The front end runs before the game exists, and `p`'s lookup of a message
+  port named `ShellMsgPort` — found independently in the folio scan — is
+  answered: the shell creates it.
 - **`CinepakSubroutine` turns out to be the front end, not a film player**,
   and it is mapped: logo, title, menu, practice, stats, NVRAM and music, each
   entry pinned by a string reference. See [docs/17](docs/17-the-front-end.md).
@@ -264,10 +270,12 @@ camera in about 1.5 seconds a frame. What is missing:
   outside the C runtime. [docs/17](docs/17-the-front-end.md) has the
   subsystem map, every entry pinned by a string reference. The pieces worth
   an hour each, in order:
-  - **The NVRAM save format.** `0x005a00`–`0x006400`, self-contained, the
-    only code on the disc that writes anything, and its slots are named
-    `Immerce  %d (%d)`. Nothing else on the disc will verify it, so read it
-    against the 3DO device conventions and say so.
+  - **What the 512 bytes of a save game mean.** The front end's NVRAM code is
+    read and it is thin: it writes `argv[2]` as an opaque 512-byte blob into
+    `/NVRAM/Immerce  <slot> (<n>)`, and the only field it looks at is byte 3
+    of state word `+0x8c`, which goes in the file name. The *layout* is in
+    `p`, and `p` passes the pointer, so start from whoever builds argv for
+    `$DOAsys/SpeechSubroutine`'s sibling launch.
   - **The main menu at `0x37c0`** and the stats pages at `0x166c`: what a
     port has to draw before the game starts.
   - **The music thread at `0x2c88`** and the spooler at `0x3260`. The same

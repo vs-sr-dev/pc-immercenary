@@ -13,7 +13,8 @@ load, and a music thread — all of it lives here, not in `p`.
 and the folio glue**: 72 KiB of the game's own code, three times what
 `SpeechSubroutine` had.
 
-This document is a map and two findings, not a full read. Produced with
+This document is a map, the launch chain, the save format and two findings
+about what is missing — not a full read of 72 KiB. Produced with
 [`tools/frontend.py`](../tools/frontend.py).
 
 ```sh
@@ -23,21 +24,59 @@ python tools/frontend.py --films
 python tools/frontend.py --music
 ```
 
-## It is launched exactly like the speech program
+## The launch chain
+
+`launchme` is the 3DO shell entry point and it is only 12 KiB, but its
+strings lay out the whole architecture:
 
 ```
-0009c8  ldr r0, [r5]      ; argv[0] -> [base + 0]
-0009d4  ldr r1, [r5, #4]  ; argv[1] -> [base + 0x34]    the film index
-0009dc  ldr r1, [r5, #8]  ; argv[2] -> [base + 4]       the callback into p
-0009e4  ldr r1, [r5, #0xc]; argv[3] -> [base + 0xd8]
+0x00090c  'Shell: Welcome to Perfect!'
+0x00092c  'ShellMsgPort'
+0x00079c  '$Perfect/Film/CinepakSubroutine'
+0x0009c8  '$boot/p p'
+0x000a08  '$boot/p1E g'
 ```
 
-Same convention as [16](16-speech-and-doa.md): a selector in `argv[1]` and a
-function pointer in `argv[2]`, with one extra argument here. `p` starts a
-subprogram, hands it a number and a way to call home, and waits.
+So:
 
-`[base + 0x34]` then picks a film straight out of a 40-entry table, and the
-path is built by hand:
+```
+launchme          creates ShellMsgPort, opens the folios
+   loads          $Perfect/Film/CinepakSubroutine    the front end
+   executes       $boot/p p                          the game
+   executes       $boot/p1E g                        the final encounter
+p
+   loads          $DOAsys/SpeechSubroutine           the talking heads
+```
+
+The front end runs **first**, before `p` exists — which is what makes it the
+front end rather than a helper. And the loop closes on something found
+independently in [9](09-os-surface.md): `p` looks up a message port named
+`ShellMsgPort` at node type `0x10a`. This is who creates it.
+
+Both `p` and `p1E` are started as subtasks with a one-letter argument, `p`
+and `g`.
+
+## What it is handed
+
+```
+0009c8  ldr r0, [r5]      ; argv[0] -> [base + 0]      a context handle
+0009d4  ldr r1, [r5, #4]  ; argv[1] -> [base + 0x34]   the film index
+0009dc  ldr r1, [r5, #8]  ; argv[2] -> [base + 4]      the 512-byte game state
+0009e4  ldr r1, [r5, #0xc]; argv[3] -> [base + 0xd8]   4-item menu or 5
+```
+
+The selector in `argv[1]` is the same convention as
+[16](16-speech-and-doa.md), but the rest is not: **this program has no
+callback**. There is not one `ldr pc, [global]` in the image. It drives the
+DataStream itself — it carries its own stream-header parser, and says so when
+it fails: *"InitCPakPlayerFromStreamHeader() - unknown subscriber in stream
+header: '%.4s'"*.
+
+`argv[3]` is read in exactly one place, the top of the menu at `0x37dc`, and
+it chooses between **four menu items and five**.
+
+`[base + 0x34]` picks a film straight out of a 40-entry table, and the path
+is built by hand:
 
 ```
 00106c  add r1, pc, #25, #30    ; "$Perfect/film/"
@@ -119,6 +158,54 @@ The same ten-name table is linked into `p` and `p1e` as well as here, in the
 same order, so the music player is one object in all three — which is why the
 cut shows up three times.
 
+## The save game is 512 bytes, and the front end never looks inside it
+
+`argv[2]` is a pointer to `p`'s game state, and the whole NVRAM subsystem
+treats it as an opaque block of **0x200 bytes**.
+
+**Loading**, `0x5b14`:
+
+```
+        slot = [0x14cb8] + 1
+005b40  bl 0x5a00(name, slot)          ; find the file for this slot
+005b50  svc #0x1000e                   ; "Couldn't find %s..."  -> give up
+005b60  svc #0x1000e                   ; "Found %s..."
+005b70  bl 0x612c(name, buf, 0x200)    ; read it
+005b8c  bl memcpy([0x14afc], buf, 0x200)
+        ; on a read error: "Couldn't read %s.  Deleting it..." and delete
+```
+
+**Saving**, `0x5c10`:
+
+```
+005c58  bl 0x6218(oldname)             ; delete the slot's previous file
+005c60  ldr r0, [[0x14afc], #0x8c]
+005c64  lsr r3, r0, #0x18              ; the top byte of state word 0x8c
+005c74  sprintf(name, "Immerce  %d (%d)", slot, that byte)
+005c84  bl 0x5e44(name, 0x200)         ; create, 512 bytes
+005c9c  bl 0x6020(name, [0x14afc], 0x200)
+```
+
+So a save file is named **`Immerce  <slot> (<n>)`**, where `n` is byte 3 of
+the game-state word at `+0x8c`. It is the only field of the 512 bytes this
+program reads, and the reason to put it in the name is so a load menu can
+show how far a slot got without opening the file. (That it is the same number
+the menu prints as `Mission %d %s` is likely and not checked.)
+
+And that is why the lookup helper takes the *short* prefix. `0x5a00` builds
+`"Immerce  %d ("` — no closing paren, no second number — and walks the
+`/NVRAM` directory comparing prefixes, so it finds slot 3's save whatever
+mission it was written at. They are two separate literals, `0x5a40` and
+`0x5cb0`, and it is worth not mistaking one for the other.
+
+Underneath is a full 3DO device conversation, and its error strings name each
+step: open `/NVRAM` with SWI `3:0`, `CreateItem(0x10e, {tag 11, device})` for
+an IO request — *"Couldn't get an IO Request."* — then block size, create,
+write. *"Device error: There's probably not enough free NVRAM."*
+
+**What the 512 bytes mean is `p`'s business, not this program's.** Only one
+field is read here, and only to spell the file name.
+
 ## Where the front end sits in a port
 
 - **It is a separate program**, and it owns the parts of the game a player
@@ -126,9 +213,9 @@ cut shows up three times.
   and start at `p`.
 - **The interface is the eight-command callback** of
   [16](16-speech-and-doa.md), and here it takes a fourth argument.
-- **The NVRAM code is the only place on the disc that writes anything**, and
-  its save-slot format has not been read yet. It is self-contained,
-  `0x005a00`–`0x006400`, and it is the obvious next hour.
+- **The NVRAM code is the only place on the disc that writes anything.** It
+  is read now, and it is thin: a 512-byte blob and a name. The layout of
+  those 512 bytes is in `p`, and is the thing still worth an hour.
 - **The film index is the game's mission order.** The table's order is not
   the numbering order — `I40` sits at index 4, between `I02` and `I03` — so
   the table *is* the script running order, and it is 40 entries a port can

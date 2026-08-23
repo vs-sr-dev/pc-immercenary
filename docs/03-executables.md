@@ -51,7 +51,10 @@ project.
 
 ## What the binaries are
 
-- **`launchme`** — the 3DO shell entry point. Minimal; loads `p`.
+- **`launchme`** — the 3DO shell entry point, 12 KiB, and its strings lay out
+  the whole architecture. It creates `ShellMsgPort`, opens the folios, loads
+  `$Perfect/Film/CinepakSubroutine`, then executes `$boot/p p` and
+  `$boot/p1E g` as subtasks. The front end runs *before* the game does.
 - **`p`** — the game: overworld, all nine boss encounters, HUD, inventory,
   DOASys, streaming, audio.
 - **`Film/CinepakSubroutine`** — not just a film player: the game's **front
