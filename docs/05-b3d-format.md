@@ -463,8 +463,10 @@ Their first words are small signed values, not the shared world bounding box.
 That split is not an accident: Chameleon, Medusa and Riberto are exactly the
 three encounters whose loaders in `p` reference separate `WallData.B3D`,
 `AnimData.B3D` and `StaticData.B3D` files. Those three areas use a second engine
-path with its own data layout, still to be decoded.
+path, and its data is **streamed** through the File folio rather than loaded and
+indexed — which is why nothing in those files is offset-addressed.
 
-`PerfectMovers.B3D` is different again — its body carries four-character codes
-(`'Gone'`, …) and reads as a table of mover/character definitions rather than
-geometry.
+Eleven of the twelve now read to the last byte;
+[10-second-b3d-family.md](10-second-b3d-family.md) has the layouts.
+`PerfectDOASys.B3D` turned out not to belong to that family at all: it is a
+length word followed by sixteen of *this* format's `sub = 6` records.

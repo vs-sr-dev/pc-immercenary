@@ -11,9 +11,13 @@ open-ended research.
   See [docs/08-the-ground.md](docs/08-the-ground.md) and `tools/floor.py`.
 - `armxref.py` gained `-a/--addr`, which finds every instruction that
   materialises a given address. That is what found the floor renderer.
-- The OS surface: 90 entry points, 42 direct SWIs plus 48 folio function
-  vectors. See [docs/09-os-surface.md](docs/09-os-surface.md) and
-  `tools/swiscan.py`.
+- The OS surface: 671 call sites reaching at most 146 entry points, 42 direct
+  SWIs plus the folio function vectors (46 audio, 22 Graphics, 8 Operamath).
+  See [docs/09-os-surface.md](docs/09-os-surface.md) and `tools/swiscan.py`.
+- The second `.B3D` family: eleven of twelve files byte-exact, including
+  `PerfectMovers.B3D`, which is the game's nineteen-character cast list.
+  See [docs/10-second-b3d-family.md](docs/10-second-b3d-family.md) and
+  `tools/b3d2.py`.
 - **Correction.** `0x4d438` / `0x4d46c` are not C++ virtual calls, as the last
   session's notes said. They are 3DO folio call stubs: `0x4d660` opens the
   `File` folio by name and the negative offsets are folio function vectors.
@@ -52,21 +56,21 @@ camera in about 1.5 seconds a frame. What is missing to make it walkable:
 - Real-time interaction means leaving Python for the inner loop, or accepting
   a frame or two a second. Either is fine; the data side is done.
 
-## 2. The second `.B3D` family
+## 2. What is left of the second `.B3D` family
 
-Twelve files do not use the container in `docs/05`: `ChameleonEncounter`,
-`MedusaEncounter`, `RibertoEncounter`, their `walldata` / `animdata` /
-`staticdata` / `loaddata` companions, plus `PerfectDOASys.B3D` and
-`PerfectMovers.B3D`.
+Eleven of the twelve read to the last byte — see
+[docs/10](docs/10-second-b3d-family.md). What remains:
 
-Start from the loaders in `p`:
-
-```sh
-python tools/armxref.py extracted/p -s 'WallData|AnimData|StaticData'
-```
-
-`PerfectMovers.B3D` is separate again: its body carries four-character codes
-(`'Gone'`, …) and reads as character/mover definitions.
+- **`MedusaEncounter.B3D`**, 4,708 of 6,332 bytes. Its loader at `0x031cf4` is
+  bespoke: a 2-word record loop at `0x320b8` and a 4-word one at `0x32138`
+  where the shared code has 5- and 7-word loops.
+- **`PerfectMovers.B3D` per-entry data.** The container and all 72 animation
+  names read; the variable data between the names does not. This is the game's
+  character table, so it is worth finishing.
+- **What the encounter wall records index.** Their four words address
+  `0x6bf4c` with a stride of 20 and `[0x582cc]` with a stride of 12.
+- The three Medusa `.bcel` files (`pyrfloorNear`, `pyrfloorDetail`,
+  `pyrfloorFar`) — a cel variant not yet looked at.
 
 ## 3. Loose ends in the world format now worth an hour each
 

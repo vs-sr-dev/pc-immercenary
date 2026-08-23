@@ -16,7 +16,7 @@ only shipping build is the 3DO ARM6 executable on the retail CD.
 | Path | Contents |
 |---|---|
 | `tools/` | Opera (3DO) filesystem reader, CEL/anim decoder, CEL bank reader, B3D world parser, ground tile map reader, OBJ exporter, textured software renderer, ARM cross-referencer, OS-surface scanner |
-| `docs/` | Findings: disc layout, file formats, executables, roadmap, B3D format, code map, CEL banks, the ground, the OS surface |
+| `docs/` | Findings: disc layout, file formats, executables, roadmap, B3D format, code map, CEL banks, the ground, the OS surface, the second B3D family |
 
 ## Quick start
 
@@ -34,6 +34,9 @@ python tools/celbatch.py extracted/Perfect png
 
 # Parse the world and encounter geometry files
 python tools/b3d.py -r "extracted/Perfect/**/*.B3D"
+
+# ...and the second .B3D family, which is a different format again
+python tools/b3d2.py extracted/Perfect
 
 # Render a top-down map of the overworld
 python tools/b3dmap.py extracted/Perfect/CondensedPerfectWorld.B3D worldmap.png \
@@ -67,6 +70,9 @@ Early, but moving. Nothing is playable yet.
 - The overworld therefore renders: a top-down city plan, a Wavefront OBJ, and a
   textured perspective view with walls and ground — all from the disc, with no
   ARM emulation.
+- **The second `.B3D` family is decoded too** — eleven of its twelve files read
+  to the last byte, and `PerfectMovers.B3D` turns out to be the game's cast
+  list, nineteen characters with their animation sets.
 - The executable is being mapped: the world loader, the record parser and all
   seven of its sub-handlers, the CEL bank loader, the floor renderer, the object
   id table and the world globals are identified.
