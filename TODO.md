@@ -3,6 +3,55 @@
 Everything below has a concrete starting address or file. Nothing here is
 open-ended research.
 
+## Done in session 8
+
+- **The 512-byte save game is read, field by field**, and it closes to the
+  byte. It is `0x89d40` in `p`, it is not a serialisation of anything — the
+  static block is what goes out — and `p1e` keeps the same struct at
+  `0x06ea04` and sends it the same way. See [docs/18](docs/18-the-save-game.md);
+  `tools/savegame.py --verify` is 44 checks that pass.
+- **DOA is Defense, Offense, Agility, and the block holds two of each**:
+  current at `+0x00` and earned at `+0x0c`, every raise clamped at `128.0`.
+  Re-entering Perfect copies earned over current, which is exactly the
+  guide's *"if you return from a spire other than the DOAsys your stats
+  won't be full"*.
+- **The rank ladder closes at 255 and every number in it comes from a
+  different file.** Two 31-byte bitmaps, crashed and in use, split into five
+  tiers by thresholds `255, 131, 67, 35, 19, 11` that the world loader ORs
+  into the mover records at `0x0082a4`; the tier populations are byte
+  `+0x1f` of each character block in `PerfectMovers.B3D` — `123, 64, 32, 16,
+  8`, written down in [docs/10](docs/10-second-b3d-family.md) two sessions
+  ago with no idea what they were. Each tier spans exactly what its bitmap
+  holds, the top tier has one extra for the player at rank 255, the four
+  spare bits are pre-marked so the allocator never hands them out, and
+  `124 + 64 + 32 + 16 + 8 + 11 = 255`.
+- **The front end's save-file number is the player's rank, not a mission.**
+  [docs/17](docs/17-the-front-end.md) guessed mission from a nearby
+  `Mission %d %s`; `p` sets that byte to `0xff` at a new game and hands it
+  to the rank-bitmap routine. Corrected in place.
+- **Weapons are twelve ammo counts and sixty-four world positions.**
+  `+0x90 + id - 1` is a count, not a flag; `+0xf4` is 64 slots of
+  `{present, taken, id, y + 1483, x + 1948}` at 13 bits a coordinate, biased
+  by the world's own `minX`/`minY`. Bit `11 + id` of the flags word at
+  `+0x9c` is "ever held", and that word is the same render-flags word the
+  cull test reads.
+- **`0x89f40`'s unwritten bits are answered.** Bits 13-20 of the word at
+  `+0x20`, which nothing on the disc appeared to write, are the five rank
+  thresholds — the loader ORs them in as constants at `0x0082a4`.
+- **The statistics are kept twice**, 28 bytes each at `+0x24` and `+0x40`,
+  and the front end's `%4d      %4d` rows are the two columns.
+- **And the shell owns the seams between jumps.** Neither game program ever
+  writes the carried block; `launchme`'s message loop at `0x0007f4` does.
+  Verb `0x10` folds the seven counters — five adds, two 16-bit pairs byte by
+  byte, and `+0x44`, which has no per-jump meaning, incremented: **that word
+  is the number of jumps**. If Defense reached zero a kernel call returns a
+  mask and each bit takes `1.0` off one of `Dmax`/`Omax`/`Amax` — crashing
+  costs DOA and the game does not choose which. Verb `0x11` zeroes the jump
+  block and snapshots the earned triple into `+0x18`, so the third triple is
+  not dead after all: it is the baseline the front end's three `%+3d` rows
+  are measured against.
+- **47 of the 512 bytes are touched by nothing**, plus two of padding.
+
 ## Done in session 7
 
 - **`p1e`'s OS surface is closed.** Its four unattributed slots are the
@@ -253,13 +302,24 @@ camera in about 1.5 seconds a frame. What is missing:
 
 ## 4. Loose ends worth an hour each
 
-- **`0x89f40`'s runtime fields.** `PerfectMovers` fills bits 24-31 of the word
-  at `+0x20` and the bytes at `+0x1c`-`+0x1f`; `0xb784` reads bits 13-20 of the
-  same word, which nothing on disc writes. That is where the live boss state
-  lives.
-- **The weapon slots.** `0x043840` returns the slot index `PickUpWeapon` fills,
-  and `0x0438c8` clears bit 0 of it first. How many slots there are, and what
-  the other bits of `[0x89d40 + 0xf4 + slot*4]` hold, is two reads away.
+- **The four unread bits of the state word.** `+0x8c` bit 23 (the controller
+  code sets and clears it and the renderer tests it), bit 9 (tested in five
+  places), and the two-bit counter at bits 7-8 that `0x0254ec` clamps. One
+  context read each.
+- **Two of the seven statistics counters have no reading.**
+  `statsJump + 0x14` is bumped at `0x00220c` and `0x00b83c`, and the 16-bit
+  pair at `+0x18`/`+0x1a` at `0x002228` and `0x00cccc`. The front end draws
+  them in a fixed order, so its stats-page layout at `0x166c` would name all
+  seven at once — that is the cheapest way to finish the block.
+- **The rest of `launchme`'s message loop.** Verbs `0x10` and `0x11` are
+  read ([18](docs/18-the-save-game.md)); `1` and `0xff` are not, and neither
+  is the kernel call at `0x000b70` whose returned mask decides which of the
+  three stats a crash costs you. Half a page each.
+- **Which of the front end's stats rows is which.** It has three `%+3d`
+  against three `%3d`, six `%4d      %4d` and a clock, and it does not reach
+  them through the state pointer it saves with — so the argument its stats
+  page takes is the missing link, and naming those rows would name the last
+  two unread counters in the block at the same time.
 - **`p1e`'s body has still never been walked.** Its OS surface is closed now
   and it shares the world format, the `.Maps` format and — proven byte for
   byte — the whole math module, so it stays the cheapest cross-check on
@@ -293,6 +353,32 @@ camera in about 1.5 seconds a frame. What is missing:
   is not obviously impossible.
 
 ## Notes to self
+
+- **A register carried across a label belongs to whoever branched there.**
+  A forward scan that follows a base register is right until the first label,
+  and `0x01fd2c` proves it: `ip` holds `0x89d40` at the top and `0x5803c` at
+  every path into `0x01fee8`. The tell was not the disassembly, it was a
+  contradiction — a word store at an offset already read as two counters.
+  When a scan produces one access that argues with a reading you trust, the
+  scan is wrong, not the reading.
+- **A column written down with no meaning is a lead.** `PerfectMovers`' byte
+  `+0x1f` — 123, 64, 32, 16, 8, then 1 eleven times — sat in
+  [docs/10](docs/10-second-b3d-family.md) for two sessions as an unnamed
+  column. It is the population of each rank tier, and it was the number that
+  made the whole ladder close. Grep your own docs for the columns you could
+  not name.
+- **The player is an entry in the same table as everyone else.** Rank 255 is
+  index 0 of the top tier's bitmap, marked in use by the new-game path like
+  any rithm. Looking for a separate "player" field would have missed it.
+- **An array can start on purpose inside another field.** `+0x9c` is a flags
+  word and `+0x9c + 4*type` is a population count, because type 0 has no
+  count and the compiler was told so. A field map that assumes disjointness
+  would have called one of them a bug.
+- **Two blocks of identical size are one struct twice.** 28 bytes at `+0x24`
+  and 28 at `+0x40`, and the proof was a routine reading the same 16-bit
+  counter out of both and adding them — not the sizes.
+- **A save file need not have a format.** This one is the live struct, sent
+  as-is. Before reverse-engineering a serialiser, check whether there is one.
 
 - `armxref.py` must handle both literal pools **and** `add rD, pc, #imm`,
   including ARM rotated immediates printed by Capstone as `#imm, #rot`.

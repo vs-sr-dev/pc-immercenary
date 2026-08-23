@@ -37,6 +37,10 @@ strings lay out the whole architecture:
 0x000a08  '$boot/p1E g'
 ```
 
+And its message loop at `0x0007f4` is the other half of the save: the two
+verbs `p` sends it, the statistics fold and the cost of a crash are read in
+[18](18-the-save-game.md).
+
 So:
 
 ```
@@ -189,8 +193,14 @@ treats it as an opaque block of **0x200 bytes**.
 So a save file is named **`Immerce  <slot> (<n>)`**, where `n` is byte 3 of
 the game-state word at `+0x8c`. It is the only field of the 512 bytes this
 program reads, and the reason to put it in the name is so a load menu can
-show how far a slot got without opening the file. (That it is the same number
-the menu prints as `Mission %d %s` is likely and not checked.)
+show how far a slot got without opening the file.
+
+**That number is the player's rank**, not a mission — read in
+[18](18-the-save-game.md). The guess here was that it matched the menu's
+`Mission %d %s`; it does not. `p` sets the same byte to `0xff` at a new
+game and hands it to the rank-bitmap routine at `0x00b278`, and the game's
+own glossary has the player starting at rank 255. So `Immerce  2 (198)` is
+slot 2 at rank 198.
 
 And that is why the lookup helper takes the *short* prefix. `0x5a00` builds
 `"Immerce  %d ("` — no closing paren, no second number — and walks the
@@ -215,7 +225,7 @@ field is read here, and only to spell the file name.
   [16](16-speech-and-doa.md), and here it takes a fourth argument.
 - **The NVRAM code is the only place on the disc that writes anything.** It
   is read now, and it is thin: a 512-byte blob and a name. The layout of
-  those 512 bytes is in `p`, and is the thing still worth an hour.
+  those 512 bytes is in `p`, and is [18](18-the-save-game.md).
 - **The film index is the game's mission order.** The table's order is not
   the numbering order — `I40` sits at index 4, between `I02` and `I03` — so
   the table *is* the script running order, and it is 40 entries a port can

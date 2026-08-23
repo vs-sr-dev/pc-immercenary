@@ -96,6 +96,23 @@ every reference beyond 255 bytes.
 | `0x04cce8` | **OperamathMulSF16** — the folio's own 16.16 multiply, slot −8 | `0x56c58` and `0x56ea8` are the same routine, one calling this and one the open-coded `MulSF16` |
 | `0x04d8f8` | **GraphicsMapCel** — the folio's own cel mapper, slot −4 | `MapCel2x2` tail-branches here for any cel that is not 2x2 |
 | `0x04f570` | **CinepakCodebooks** — walks the strips, copies the previous codebook for an inter strip, dispatches chunks `0x20`–`0x23` | calls `0x5704c` |
+| `0x00aee4` | **AllocRank(rank)** — the first rank below `rank` that is in neither the crashed nor the in-use bitmap; marks it in use and returns it | see [18](18-the-save-game.md) |
+| `0x00b278` | **MarkRankInUse(rank)** — picks the tier by threshold, sets the bit | five arms, one per tier |
+| `0x00b3a8` | **ClearRankInUse(rank)** — the same routine with `bic` for `orr` | |
+| `0x00cb58` | **Huffman(kill)** — collects a crash: D/O/A reward from the 16 x 3 table at `0x00cf54`, tier count down, dead rank into the crashed map | *"MENU: …"* |
+| `0x01c45c` | **EnterPerfect** — copies the earned D/O/A over the current, clears the per-jump bitmap | reads the mode at `0x057e2c` |
+| `0x01c5b0` | **NewGame** — writes every field of the 512-byte block | `0x12345678` into `+0x1f4` |
+| `0x01c764` | **GameTick** — frame delta into the jump clock, Agility drain, the game-over test | returns 1 on a crash |
+| `0x01c828` | **NextWeapon(id, dir)** — cycles to the next id with ammo | ids 0 and 13 always available |
+| `0x01c9fc` | **AddAmmo(id)** — `[0x89d40 + 0x8f + id]++` | |
+| `0x01ca14` | **UseAmmo(id)** — the same, down, clamped at zero | |
+| `0x01cab8` | **HaveAmmo(id)** | |
+| `0x03c208` | **FindShellPort** — `FindNamedItem(0x10a, "ShellMsgPort")` and the reply port beside it | *"P Running solo"* |
+| `0x03c444` | **SaveGame** — position triple, then 512 bytes to the shell | `mov r3, #0x200` |
+| `0x03c4f0` | **LoadGame** — asks for the reply and copies it back over the block | `KernelCopyMem` |
+| `0x042f40` | **PackPickup(slot, x, y)** — biases both coordinates and packs them into 13 bits each | *"Out of bounds X coord for weapon"* |
+| `0x043840` | **FindPickupSlot(object)** — matches an object's position against the 64 slots | |
+| `0x0438c8` | **TakePickup(object)** — clears bit 0 of the slot and compacts the object list | *"Couldn't find a matching weapon"* |
 | `0x04f6c4` | **CinepakFrame** — walks the strips and dispatches chunks `0x30`–`0x32` | calls the three block renderers |
 
 `LoadEncounterB3D` starts its cursor at **24**, skipping the six header words it
@@ -332,7 +349,9 @@ that the released game does in C instead.
 | `0x058454`, `0x058458` | far radar tile origin |
 | `0x06bed0` + `0x78` | the render flags word the cull test reads: bits 3-11 the lieutenants, 12-23 the weapon inventory |
 | `0x058fd4` | 12 weapon names, long form; `+0x30` the short form |
-| `0x089d40` + `0xf4` | weapon inventory slots, one word each |
+| `0x089d40` | **the 512-byte game state**, the save file byte for byte — D/O/A, rank, ammo, the rank bitmaps, 64 pickup slots at `+0xf4` and the player's position at `+0x1f4`. `p1e` keeps the same struct at `0x06ea04`. See [18](18-the-save-game.md) |
+| `0x058f50` | the shell conversation: reply port, Msg item, `ShellMsgPort` at `+0xc` |
+| `0x05804c` | ten button masks, the cheat sequence `0x01fd2c` matches |
 
 ## The object id table
 
