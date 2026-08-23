@@ -15,8 +15,8 @@ only shipping build is the 3DO ARM6 executable on the retail CD.
 
 | Path | Contents |
 |---|---|
-| `tools/` | Opera (3DO) filesystem reader, CEL/anim decoder, CEL bank reader, B3D world parser, ground tile map reader, OBJ exporter, textured software renderer, ARM cross-referencer, OS-surface scanner |
-| `docs/` | Findings: disc layout, file formats, executables, roadmap, B3D format, code map, CEL banks, the ground, the OS surface, the second B3D family |
+| `tools/` | Opera (3DO) filesystem reader, CEL/anim decoder, CEL bank reader, B3D world parser, ground tile map reader, OBJ exporter, textured software renderer, font decoder, DataStream demuxer with Cinepak and SDX2 decoders, ARM cross-referencer, OS-surface scanner |
+| `docs/` | Findings: disc layout, file formats, executables, roadmap, B3D format, code map, CEL banks, the ground, the OS surface, the second B3D family, the fonts, the DataStream |
 
 ## Quick start
 
@@ -47,6 +47,13 @@ python tools/armxref.py extracted/p -s 'load the world'
 python tools/armxref.py extracted/p -d 13e4c -n 60
 python tools/armxref.py extracted/p -a 89680
 
+# Decode the ten anti-aliased fonts
+python tools/font.py extracted/Perfect --verify -o sheets/fonts
+
+# Demux a film: PNG frames, a WAV, and the cels that ride in the same pipe
+python tools/strm.py extracted/Perfect/Film/I01.strm -f out/i01 -w out/i01.wav
+python tools/strm.py extracted/Perfect/Stream/AllCinepaks.strm -m out/fmod
+
 # What of the 3DO OS does the game actually touch?
 python tools/swiscan.py extracted/p
 ```
@@ -70,6 +77,15 @@ Early, but moving. Nothing is playable yet.
 - The overworld therefore renders: a top-down city plan, a Wavefront OBJ, and a
   textured perspective view with walls and ground — all from the disc, with no
   ARM emulation.
+- **The fonts are solved.** All ten are one private format: three-bit
+  anti-aliased coverage compressed by a 16-bit token stream that the game's
+  blitter dispatches through the ARM condition-code flags. All 851 glyphs
+  decode byte-exactly.
+- **The 473 MiB of film opens up.** The `.strm` and `*Files` containers are 3DO
+  DataStreams; video is Cinepak with one constant six-byte quirk, audio is
+  SDX2. And the game's private `FMOD` channel is not gameplay data at all —
+  it delivers whole cel files down the same pipe, 61 of them in
+  `AllCinepaks.strm`, every one reassembling to its declared length.
 - **The second `.B3D` family is decoded too** — eleven of its twelve files read
   to the last byte, and `PerfectMovers.B3D` turns out to be the game's cast
   list, nineteen characters with their animation sets.
