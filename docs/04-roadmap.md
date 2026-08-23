@@ -56,9 +56,9 @@ CPU — it is the CEL engine, and all three approaches need it.
 | Phase | State |
 |---|---|
 | 0 — Tooling and inventory | ✅ done |
-| 1 — Asset decoders | 🟡 CEL, `.anim`, `.img`, the CEL banks, the fonts, the whole DataStream (Cinepak + SDX2) and the HUD `.Maps` decode; only the DSP instruments remain |
+| 1 — Asset decoders | ✅ done — CEL, `.anim`, `.img`, the CEL banks, the fonts, the whole DataStream (Cinepak + SDX2), the HUD `.Maps` and the 64 DSP instruments all decode, and the films decode in the console's own dithered RGB555 |
 | 2 — B3D world format | ✅ done, see [05-b3d-format.md](05-b3d-format.md) — geometry and textures both |
-| 3 — Code map | 🟡 the world loader, the record parser, the CEL bank loader, the whole ground pipeline, the font blitter and the HUD radar are mapped; `tools/symbols.py` names 249 of 1,503 functions, and the call graph is now readable |
+| 3 — Code map | 🟡 the world loader, the record parser, the CEL bank loader, the whole ground pipeline, the font blitter, the HUD radar, the hand-written math module, the DOA conversation system and its lip sync, the front end and the 512-byte save game are all read; the OS surface is **closed** in both images and the library/game split is settled as far as the disc allows. `tools/symbols.py` covers 298 of `p`'s 1,477 function starts — 91 named, 207 hinted |
 | 4 — Runtime | ⬜ not started |
 | 5 — Native systems | ⬜ not started |
 | 6 — Beyond parity | ⬜ not started |
@@ -69,7 +69,7 @@ CPU — it is the CEL engine, and all three approaches need it.
 
 Opera FS reader, full extraction, AIF/ARM metrics, string dumps, format survey.
 
-### Phase 1 — Asset decoders
+### Phase 1 — Asset decoders ✅ done
 
 Turn the disc into modern formats. Each decoder is independently verifiable by
 looking at the output.
@@ -79,24 +79,28 @@ looking at the output.
 3. `.anim` → PNG sequences / sprite sheets ✅
 4. Font files → glyph atlases ✅ `tools/font.py`
 5. DataStream demuxer → Cinepak video + audio tracks ✅ `tools/strm.py`
-6. `.music`, `.aiff` → WAV — `.music` needs no decoder at all: the three files
-   in `Perfect/Music` are plain AIFF, mono 16-bit at 44.1 kHz, uncompressed
+6. `.music`, `.aiff` → WAV ✅ — `.music` needs no decoder at all: the three
+   files in `Perfect/Music` are plain AIFF, mono 16-bit at 44.1 kHz,
+   uncompressed
 7. `.Maps` — the six HUD radar maps ✅ `tools/hudmap.py`, see
    [13-hud-maps.md](13-hud-maps.md)
-8. `System/Audio/dsp/*.dsp` — 64 DSP instruments; the audio folio needs them
+8. `System/Audio/dsp/*.dsp` — the 64 DSP instruments ✅ `tools/dsp.py`, see
+   [14-dsp-instruments.md](14-dsp-instruments.md). They are the stock
+   Portfolio library shipped whole; the answer a port needs is *which 21 the
+   game names*, and that is in the doc
 
 Deliverable: a browsable dump of every visual and audio asset. This alone makes
 the rest of the work far faster, because from then on we can *see* what the code
 is manipulating.
 
-### Phase 2 — The B3D format
+### Phase 2 — The B3D format ✅ done
 
 The core blocker for any rendering. Decode `CondensedPerfectWorld.B3D` into
 geometry we can view. Cross-check against the encounter B3Ds, which are small
 enough to read by hand, and against `PerfectLocation.Init`'s known-good
 coordinates.
 
-Deliverable: an OBJ export of the overworld, and a viewer. **Done** —
+Deliverable: an OBJ export of the overworld, and a viewer —
 `tools/b3dobj.py` writes the OBJ, `tools/b3dview.py` renders it in perspective
 with the game's own wall textures, and `tools/b3dmap.py` draws the city plan.
 
@@ -106,7 +110,24 @@ Disassemble `p`, identify SDK library code, name functions from the debug
 strings, recover the main structs (player, character, quad, encounter). Use
 `p1e` as a cross-check.
 
-Deliverable: an annotated disassembly and a header file of reconstructed types.
+Deliverable: an annotated disassembly and a header file of reconstructed
+types. The disassembly is readable now — `armxref.py -S tools/p.sym` — and
+one large struct is fully reconstructed: the 512-byte game state of
+[18-the-save-game.md](18-the-save-game.md), which is also the save file.
+
+What phase 4 inherits from this phase, and can build against before a single
+ARM instruction runs:
+
+- **the boot sequence**, written down in [17](17-the-front-end.md):
+  `launchme` creates `ShellMsgPort`, loads the front end, then runs `$boot/p`
+  and `$boot/p1E` as subtasks;
+- **the shell protocol**, four verbs and a 512-byte block
+  ([18](18-the-save-game.md)) — a port can implement save, load and the
+  between-jump bookkeeping without the game;
+- **the OS surface**, 42 SWIs and 109 folio vector slots in `p`, every one
+  attributed ([09](09-os-surface.md)) — that is the exact shim list;
+- **the subroutine interface**, eight commands through one callback
+  ([16](16-speech-and-doa.md)).
 
 ### Phase 4 — Runtime
 
@@ -130,27 +151,56 @@ save states, and ports to other platforms.
 
 See [../TODO.md](../TODO.md) for the addressed version. In short:
 
-1. Find what draws the **ground** — section C contains no horizontal quad at
-   all, so the floor comes from somewhere else. Start at `TraverseCells`,
-   `0x03b11c`.
-2. Billboard the `.anim` props the `sub = 1` / `3` / `6` records place, and make
-   the viewer walkable.
-3. Decode the second `.B3D` family used by Chameleon, Medusa and Riberto.
-4. Resolve `0x4d660`, the C++ dispatch-table fetch, so the cross-referencer can
-   get past virtual call sites.
-5. Set up a disassembly project for `p` with the relocation list applied and the
-   debug strings mapped to their referencing functions.
+1. Billboard the `.anim` props the `sub = 1` / `3` / `6` records place, add
+   collision against the section C quads, and make `tools/b3dview.py`
+   walkable. The data side of the viewer is finished; what is left is the
+   inner loop, and that means leaving Python or accepting two frames a
+   second.
+2. Name the remaining 104 folio vector slots. The Graphics folio's 22 are
+   the CEL engine and are the single largest piece of work in any port.
+3. Read the DSP instruction set — 1,950 sixteen-bit instructions across the
+   64 files, of which a port needs the 21 named instruments' worth.
+   `directout` is eight words; start there.
+4. Walk `p1e`'s body. Its OS surface is closed and it shares the world
+   format, the `.Maps`, the math module and the save struct, so it is the
+   cheapest cross-check on anything uncertain in `p`.
+5. The 356 functions with no direct caller — a pass over them finds the
+   dispatch mechanism, which is the last blind spot in the call graph.
 
 ## Open questions
 
-- Is the FMOData subscriber payload documented anywhere, or fully custom?
-- How does `p` hand off to `p1e` — reload from the shell, or a task launch?
-- Are the `Perfect/Film/*Files` blobs indexed containers or raw concatenations?
-- Where does the ground plane come from, given that every `.B3D` quad is
-  vertical?
-- Does the game pick a mip level from the CEL bank by distance, and if so where?
+- **Which code picks the mip level.** The bank holds a chain per texture and
+  the size histogram proves it ([07](07-cel-banks.md)), but the draw-time
+  choice has not been found in the disassembly.
+- **What the DSP instruction words mean.** The relocation mask says which
+  field of an instruction takes an address, which is the way in
+  ([14](14-dsp-instruments.md)).
+- **Four bits of the game state.** `+0x8c` bit 23, bit 9 and the two-bit
+  counter at bits 7-8, plus two of the seven statistics counters
+  ([18](18-the-save-game.md)).
+- **Whether the far horizon table is ever indexed past its end.**
+  `ProjectPoint` bounds its depth below and not above; the overworld is 512
+  units across, so it is not obviously impossible.
 - Does the disc's redundant-copy layout matter for streaming timing (burst/gap
   fields are populated), and does the port need to care? Almost certainly not.
+
+### Answered since this list was written
+
+- *Is the FMOData subscriber payload custom?* Fully custom, and it is not
+  metadata: it carries **cel files**. `AllCinepaks.strm` hides a level's
+  texture load behind a cinematic ([12](12-datastream.md)).
+- *How does `p` hand off to `p1e`?* Neither reload nor direct launch: the
+  shell runs both as subtasks and they talk to it through `ShellMsgPort`,
+  passing the 512-byte state block ([17](17-the-front-end.md),
+  [18](18-the-save-game.md)).
+- *Are the `*Files` blobs indexed?* They are DataStreams, one per character,
+  seven to thirteen films each, indexed by an `MTBL` at the front
+  ([12](12-datastream.md)).
+- *Where does the ground plane come from?* Not from the geometry at all — a
+  16 x 16 lattice, a tile map and two precomputed horizon tables
+  ([08](08-the-ground.md)).
+- *What is `0x4d660`?* Not a C++ dispatch fetch: `OpenFileFolio`
+  ([06](06-code-map.md)).
 
 ## Reference material
 
