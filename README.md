@@ -86,9 +86,10 @@ Early, but moving. Nothing is playable yet.
   SDX2. And the game's private `FMOD` channel is not gameplay data at all —
   it delivers whole cel files down the same pipe, 61 of them in
   `AllCinepaks.strm`, every one reassembling to its declared length.
-- **The second `.B3D` family is decoded too** — eleven of its twelve files read
-  to the last byte, and `PerfectMovers.B3D` turns out to be the game's cast
-  list, nineteen characters with their animation sets.
+- **The second `.B3D` family is decoded too** — all twelve files read to the
+  last byte, and `PerfectMovers.B3D` turns out to be the game's cast list and
+  stat table: nineteen characters, their animation sets, their patrol
+  rectangles and the boss ladder's numbers.
 - The executable is being mapped: the world loader, the record parser and all
   seven of its sub-handlers, the CEL bank loader, the floor renderer, the object
   id table and the world globals are identified.
