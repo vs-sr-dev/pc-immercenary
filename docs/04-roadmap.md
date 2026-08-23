@@ -56,9 +56,9 @@ CPU — it is the CEL engine, and all three approaches need it.
 | Phase | State |
 |---|---|
 | 0 — Tooling and inventory | ✅ done |
-| 1 — Asset decoders | 🟡 CEL, `.anim`, `.img`, the CEL banks, the fonts and the whole DataStream (Cinepak + SDX2) decode; `.Maps` and the DSP instruments remain |
+| 1 — Asset decoders | 🟡 CEL, `.anim`, `.img`, the CEL banks, the fonts, the whole DataStream (Cinepak + SDX2) and the HUD `.Maps` decode; only the DSP instruments remain |
 | 2 — B3D world format | ✅ done, see [05-b3d-format.md](05-b3d-format.md) — geometry and textures both |
-| 3 — Code map | 🟡 the world loader, the record parser, the CEL bank loader, the whole ground pipeline and the font blitter are mapped; `tools/symbols.py` names 243 functions |
+| 3 — Code map | 🟡 the world loader, the record parser, the CEL bank loader, the whole ground pipeline, the font blitter and the HUD radar are mapped; `tools/symbols.py` names 249 of 1,503 functions, and the call graph is now readable |
 | 4 — Runtime | ⬜ not started |
 | 5 — Native systems | ⬜ not started |
 | 6 — Beyond parity | ⬜ not started |
@@ -81,7 +81,8 @@ looking at the output.
 5. DataStream demuxer → Cinepak video + audio tracks ✅ `tools/strm.py`
 6. `.music`, `.aiff` → WAV — `.music` needs no decoder at all: the three files
    in `Perfect/Music` are plain AIFF, mono 16-bit at 44.1 kHz, uncompressed
-7. `.Maps` — the six HUD map files, 1 MiB and 4 MiB each, not yet looked at
+7. `.Maps` — the six HUD radar maps ✅ `tools/hudmap.py`, see
+   [13-hud-maps.md](13-hud-maps.md)
 8. `System/Audio/dsp/*.dsp` — 64 DSP instruments; the audio folio needs them
 
 Deliverable: a browsable dump of every visual and audio asset. This alone makes

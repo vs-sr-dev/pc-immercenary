@@ -33,18 +33,39 @@ class Image:
             self.insns[i.address] = i
             self.order.append(i.address)
 
-        # function starts: any push/stmfd that saves lr, plus every BL target
+        # function starts: any push/stmfd that saves lr, plus every BL target.
+        #
+        # An APCS function opens `mov ip, sp` / `push {..., fp, ip, lr, pc}`,
+        # and the call lands on the `mov`, one instruction before the push.
+        # Taking the push as the start loses every caller: with the whole of
+        # `p` scanned, 1,111 of 2,164 functions look unreachable, TraverseCells
+        # and the world loader among them.  Step back over the `mov`.
         self.funcs = set()
+        self.calls = collections.defaultdict(list)     # target -> [call sites]
         self.litrefs = collections.defaultdict(list)   # value -> [insn addr]
         for a in self.order:
             i = self.insns[a]
             m, ops = i.mnemonic, i.op_str
             if (m.startswith('push') or m.startswith('stmdb') or
                 m.startswith('stmfd')) and 'lr' in ops:
-                self.funcs.add(a)
-            elif m == 'bl':
-                try: self.funcs.add(int(ops.lstrip('#'), 0))
-                except ValueError: pass
+                prev = self.insns.get(a - 4)
+                if prev is not None and prev.mnemonic == 'mov' and \
+                        prev.op_str == 'ip, sp':
+                    self.funcs.add(a - 4)
+                else:
+                    self.funcs.add(a)
+            # BL, any condition.  Capstone spells conditional BL `bleq`,
+            # `bllt` and so on, which the mnemonic alone cannot tell from the
+            # plain branch `blt`, so read the encoding: bits 27-24 are 0b1011.
+            w = int.from_bytes(i.bytes, 'big') if len(i.bytes) == 4 else 0
+            if (w >> 24) & 0x0f == 0x0b:
+                try:
+                    t = int(ops.lstrip('#'), 0)
+                except ValueError:
+                    t = None
+                if t is not None:
+                    self.funcs.add(t)
+                    self.calls[t].append(a)
             # literal pool load:  ldr rD, [pc, #imm]
             mm = LITPOOL.match(ops)
             if m.startswith('ldr') and mm:
@@ -88,6 +109,7 @@ def main():
     ap.add_argument('image')
     ap.add_argument('-s', '--string', help='find code referencing strings matching this regex')
     ap.add_argument('-a', '--addr', help='find code referencing this hex address')
+    ap.add_argument('-c', '--callers', help='who calls this hex address')
     ap.add_argument('-d', '--dis', help='disassemble from this hex address')
     ap.add_argument('-n', '--count', type=int, default=80)
     ap.add_argument('-S', '--symbols', help='a symbol file from tools/symbols.py')
@@ -133,6 +155,31 @@ def main():
             sites = ' '.join(f"{r:#x}" for r in byfunc[f])
             print(f"  func {fs}   {len(byfunc[f]):>3}x   {sites}")
 
+    if a.callers:
+        want = int(a.callers, 16)
+        f = im.func_of(want)
+        if f is not None and f != want:
+            print(f"{want:#08x} is inside {f:#08x}"
+                  f"{'  ' + SYM[f] if f in SYM else ''}")
+            want = f
+        sites = sorted(im.calls.get(want, []))
+        nm = f"  {SYM[want]}" if want in SYM else ""
+        print(f"{want:#08x}{nm}: called from {len(sites)} site(s)")
+        byfunc = collections.defaultdict(list)
+        for s in sites:
+            byfunc[im.func_of(s)].append(s)
+        for g in sorted(byfunc, key=lambda x: (x is None, x)):
+            gs = f"{g:#08x}" if g is not None else "  (none)"
+            if g in SYM:
+                gs = f"{gs} {SYM[g]}"
+            print(f"  <- {gs}   {len(byfunc[g]):>3}x   "
+                  + ' '.join(f"{s:#x}" for s in byfunc[g]))
+        callees = sorted({t for t, ss in im.calls.items()
+                          if any(im.func_of(s) == want for s in ss)})
+        if callees:
+            print(f"  calls {len(callees)}: " + ' '.join(
+                f"{SYM.get(t, hex(t))}" for t in callees))
+
     if a.dis:
         start = int(a.dis, 16)
         end = start + a.count * 4
@@ -145,7 +192,7 @@ def main():
                 v = struct.unpack_from('>I', im.d, l)[0]
                 txt = STR.get(v)
                 lit = f"   ; = {v:#x}" + (f'  "{txt}"' if txt else '')
-            if m in ('bl', 'b') and not lit:
+            if m[0] == 'b' and ops.startswith('#') and not lit:
                 try:
                     nm = SYM.get(int(ops.lstrip('#'), 0))
                 except ValueError:

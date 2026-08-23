@@ -104,12 +104,15 @@ def main():
     im = Image(a.image)
     starts = set(im.fstarts)
     named = {k: v for k, v in from_docs(a.docs).items()}
-    # the doc records the address a reader should jump to, which is often the
-    # `mov ip, sp` one instruction before the `push` that `func_of` reports.
+    # The doc records the address a reader jumped to, which is usually one of
+    # the two instructions of the APCS prologue -- `mov ip, sp` or the `push`
+    # after it.  Snap either to the function start the image itself reports.
     fixed = {}
     for addr, v in named.items():
-        if addr + 4 in starts:
-            addr += 4
+        if addr not in starts:
+            f = im.func_of(addr)
+            if f is not None and addr - f <= 8:
+                addr = f
         fixed[addr] = v
     named = dedupe({k: v for k, v in fixed.items()
                     if im.code_start <= k < im.code_end})

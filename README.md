@@ -15,8 +15,8 @@ only shipping build is the 3DO ARM6 executable on the retail CD.
 
 | Path | Contents |
 |---|---|
-| `tools/` | Opera (3DO) filesystem reader, CEL/anim decoder, CEL bank reader, B3D world parser, ground tile map reader, OBJ exporter, textured software renderer, font decoder, DataStream demuxer with Cinepak and SDX2 decoders, ARM cross-referencer, symbol-file builder, OS-surface scanner |
-| `docs/` | Findings: disc layout, file formats, executables, roadmap, B3D format, code map, CEL banks, the ground, the OS surface, the second B3D family, the fonts, the DataStream |
+| `tools/` | Opera (3DO) filesystem reader, CEL/anim decoder, CEL bank reader, B3D world parser, ground tile map reader, OBJ exporter, textured software renderer, font decoder, DataStream demuxer with Cinepak and SDX2 decoders, HUD radar map decoder, ARM cross-referencer and call-graph reader, symbol-file builder, OS-surface scanner |
+| `docs/` | Findings: disc layout, file formats, executables, roadmap, B3D format, code map, CEL banks, the ground, the OS surface, the second B3D family, the fonts, the DataStream, the HUD maps |
 
 ## Quick start
 
@@ -51,6 +51,13 @@ python tools/armxref.py extracted/p -a 89680
 # ...and with names: build a symbol file, then read the disassembly through it
 python tools/symbols.py extracted/p -o tools/p.sym
 python tools/armxref.py extracted/p -S tools/p.sym -d fe30
+
+# ...and who calls what
+python tools/armxref.py extracted/p -S tools/p.sym -c 3b118
+
+# Decode the HUD radar: a world-sized PNG, and check it against the geometry
+python tools/hudmap.py extracted/Perfect/HUD/NearHUD.Maps --check \
+                       --verify extracted/Perfect/CondensedPerfectWorld.B3D
 
 # Decode the ten anti-aliased fonts
 python tools/font.py extracted/Perfect --verify -o sheets/fonts
@@ -106,7 +113,18 @@ Early, but moving. Nothing is playable yet.
   seven of its sub-handlers, the CEL bank loader, the floor renderer, the object
   id table and the world globals are identified. `tools/symbols.py` turns the
   code map plus the image's own strings into a symbol file that
-  `armxref.py -S` reads, which names 243 of the 2,164 functions.
+  `armxref.py -S` reads, which names 252 of the 1,503 functions. The call
+  graph is readable too, now that the cross-referencer knows an APCS function
+  starts one instruction before its `push`: without that, half the executable
+  looked unreachable.
+- **The HUD radar is solved**, the last unread asset format on the disc. The
+  six `.Maps` files are 256 raw CEL tiles each, one per world grid cell — 2 bpp
+  at two world units a pixel up close, 1 bpp at eight further out, both drawn
+  at the same scale so the radar is one image with a fine centre. Every wall of
+  the world file lands on a non-open pixel of the map, 99.86% of 94,581. The
+  choice between the plain and the `NoEncounter` file is made per cell by eight
+  rectangles that turn out to be the lieutenants' own patrol rectangles, which
+  finally names the render-flag bits.
 - **The OS surface is enumerated**: 671 call sites reaching at most 146 entry
   points — 42 direct SWIs plus the folio function vectors, 46 of them audio,
   22 Graphics, 8 Operamath. That is the exact set a port must implement.

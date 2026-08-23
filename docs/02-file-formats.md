@@ -188,6 +188,24 @@ real, valid world coordinates.
 count-prefixed (`0x4B` = 75 entries), holding candidate player spawn points.
 The executable logs *"Found %d spots close enough to %d %d to put the player.."*.
 
+### `.Maps` — the HUD radar
+
+Six files in `Perfect/HUD`, 1 MiB and 4 MiB. Not a container: a flat array of
+**256 raw CEL pixel blocks, one per `.B3D` world grid cell**, indexed
+`cellY + (cellX << 4)`.
+
+```
+NearHUD, NoEncounterNearHUD, P1ENearHUD   4 MiB   0x4000 a tile   256 x 256, 2 bpp, stride 64
+FarHUD,  NoEncounterFarHUD,  P1EFarHUD    1 MiB   0x1000 a tile   160 x 160, 1 bpp, stride 20
+```
+
+Two world units a pixel on the near map, eight on the far one; each tile is
+centred on its cell, so the near tile covers the cell plus a 128-unit margin
+and the far one the cell plus 512. Values are `0` solid, `1` open ground, `2`
+wall, `3` encounter site. `tools/hudmap.py` decodes them; the whole story,
+including the eight lieutenant territories that pick between the plain and the
+`NoEncounter` file, is in [13](13-hud-maps.md).
+
 ## Partially understood
 
 ### `.B3D` — world and encounter geometry
@@ -232,7 +250,8 @@ and static centres. Rendering is quad-based, not triangle-based — consistent
 with the 3DO CEL engine, which draws arbitrary textured quadrilaterals in
 hardware.
 
-**Not yet decoded.** This is the first target for the next session.
+**Decoded** — see [05](05-b3d-format.md) for the overworld format and
+[10](10-second-b3d-family.md) for the second family.
 
 ### Packed containers
 

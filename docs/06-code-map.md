@@ -16,6 +16,24 @@ Two mechanisms reach data in this image, and a cross-referencer needs both:
    that uses them, and reaches them this way. **This is how most strings are
    referenced**; a tool that only follows literal pools finds almost nothing.
 
+3. **Direct calls** — `bl`, which is what builds the call graph. Two traps of
+   its own. Capstone spells a conditional `BL` `bleq`, `bllt`, `blmi`, which
+   the mnemonic alone cannot tell from the plain branch `blt`; read bits 27-24
+   of the encoding instead, `0b1011`. And an APCS function opens
+
+   ```
+   mov  ip, sp                       <- the call lands here
+   push {..., fp, ip, lr, pc}
+   sub  fp, ip, #4
+   ```
+
+   so taking the `push` as the function start puts every caller one
+   instruction outside it. That single off-by-four made 1,111 of 2,164
+   functions look unreachable, `TraverseCells` and the world loader among
+   them. Stepping back over the `mov` leaves 343 of 1,503, which is a
+   believable number for entry points and indirect targets.
+   `armxref.py -c ADDR` prints callers and callees.
+
 The second one has a trap: ARM encodes an immediate as an 8-bit value plus a
 rotation, and Capstone prints that as two operands, `add r0, pc, #44, #30`. The
 real offset is `ror(44, 30) = 176`. Ignoring the rotation form silently loses
@@ -48,6 +66,11 @@ every reference beyond 255 bytes.
 | `0x03a32c` | ParseSub1 — item spawn point, shared with `sub 5` | |
 | `0x03a660` | ParseSub3 — placed prop, shared with `sub 6` | |
 | `0x03a8ec` | ParseWorldRecord tail — registers `sub 0`/`sub 2` quads | |
+| `0x011180` | far radar probe — returns 3 for a clear bit, 0 for a set one | reads `0x057f04` |
+| `0x012060` | **SetHUDPixel(worldX, worldY, value)** — plots into the near radar map | *"Unexpected bit position ( %d )"* |
+| `0x01e118` | **DrawHUDMap** — rotates and places the two radar CCBs | four `MulSF16` a layer |
+| `0x01e908` | **LoadHUDMaps(cellX, cellY)** — the radar's two tiles | *"Couldn't load HUD map!!"* |
+| `0x01ec44` | **HUDMapIsEncounter(cellX, cellY)** — the eight territories | render flag bits 3-10 |
 | `0x03b11c` | **TraverseCells** — walks grid cells, drives the parser | *"Bailed Out with CurrentQuad at %d"* |
 | `0x03b470` | WorldStats debug print | *"B_Objects:%d S_Objects:%d ..."* |
 | `0x03d430` | **LoadEncounterB3D** | *"Couldn't load the encounter B3D file!"* |
@@ -109,6 +132,9 @@ confirmation of the header layout.
 | `0x089680` | scratch: per-face texture id, an index into `PerfectWorld.CELS` |
 | `0x058f18` | scratch: per-face flag byte |
 | `0x058a54`, `0x058a58`, `0x058a5c` | CEL bank load buffers |
+| `0x057f00`, `0x057f04` | the near and far radar CCBs; `[+8]` is the tile buffer |
+| `0x05844c`, `0x058450` | near radar tile origin, world units |
+| `0x058454`, `0x058458` | far radar tile origin |
 | `0x06bed0` + `0x78` | the render flags word the cull test reads |
 
 ## The object id table
