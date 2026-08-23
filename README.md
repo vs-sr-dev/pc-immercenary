@@ -15,8 +15,8 @@ only shipping build is the 3DO ARM6 executable on the retail CD.
 
 | Path | Contents |
 |---|---|
-| `tools/` | Opera (3DO) filesystem reader, CEL/anim decoder, B3D world parser, ARM cross-referencer |
-| `docs/` | Findings: disc layout, file formats, executables, roadmap, B3D format, code map |
+| `tools/` | Opera (3DO) filesystem reader, CEL/anim decoder, CEL bank reader, B3D world parser, OBJ exporter, textured software renderer, ARM cross-referencer |
+| `docs/` | Findings: disc layout, file formats, executables, roadmap, B3D format, code map, CEL banks |
 
 ## Quick start
 
@@ -50,13 +50,17 @@ Early, but moving. Nothing is playable yet.
 
 - The Opera filesystem is fully readable: 747 files, 552 MiB.
 - The 3DO CEL format decodes: 449 asset files to 5,874 PNGs, no failures.
-- The `.B3D` world container is solved and confirmed against the game's own
-  loader, disassembled. Object placements walk: all five encounter files
-  completely, the overworld at 228 of 241 cells.
-- The overworld renders as a recognisable city map, cross-checked against the
-  developer warp coordinates left in the shipping build.
-- The executable is being mapped: the world loader, the record parser, the
-  object id table and the world globals are identified.
+- **The `.B3D` world format is solved**, every rule taken from the game's own
+  parser rather than fitted to the data. All seven files of the family walk to
+  the last byte of every cell — the overworld is 2,680 records and 8,463 quads.
+- **The texture pipeline is solved.** `PerfectWorld.CELS` is a bank of 3,603
+  bare 3DO CCBs; each wall face names one by index, at one texture pixel per
+  world unit.
+- The overworld therefore renders: a top-down city plan, a Wavefront OBJ, and a
+  textured perspective view — all from the disc, with no ARM emulation.
+- The executable is being mapped: the world loader, the record parser and all
+  seven of its sub-handlers, the CEL bank loader, the object id table and the
+  world globals are identified.
 
 See [docs/04-roadmap.md](docs/04-roadmap.md).
 

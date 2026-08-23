@@ -7,6 +7,10 @@ carry the extension, but they are **not all the same format** — see
 Everything is big-endian `i32` unless stated otherwise. Implemented in
 [`tools/b3d.py`](../tools/b3d.py).
 
+**Status: solved.** All seven files of the first family walk to the last byte,
+every record kind is decoded, and the geometry they describe reconstructs into
+textured quads. See [Results](#results).
+
 ## Container
 
 ```
@@ -110,34 +114,83 @@ Every encounter file has all 256 cells empty. Their section C still holds a
 valid record stream — it simply is not reached through the grid, which makes
 sense for a single-arena fight where nothing needs spatial culling.
 
-## Section B — building geometry
+## The model: templates and instances
 
-Fixed-size records. Decoding `TeslaEncounter`'s first (73 bytes):
+The design is legible once the three sections are read together:
+
+- **Section A** holds *box* templates — an axis-aligned rectangle with
+  subdivided walls.
+- **Section B** holds *prism* templates — an arbitrary footprint extruded to a
+  set of 3D vertices and quad faces.
+- **Section C** holds *placements*: a position, a template index, and one
+  texture id per face.
+
+The templates carry the shape; the instance carries where it stands and what it
+is skinned with. A single stretch of terraced housing is one template placed a
+dozen times with a dozen different façades.
+
+### Section A — box templates
 
 ```
-01 04 08 04 0d            header: ?, ?, 8 vertices, 4 faces, ?
-fff5 fffb                 footprint vertex 0  (-11, -5)
-0009 fffb                 footprint vertex 1  (  9, -5)
-0004 0005                 footprint vertex 2  (  4,  5)
-fffa 0005                 footprint vertex 3  ( -6,  5)
-0000 001a 0001  ...       4 faces x 8 bytes of material/texture data
-00 01 02 03               face 0 vertex indices
-01 04 05 02               face 1
-04 06 07 05               face 2
-06 00 03 07               face 3
-07c1 1340 6d              trailer
++0   u8  kind = 0
++1   u8  nx           xs has nx + 1 entries
++2   u8  ny           ys has ny + 1 entries
++3   u8  k3
++4   u16 height
++6       (nx+1) x i16 xs
+         (ny+1) x i16 ys
 ```
 
-A four-point footprint extruded to an eight-vertex box with four side quads —
-quads, not triangles, matching the 3DO CEL engine's native primitive and the
-`CurrentQuad` / `QuadIndex` diagnostics in the executable.
+Size is exactly `10 + 2*(nx + ny)`, and all 181 records in each of the two large
+worlds match that to the byte.
+
+The handler at `0x0398a4` reads the two coordinate arrays into scratch, then
+builds a ring: the top edge left to right at `ys[ny]`, the right edge top to
+bottom at `xs[nx]`, the bottom edge right to left at `ys[0]`, and the left edge
+back up at `xs[0]`. That gives `2*(nx + ny)` footprint vertices and the same
+number of wall quads. So it is a **rectangle whose four walls are cut into
+separately textured panels** — the extra entries in `xs` and `ys` are the cuts.
+
+Each footprint vertex becomes two 3D vertices, at `z = height` and `z = 0`, and
+face `i` is `(top[i+1], top[i], bottom[i], bottom[i+1])`. The default facing
+angles the builder writes — 64, 0, −63, −127 for the four edges — are a byte
+angle, 256 units to a full turn, which pins down what the per-face angle byte
+means everywhere else.
+
+`flags & 2` on the placement record **transposes** the template: the first
+coordinate array in the file becomes X instead of Y. That is why the handler
+swaps `nx` and `ny` at `0x39a54` before the common tail.
+
+### Section B — prism templates
+
+```
++0   u8  kind = 1
++1   u8  nv           2D footprint vertices
++2   u8  ne           3D vertices
++3   u8  nf           quad faces
++4   u8  k4
++5       nv x (i16 x, i16 y)          footprint
+         ne x (i16 vertexIndex, i16 z) 3D vertices: a footprint point and a height
+         nf x 4 x u8                   quad corners, indices into the 3D vertices
+         nf x i8                       per-face facing angle
+```
+
+Size is exactly `5 + 4*(nv + ne) + 5*nf` on every record in every file.
+
+The indirection through a 2D footprint is the interesting part: a 3D vertex is
+*(which footprint point, what height)*, so a building's silhouette is stored
+once and reused at every storey. `TeslaEncounter`'s first template is
+`nv=4, ne=8, nf=4` — a four-point footprint, eight vertices, four walls.
+
+`flags & 2` and `flags & 4` on the placement mirror the footprint in X and in Y,
+and the same bits transform the facing angle (`0x80 - a`, then `-(a - 1)`).
 
 ## Section C — object placement
 
 A stream of variable-length records. Every record starts with the same 8 bytes:
 
 ```
-u8  type        culling flags
+u8  type        culling class
 u8  sub         record kind, selects the parser
 i16 skipLength  see below
 u32 field       purpose not yet known
@@ -147,32 +200,28 @@ u32 field       purpose not yet known
 
 This one cost real effort to pin down, so it is worth stating plainly.
 
-`ParseWorldRecord` at `0x03929c` reads the eight header bytes, then consults a
-global flags word and decides whether to cull the record. On the cull path it
-does exactly one thing:
+`ParseWorldRecord` at `0x03929c` reads the eight header bytes, then consults the
+global flags word at `[0x6bed0 + 0x78]` and decides whether to cull:
 
 ```
-0x393fc   ldr r0, [sp, #0x3c]      ; skipLength, sign-extended from i16
-0x39400   add r0, r4, r0           ; recordStart + skipLength
-0x39408   str r0, [0x584b4]        ; cursor = next record
+0x39390   ldr  r1, [0x6bed0]; ldr r1, [r1, #0x78]
+0x39398   tst  r1, #0x80000000 ; bne 0x39434     ; parse
+0x393a0   tst  r1, #0x20000000 ; bne 0x39434     ; parse
+0x393a8   cmp  r6, #6         ; ble 0x393b8      ; r6 = sub
+0x393b0   teq  r6, #0xf       ; bne 0x393fc      ; sub > 6 and != 15 -> cull
+0x393dc   teq  r2, #0 ; teqne r2, #5 ; beq 0x39434   ; type 0 or 5 -> parse
+0x393f0   tst  r1, r2, lsl #3 ; bne 0x39434      ; else by flag bit
+0x393fc   cull: cursor = recordStart + skipLength
 ```
 
-On the parse path it never touches the field — it reads the record member by
+On the parse path it never touches `skipLength` — it reads the record member by
 member, advancing the cursor as it goes, which is why the function references
 the cursor global sixty times.
 
-And the culling test at `0x393dc` starts with:
-
-```
-teq r2, #0                        ; r2 = type
-beq  <parse>                      ; type 0 is never culled
-```
-
 So for `type == 0` records the length field is dead data, and the exporter did
-not always fill it in correctly. On the overworld it is wrong for **1,876 of
+not always fill it in correctly: on the overworld it is wrong for **1,876 of
 4,047** records. Walking section C by trusting it works on the small encounter
-files and desyncs on the two large worlds — which is exactly the behaviour
-that was observed before the code was read.
+files and desyncs on the two large worlds.
 
 **To walk section C you must implement the per-`sub` parsers.** There is no
 shortcut in the data.
@@ -184,171 +233,220 @@ shortcut in the data.
 0x39440   bgt 0x397f4                     sub > 3
 0x39444   teq r6, #0 ; beq 0x398a4        sub 0
 0x3944c   teq r6, #1 ; beq 0x3a32c        sub 1
-0x39454   teq r6, #2 ; bne 0x3a8ec        sub 2, else default
+0x39454   teq r6, #2 ; bne 0x3a8ec        sub 2, else nothing
+
+0x397f4   teq r6, #5  ; beq 0x3a32c       sub 5 shares the sub 1 handler
+0x397fc   teq r6, #6  ; beq 0x3a660       sub 6 shares the sub 3 handler
+0x39804   teq r6, #0xf; bne 0x3a8ec       sub 15 inline, else nothing
 ```
 
-Sizes seen across the five encounter files, where the length field *is* valid:
+`sub 4` and anything above 6 other than 15 fall through to `0x3a8ec` and read
+nothing at all — which is consistent with the cull test refusing to parse them
+in the first place.
 
-| `sub` | Size | Count | Kind |
+Record lengths, all derived from the handlers rather than fitted to the data:
+
+| `sub` | Handler | Length | What it is |
 |---|---|---|---|
-| 0 | variable, `17 + 3N` | 39 | geometry instance |
-| 1 | 18 | 89 | |
-| 2 | 48 (one 56) | 80 | |
-| 3 | 19 | 25 | |
-| 6 | 43 | 29 | named animated object |
+| 0 | `0x398a4` | `17 + 3*nfaces` | placed instance of a section A or B template |
+| 1, 5 | `0x3a32c` | 18 | item spawn point |
+| 2 | `0x3945c` | `16 + 4*nv + 4*ne + 8*nf` | inline one-off geometry |
+| 3, 6 | `0x3a660` | 19, 43 | placed prop, by object id |
+| 15 | `0x3980c` | 13 | single-byte id marker |
+| 4, >6 | — | `skipLength` | always culled |
 
-### `sub = 0` — a placed instance of a geometry template
+### `sub = 0` — a placed instance
 
 ```
 +0   u8  type
 +1   u8  sub = 0
 +2   i16 skipLength
 +4   u32 field
-+8   i16 X            promoted to 16.16 and written to 0x58498
-+10  i16 Y            promoted to 16.16 and written to 0x58498+4
-+12  u8  flags        bit 0 selects the template table, bit 1 gates a tail loop
++8   i16 X
++10  i16 Y
++12  u8  flags        bit 0: template table, bit 1/2: mirror or transpose
 +13  u32 index        index into that table
-+17  variable tail    N 16-bit values followed by N bytes
++17  N x i16          per-face texture id      -> 0x89680
+     N x u8           per-face flag byte       -> 0x58f18
 ```
 
-The template table is chosen by `flags & 1`:
+`N` is the template's face count, which is why the record cannot be sized
+without following the index:
+
+```
+flags & 1 == 0  ->  tableA[index],  N = 2 * (nx + ny)
+flags & 1 == 1  ->  tableB[index],  N = nf
+```
+
+The template table is chosen at `0x39954`:
 
 ```
 0x39958   ldr r0, [0x584cc]        ; flags bit 0 clear -> tableA
-0x39964   ldr r4, [r0, r1, lsl #2] ;   entry = tableA[index]
-
 0x39f5c   ldr r0, [0x584d0]        ; flags bit 0 set   -> tableB
-0x39f68   ldr r0, [r0, r1, lsl #2] ;   entry = tableB[index]
 ```
 
-The handler then reads the template's own header and drives its tail loops from
-counts held **in the template**, not in the placement record. That is why a
-`sub = 0` record's byte length cannot be computed from the record alone, and why
-the exporter had nothing sensible to put in `skipLength` for it.
+The two tail loops that read the per-face data are shared by both paths, at
+`0x3a250` (the `i16` texture ids) and `0x3a2dc` (the flag bytes).
 
-This makes the whole design legible: **sections A and B hold geometry
-templates, section C places instances of them.** Checking that reading against
-the five encounter files:
+One texture id gets special treatment at `0x3a2a0`: id `0x476` becomes `0x47d`
+when a bit in a global is clear — a scenery swap the world file itself does not
+encode.
 
-| File | `sub=0` records | to tableA | to tableB | index in range | X,Y inside the world box |
-|---|---|---|---|---|---|
-| `TeslaEncounter` | 39 | 17 | 22 | yes | yes |
-| `chanceencounter` | 9 | 0 | 9 | yes | yes |
-| `flyencounter` | 9 | 0 | 9 | yes | yes |
-| `balkanencounter` | 0 | – | – | – | – |
-| `LokiEncounter` | 0 | – | – | – | – |
-
-Tesla has three templates in section A instantiated 17 times and four in
-section B instantiated 22 times — an arena built from a handful of repeated
-pieces, which is what a 1995 3DO game would do.
-
-### `sub = 6` — named animated object
-
-43 bytes, carrying an asset name inline:
+### `sub = 1` / `sub = 5` — item spawn point
 
 ```
-06 06 002b        type 6, sub 6, 43 bytes
-0001 0004         field
-fac6              X = -1338
-07c2              Y =  1986
-0000              Z
-22 1f 16 1c       ?
-0000 08           ?
-00                instance index (0, 1, 2 across three sphere records)
-00
-"sphere.anim\0"   asset name, padded to the record length
++8   i16 X
++10  i16 Y
++12  u8  scaleX
++13  u8  scaleY
++14  i8  angle
++15  i16 id
++17  u8  flag
 ```
 
-Objects named directly in the world files:
+If `id` is non-zero the record is a fixed placement. If `id` is **zero** the
+handler rolls dice at `0x3a4e0`:
 
-| Asset | Placements |
-|---|---|
-| `sphere.anim` | 51 |
-| `potflame.anim` | 36 |
-| `DOASys.anim` | 24 |
-| `flag.anim` | 10 |
-| `fountain.anim` | 5 |
-
-`Perfect/Objects/` holds more than these five. The rest are placed by numeric
-id through the dispatcher at `0x037dd8`, whose full table is recovered in
-[06-code-map.md](06-code-map.md) — 27 ids covering the world props and the
-twelve weapon pickups.
-
-### Walking section C
-
-The length rule that actually works is the game's own:
-
-```python
-if record.type != 0:
-    length = record.skipLength        # cullable, so the field is maintained
-else:
-    length = {1: 18, 2: 48, 3: 19, 6: 43}[sub]     # fixed-size kinds
-    # sub 0: 17 + 3*N, where N comes from the referenced template
-    #   flags & 1 == 1  ->  N = tableB[index][3]
-    #   flags & 1 == 0  ->  N = len(tableA[index]) - 10
+```
+0x3a53c   mov r0, #8 ; bl 0x38c00     ; Random(8) -> 1..8
+0x3a548   cmp r0, #4
+0x3a54c   addge r0, r0, #7            ; -> 11..15
+0x3a550   addlt r0, r0, #4            ; ->  5..7
 ```
 
-Results, walking cell by cell so a desync is contained to one cell:
+Ids 5–16 are the twelve weapon pickups in
+[06-code-map.md](06-code-map.md), so **`sub = 1` with `id = 0` is a random
+weapon spawn**. The overworld has 569 of them out of 1,174 `sub = 1` records.
+A second roll, `Random(50)` at `0x3a4dc`, scales a value derived from the two
+scale bytes.
 
-| File | Records | Coverage |
+### `sub = 2` — inline geometry
+
+The same shape data as a section B template, but stored in the record instead of
+referenced, and with the per-face texture ids appended:
+
+```
++8   u8  nv
++9   u8  ne
++10  u8  nf
++11  i16 X            reference position only; the vertices are already absolute
++13  i16 Y
++15  u8  k
++16      nv x (i16 x, i16 y)
+         ne x (i16 vertexIndex, i16 z)
+         nf x 4 x u8         quad corners
+         nf x i8             facing angle
+         nf x i16            texture id
+         nf x u8             flag byte
+```
+
+Note the position is at **+11**, not +8: `sub = 2` is the one record kind whose
+X and Y are not where every other kind puts them. That is why an earlier survey
+found only 178 of 188 `sub = 2` positions inside the world box — the other ten
+were being read out of the wrong field.
+
+### `sub = 3` / `sub = 6` — placed prop
+
+```
++8   i16 X
++10  i16 Y
+     u32 extra            sub 6 only
+     u8  scaleX
+     u8  scaleY
+     i8  angle
+     i8  face
+     u8  k
+     u8  id               object id
+     u8  flag
+     char name[20]        sub 6 only
+```
+
+The `id` byte indexes the object table recovered in
+[06-code-map.md](06-code-map.md), and it checks out exactly. On the overworld:
+
+| `sub` | id | asset | count |
+|---|---|---|---|
+| 3 | 17 | `meter.anim` | 17 |
+| 3 | 19 | `trafficlight.anim` | 108 |
+| 3 | 20 | `hedra.anim` | 106 |
+| 3 | 22 | `DeadGoner.anim` | 3 |
+| 3 | 23 | `donut.anim` | 15 |
+| 3 | 24 | `FMOegg.anim` | 27 |
+| 3 | 25 | `TrafficCone.anim` | 34 |
+| 3 | 26 | `gong.anim` | 1 |
+| 6 | 0 | `DOASys.anim` | 24 |
+| 6 | 1 | `sphere.anim` | 22 |
+| 6 | 2 | `potflame.anim` | 12 |
+| 6 | 3 | `fountain.anim` | 4 |
+
+`sub = 6` carries the asset name inline as well as the id, and the two always
+agree — the name is redundant, which is what you would expect from an exporter
+that emits both for a debug build.
+
+## Textures
+
+The per-face `i16` is a slot number in a **CEL bank** — for the overworld,
+`Perfect/PerfectWorld.CELS`, whose format is in
+[07-cel-banks.md](07-cel-banks.md).
+
+The mapping is direct, and the scale is 1:1: taking every wall quad on the
+overworld and dividing its world-space width and height by the referenced cel's
+pixel width and height,
+
+| ratio | width | height |
 |---|---|---|
-| `TeslaEncounter` | 80 | complete |
-| `LokiEncounter` | 91 | complete |
-| `balkanencounter` | 40 | complete |
-| `chanceencounter` | 35 | complete |
-| `flyencounter` | 34 | complete |
-| `CondensedPerfectWorld` | 2,650 | 228 of 241 cells |
-| `P1EncWorld` | 2,619 | 222 of 235 cells |
+| 1.0 | 5657 | 7067 |
+| other | 2804 | 1394 |
 
-All five encounters walk to the last byte. The two large worlds leave 13 cells
-each, where a `sub = 0` tail is sized by a rule the two template paths have not
-fully given up yet.
+out of 8,461 quads. **One world unit is one texture pixel.** The remaining
+ratios cluster on 0.5, 2.0 and 0.2, which are the mip levels the bank stores
+side by side for each texture.
 
-### X and Y are common to every record kind
+## Results
 
-Every record carries `i16 X` at +8 and `i16 Y` at +10, not just `sub = 0`.
-Checked against the world bounding box on the overworld:
+```sh
+python tools/b3d.py -r "extracted/Perfect/**/*.B3D"
+```
 
-| `sub` | inside the box |
-|---|---|
-| 1 | 1176 / 1176 |
-| 3 | 311 / 311 |
-| 6 | 62 / 62 |
-| 2 | 178 / 188 |
+| File | Records | Quads | Coverage |
+|---|---|---|---|
+| `TeslaEncounter` | 80 | 186 | complete |
+| `LokiEncounter` | 91 | 80 | complete |
+| `balkanencounter` | 40 | 0 | complete |
+| `chanceencounter` | 35 | 216 | complete |
+| `flyencounter` | 34 | 131 | complete |
+| `CondensedPerfectWorld` | 2,680 | 8,463 | 241 of 241 cells |
+| `P1EncWorld` | 2,649 | 8,463 | 235 of 235 cells |
 
-### The map
+Every file of the family walks to the last byte of every cell. All 8,463
+overworld quads land inside the world bounding box, with heights from 0 to 127.
 
-[`tools/b3dmap.py`](../tools/b3dmap.py) plots every placement top-down, coloured
-by `sub`, with the 16x16 cell grid drawn behind it. The result is unmistakably a
-city: a stadium, a plaza, blocks of buildings, streets on the grid, a ring of
-objects, scattered props.
+### Tools
 
-The strongest check available is `Perfect/PerfectLocation.Init`, the developer
-warp table left in the shipping build. Overlaying its points:
+```sh
+# top-down city plan, with the developer warp table overlaid
+python tools/b3dmap.py extracted/Perfect/CondensedPerfectWorld.B3D map.png \
+                       extracted/Perfect/PerfectLocation.Init
+
+# Wavefront OBJ, one group per texture id
+python tools/b3dobj.py extracted/Perfect/CondensedPerfectWorld.B3D world.obj
+
+# textured perspective render, no ARM emulation involved
+python tools/b3dview.py extracted/Perfect/CondensedPerfectWorld.B3D view.png \
+    --cels extracted/Perfect/PerfectWorld.CELS \
+    --eye -279 560 45 --yaw 90 --pitch 2
+```
+
+The strongest external check is `Perfect/PerfectLocation.Init`, the developer
+warp table left in the shipping build. Overlaying its points on the plan:
 
 - the four **transporter** entries — northwest `(-1900, 2580)`, northeast
   `(2100, 2580)`, southeast `(2100, -1480)`, southwest `(-1900, -1480)` — land
-  exactly on the four corners of the plotted map;
+  exactly on the four corners;
 - *"This is entering the stadium"* `(-279, 913)` lands on the large curved
-  structure near the centre;
+  structure near the centre, which renders as a banked stadium bowl;
 - *"right in front of the Mansion"* `(1698, 482)` lands on a building outline on
   the east side.
-
-That confirms the coordinate system, the axis order and the Y direction
-(`maxY` is at the top) all at once.
-
-```sh
-python tools/b3dmap.py extracted/Perfect/CondensedPerfectWorld.B3D worldmap.png \
-                       extracted/Perfect/PerfectLocation.Init
-```
-
-### What is left
-
-The two `sub = 0` template paths need reading to the end — the tail loop in the
-tableA path is gated on `flags & 2`, and the tableB path at `0x39f5c` has its own
-loop. That is what the 13 unwalked cells are waiting on. The fixed layouts of
-`sub = 1`, `2` and `3` are also still unread; their handlers are at `0x3a32c`,
-`0x3945c` and `0x3a660`.
 
 ## Two families
 

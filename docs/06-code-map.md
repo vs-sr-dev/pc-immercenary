@@ -27,15 +27,29 @@ every reference beyond 255 bytes.
 |---|---|---|
 | `0x013e4c` | **LoadWorld** — loads and indexes `CondensedPerfectWorld.B3D` | *"Starting to load the world..."* |
 | `0x015c08` | LoadStaticObjects | *"Loaded static objects ..."* |
+| `0x036ca8` | LoadWorldCels — opens `PerfectWorld.Cels` | *"$Perfect/PerfectWorld.Cels"* |
 | `0x037dd8` | **ObjectAnimById** — id to `.anim` dispatcher | *"Unrecognized anim ID %d!"* |
+| `0x038c00` | **RandomBelow(n)** — `(n * rand()) >> 16` | called from `ParseSub1` |
 | `0x03929c` | **ParseWorldRecord** — one section C record | 60 references to the parse cursor |
+| `0x0393dc` | *(inside ParseWorldRecord)* the cull test | `teq type, #0` |
+| `0x03945c` | ParseSub2 — inline geometry | dispatch fallthrough at `0x39458` |
+| `0x0397f4` | dispatch for `sub > 3` | |
+| `0x03980c` | ParseSub15 — 13-byte id marker | `teq sub, #0xf` |
+| `0x0398a4` | ParseSub0 — instance of a section A/B template | dispatch from `0x39444` |
+| `0x03a32c` | ParseSub1 — item spawn point, shared with `sub 5` | |
+| `0x03a660` | ParseSub3 — placed prop, shared with `sub 6` | |
+| `0x03a8ec` | ParseWorldRecord tail — registers `sub 0`/`sub 2` quads | |
 | `0x03b11c` | **TraverseCells** — walks grid cells, drives the parser | *"Bailed Out with CurrentQuad at %d"* |
 | `0x03b470` | WorldStats debug print | *"B_Objects:%d S_Objects:%d ..."* |
 | `0x03d430` | **LoadEncounterB3D** | *"Couldn't load the encounter B3D file!"* |
 | `0x03e0ec` | second encounter loader variant | same globals as `0x03d430` |
 | `0x04b72c` | LoadAnim(name, flags) | called by every id handler |
 | `0x04b7cc` | LoadFile(name, &size, flags) | called by both B3D loaders |
+| `0x04d438` | virtual-call thunk, slot −4, two arguments | `ldr pc, [r2, #-4]` |
+| `0x04d46c` | virtual-call thunk, slot −8, three arguments | `ldr pc, [r3, #-8]` |
+| `0x04d660` | dispatch-table fetch used by both thunks | |
 | `0x04e348` | memcpy(dst, src, n) | ubiquitous |
+| `0x04e488` | the 32-bit RNG `RandomBelow` draws from | |
 
 `LoadEncounterB3D` starts its cursor at **24**, skipping the six header words it
 does not need: every encounter shares the same bounding box and cell size, so it
@@ -60,6 +74,14 @@ confirmation of the header layout.
 | `0x07b6e0` | animation pointer table, indexed by object id |
 | `0x07b758` | object records, 44 bytes each, indexed by object id |
 | `0x08988c` | the 257-word spatial grid |
+| `0x088a40` | scratch: 2D footprint vertices, `(x, y)` pairs |
+| `0x088ce0` | scratch: 3D vertices, `(footprintIndex, z)` pairs |
+| `0x089220` | scratch: quad faces, four indices each, stride 16 |
+| `0x0895a0` | scratch: per-face facing angle, 16.16 |
+| `0x089680` | scratch: per-face texture id, an index into `PerfectWorld.CELS` |
+| `0x058f18` | scratch: per-face flag byte |
+| `0x058a54`, `0x058a58`, `0x058a5c` | CEL bank load buffers |
+| `0x06bed0` + `0x78` | the render flags word the cull test reads |
 
 ## The object id table
 
@@ -109,3 +131,25 @@ str r0, [r1, #0x18]!
 So runtime object records are **44 bytes**, one per object id — next to the
 43-byte on-disc placement record, which suggests the disc record is loaded
 almost verbatim.
+
+## C++ in the image
+
+`0x4d438` and `0x4d46c` are not functions but **virtual-call thunks**: both call
+`0x4d660` to fetch a dispatch table and then tail-call through a negative slot
+offset. Part of the executable is therefore C++ with vtables, which matters for
+a port — those call sites cannot be named by following a `bl` target, and a
+cross-referencer needs to model the dispatch table to get past them.
+
+## What the record parser tells you about the game
+
+Reading `ParseWorldRecord` end to end recovers gameplay facts, not just a file
+format:
+
+- **`sub = 1` with `id = 0` is a random weapon spawn.** The handler rolls
+  `Random(8)` at `0x3a53c` and maps the result onto ids 5–7 and 11–15 — the
+  weapon-pickup half of the object id table above. The overworld has 569 of them.
+- **`sub = 3` and `sub = 6` place props by object id**, and every id used on the
+  overworld resolves through that same table: 108 traffic lights, 106 `hedra`,
+  34 traffic cones, 27 `FMOegg`, 24 `DOASys`, and so on.
+- One texture id is swapped at load time: `0x476` becomes `0x47d` when a bit in
+  the render flags word is clear (`0x3a2a0`).

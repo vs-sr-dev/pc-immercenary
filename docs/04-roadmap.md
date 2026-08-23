@@ -56,9 +56,9 @@ CPU — it is the CEL engine, and all three approaches need it.
 | Phase | State |
 |---|---|
 | 0 — Tooling and inventory | ✅ done |
-| 1 — Asset decoders | 🟡 CEL, `.anim` and `.img` decode; fonts, streams and audio pending |
-| 2 — B3D world format | 🟡 container solved, see [05-b3d-format.md](05-b3d-format.md) |
-| 3 — Code map | ⬜ not started |
+| 1 — Asset decoders | 🟡 CEL, `.anim`, `.img` and the CEL banks decode; fonts, streams and audio pending |
+| 2 — B3D world format | ✅ done, see [05-b3d-format.md](05-b3d-format.md) — geometry and textures both |
+| 3 — Code map | 🟡 the world loader, the record parser and the CEL bank loader are mapped |
 | 4 — Runtime | ⬜ not started |
 | 5 — Native systems | ⬜ not started |
 | 6 — Beyond parity | ⬜ not started |
@@ -92,7 +92,9 @@ geometry we can view. Cross-check against the encounter B3Ds, which are small
 enough to read by hand, and against `PerfectLocation.Init`'s known-good
 coordinates.
 
-Deliverable: an OBJ/glTF export of the overworld, and a viewer.
+Deliverable: an OBJ export of the overworld, and a viewer. **Done** —
+`tools/b3dobj.py` writes the OBJ, `tools/b3dview.py` renders it in perspective
+with the game's own wall textures, and `tools/b3dmap.py` draws the city plan.
 
 ### Phase 3 — Code map
 
@@ -122,14 +124,16 @@ save states, and ports to other platforms.
 
 ## Immediate next steps
 
-1. Disassemble the world loader in `p` and read the section C record lengths out
-   of the code — the remaining B3D question is a code question now, not a data
-   one.
-2. Recover the numeric object-ID table that maps placement records to
-   `Perfect/Objects/*.anim` (the executable carries *"Unrecognized anim ID %d!"*).
+See [../TODO.md](../TODO.md) for the addressed version. In short:
+
+1. Find what draws the **ground** — section C contains no horizontal quad at
+   all, so the floor comes from somewhere else. Start at `TraverseCells`,
+   `0x03b11c`.
+2. Billboard the `.anim` props the `sub = 1` / `3` / `6` records place, and make
+   the viewer walkable.
 3. Decode the second `.B3D` family used by Chameleon, Medusa and Riberto.
-4. Render the overworld: buildings from section B, objects from section C,
-   checked against the known-good coordinates in `PerfectLocation.Init`.
+4. Resolve `0x4d660`, the C++ dispatch-table fetch, so the cross-referencer can
+   get past virtual call sites.
 5. Set up a disassembly project for `p` with the relocation list applied and the
    debug strings mapped to their referencing functions.
 
@@ -138,6 +142,9 @@ save states, and ports to other platforms.
 - Is the FMOData subscriber payload documented anywhere, or fully custom?
 - How does `p` hand off to `p1e` — reload from the shell, or a task launch?
 - Are the `Perfect/Film/*Files` blobs indexed containers or raw concatenations?
+- Where does the ground plane come from, given that every `.B3D` quad is
+  vertical?
+- Does the game pick a mip level from the CEL bank by distance, and if so where?
 - Does the disc's redundant-copy layout matter for streaming timing (burst/gap
   fields are populated), and does the port need to care? Almost certainly not.
 
