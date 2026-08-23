@@ -365,6 +365,23 @@ camera in about 1.5 seconds a frame. What is missing:
   phoneme the table uses 459 times, two lines of dialogue with no audio. Do
   not "fix" the reading when the data looks wrong: check whether the wrongness
   is reachable, then write it down.
+- **Two data columns that are always in step means the code reads one.** The
+  DOA answer table has a byte per question, and the second is the first plus
+  one in all 185 live pairs — because `0x2258` never reads it, it adds the
+  question index. If a redundancy holds with no exceptions, look for the code
+  that exploits it rather than the code that maintains it.
+- **A file nothing names is as interesting as a name with no file.**
+  `silence.music` is on the disc and no executable mentions it, while eight
+  of the ten names in the music table have no file. Grep both directions.
+- **The smallest executable can hold the architecture.** `launchme` is 12 KiB
+  and almost all glue, but five of its strings lay out the entire launch
+  chain — front end, game, encounter, and who creates the message port `p`
+  goes looking for. Read the small ones early.
+- **Do not carry a convention across two programs without checking.** Both
+  subroutine programs take a selector in `argv[1]`, so `argv[2]` looked like
+  the same callback in both. It is not: the speech program calls home through
+  it, the front end stores 512 bytes of game state at it. One `ldr pc,
+  [global]` scan settles which.
 - **A fixed-point routine can be deliberately wrong.** Do not assume a
   multiply is a multiply: check where its intermediate overflows, then check
   whether every call site stays inside that bound. Twice in this module the
