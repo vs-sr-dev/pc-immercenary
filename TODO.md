@@ -3,6 +3,51 @@
 Everything below has a concrete starting address or file. Nothing here is
 open-ended research.
 
+## Done in session 7
+
+- **`p1e`'s OS surface is closed.** Its four unattributed slots are the
+  **File** folio's, `-4` to `-16`, wrappers at `0x325f8`–`0x326a4`, the same
+  shape as `p`'s. Both images are now fully attributed: `p` 42 SWIs + 109
+  vector slots, `p1e` 40 + 104, nothing left over.
+- **Two corrections to `swiscan.py` fell out of it.** `Image.strings` returns
+  *maximal* runs of printable bytes, so a name whose padding happens to be
+  printable is keyed at the wrong offset and a lookup at the pointer misses
+  it — both of `p1e`'s unnamed opens were that. The scanner now reads a C
+  string at the pointer.
+- **And a real correction to the OS surface.** SWI `1:5` is **not**
+  `FindNamedItem`. The lookup is `1:4` and takes a TagArg list, so the C
+  library wraps it — `0x04e628` builds `{TAG_ITEM_NAME, name}, {TAG_END}` on
+  the stack — and `1:5` is `OpenItem`, taking the Item the lookup returned.
+  The full open is `LookupItem(OpenItem(FindNamedItem(...)))`, which also
+  names **Kernel slot −48 = `LookupItem`**, a fifth named vector slot.
+- **Only four folios are opened by name, not seven.** Reading the node type
+  splits the list: `0x104` is a folio and has a vector table, `0x10f` is a
+  *device* and has none. `Operamath`, `audio`, `File`, `Graphics` are folios;
+  `timer`, `SPORT` and `mac` are devices, and `mac` is opened twice.
+  `eventbroker` and `ShellMsgPort` go through the same lookup at node type
+  `0x10a`, a message port. See [docs/09](docs/09-os-surface.md).
+- **`SpeechSubroutine` is read end to end**, all 230 functions' worth of
+  structure. It is not a speech player: it is the **DOA conversation system
+  and the lip sync**, and it drives the mouth from the *text* through an
+  English letter-to-sound ruleset of 323 rules. `tools/speech.py --verify` is
+  21 checks that pass; `--say`, `--rules`, `--script` and `--slots` are the
+  readers. See [docs/16](docs/16-speech-and-doa.md).
+- **The seek formula predicted a file the program never opens, and was
+  right.** `SpeakLine` seeks `1,000,000 * speaker + 10,000 * line +
+  1,000,000`, and `SpeechStream`'s own marker table has exactly those
+  markers: six of the seven speakers match their Marks file line for line
+  (50, 60, 56, 48, 58, 48). That pins the formula *and* the speaker order.
+- **Riberto has two lines of dialogue with no audio.** His Marks file holds
+  11 lines and the stream holds 9 slots; lines 9 and 10 — *"hex dear hex the
+  one we all search for and never find"* and *"where owhere Iask you do you
+  havean ounce to spare"* — survived the marks and not the voice track.
+- **The shipped data has four small flaws, all harmless and all found by
+  checking.** `RGEN` is in the rule table twice and the second entry can
+  never fire; `TROUBLE` is out of length order (harmless — nothing earlier is
+  a prefix of it); the mouth switch has no arm for `Y`, so the glide never
+  moves the mouth, 459 times across the script; and `^` swallows a following
+  lower-case letter, which costs ` D^UhBLY^oo ` an `o`.
+
 ## Done in session 6
 
 - **The assembler module is read end to end**, all 5,408 bytes of it. See
@@ -98,10 +143,10 @@ camera in about 1.5 seconds a frame. What is missing:
 
 ## 3. Code map, wider
 
-- **Name the remaining 105 folio vector slots.** Every one is now attributed
-  to a folio — 46 audio, 23 Kernel, 22 Graphics, 10 File, 8 Operamath, none
-  left over — and `swiscan.py --sites` lists each with the wrapper that calls
-  it. Four are named. The Graphics folio's 22 are the CEL engine, the single
+- **Name the remaining 104 folio vector slots.** Every one in both images is
+  attributed now — in `p`: 46 audio, 23 Kernel, 22 Graphics, 10 File, 8
+  Operamath — and `swiscan.py --sites` lists each with the wrapper that calls
+  it. Five are named, `LookupItem` being the newest. The Graphics folio's 22 are the CEL engine, the single
   largest piece of work in any port; the Kernel folio's 23 are the cheapest,
   since slot −56 is already pinned as the block copy.
 - **The DSP instruction set.** `tools/dsp.py` reads everything around the
@@ -116,9 +161,10 @@ camera in about 1.5 seconds a frame. What is missing:
   3, or 4 with a second word of 8 on the two `_lfo` variants, or −1 on
   `pulse_lfo`. It is the hertz-to-phase-increment rule and the files alone do
   not give it.
-- **Name the remaining kernel/audio SWIs.** Six are identified in
+- **Name the remaining kernel/audio SWIs.** Seven are identified in
   [docs/09](docs/09-os-surface.md); the rest have call sites listed and need
-  one context read each.
+  one context read each. `1:5` is the warning: it was named from the company
+  it kept and it was wrong. Read the arguments.
 - **The library/game split is answered as far as the disc allows**, and
   [docs/15](docs/15-library-and-game.md) says where the wall is. 71 functions
   are proved library by exact shape match against the 38 executables on the
@@ -130,7 +176,9 @@ camera in about 1.5 seconds a frame. What is missing:
   What *is* still open is the 24 functions in the weakest tier (in `p`,
   `CinepakSubroutine` and `SpeechSubroutine` alike, touching no game string):
   one context read each says whether they are the SDK's or Immercenary's own
-  utility layer.
+  utility layer. `SpeechSubroutine` is read now
+  ([docs/16](docs/16-speech-and-doa.md)), so those 26 shared shapes can be
+  looked at with their callers in view rather than blind.
 - **356 functions still have no direct caller.** Some are entry points and some
   are called through tables; a pass over them would find the dispatch
   mechanism, which is the last blind spot in the call graph. `SetHUDPixel` at
@@ -150,22 +198,33 @@ camera in about 1.5 seconds a frame. What is missing:
 - **The weapon slots.** `0x043840` returns the slot index `PickUpWeapon` fills,
   and `0x0438c8` clears bit 0 of it first. How many slots there are, and what
   the other bits of `[0x89d40 + 0xf4 + slot*4]` hold, is two reads away.
-- **`p1e`.** The encounter executable has never been walked. It shares the
-  world format, the `.Maps` format and — now proven byte for byte — the whole
-  math module, so it should be a cheap cross-check on anything uncertain
-  in `p`. Its folio surface has **four slots still unattributed**,
-  `-4`/`-8`/`-12`/`-16` at `0x325f8`–`0x326a4`; `p`'s File folio thunks open
-  the folio inline and `p1e`'s look like the same shape, so naming them is
-  one read.
-- **The other two Immercenary executables have never been walked either.**
-  `Perfect/Film/CinepakSubroutine` (86 KiB) and
-  `Perfect/DOASys/SpeechSubroutine` (46 KiB) are the game's own programs —
-  their strings are `$Perfect/film/…` and `$DOAsys/AllGonerSpeech.aanim` —
-  and `tools/libscan.py` says **131** and **91** of their functions have no
-  counterpart in `p` at all. That is the film player's and the speech
-  player's own logic, and it is the only code on the disc that is certainly
-  Immercenary's and certainly unread. The speech one is small enough to
-  finish in a session.
+- **`p1e`'s body has still never been walked.** Its OS surface is closed now
+  and it shares the world format, the `.Maps` format and — proven byte for
+  byte — the whole math module, so it stays the cheapest cross-check on
+  anything uncertain in `p`.
+- **`CinepakSubroutine` is the last certainly-unread game code on the disc.**
+  86 KiB, 437 measured functions of which **120 have no counterpart in `p`**
+  (`docs/15`'s own table). `SpeechSubroutine`'s 90 are done; these are what
+  is left. Its strings are `$Perfect/film/…`, and the film subjects the DOA
+  menu asks for — `MedusaFiles`, `TeslaFiles` and eight more — are its input,
+  so [docs/16](docs/16-speech-and-doa.md) is the way in.
+- **Who indexes the DOA answer matrix.** `BuildMenu` at `0x21cc` reads a
+  1,100-byte table at `0x9480` as 50-byte rows of 25 two-byte entries, indexed
+  `who + 2 * question`, with `0x63` meaning *no answer*. 22 rows and only
+  seven speakers, so `who` is not a speaker index. One read of `0x21cc`'s
+  callers settles it, and the reward is the whole conversation tree — which
+  character will answer which of the 25 subjects.
+- **The per-face mouth mapping.** A shape number is `0x00`–`0x2a`, 43 of them,
+  and no `.aanim` has 43 frames (35, 25, 27, 33, 38, 33, 19). So a table
+  stands between them, inside the seven renderers `0x97c` dispatches to:
+  `0x4f54`, `0x4c44`, `0x4958`, `0x4640`, `0x4194`, `0x3ba0`, `0x3660`. One of
+  the seven is enough — they are the same routine seven times.
+- **How `p` and the subroutine programs talk.** `SpeechSubroutine` reaches the
+  DataStream through a *function pointer* in a global, with command codes
+  `0x2000` (seek), `0x3000` and `0x5000` in `r0`. That is a message protocol
+  between two tasks, and it is the interface a port has to reproduce to keep
+  the subroutine programs as separate programs. `0x7c8` and `0x97c` are the
+  call sites.
 - **The far horizon table overruns the reciprocal table** for depths above
   402.0. Harmless in the ground lattice — but `ProjectPoint` *can* reach it.
   It rejects depth at or below 2.0 and then indexes `0x08c16c` by
@@ -230,6 +289,27 @@ camera in about 1.5 seconds a frame. What is missing:
   table is not just a speed trick: it is where the platform's own quirks got
   folded in. Immercenary's Cinepak hides a per-component ordered dither in
   one, and nothing in the decoder itself hints at it.
+- **A pointer at a string is not a string the scanner found.** A "maximal run
+  of printable bytes" is keyed where the run starts, which is not where the
+  pointer points if the padding before it happens to be printable. Read a C
+  string at the pointer instead. Two folio names hid behind this for two
+  sessions.
+- **The SWI next to a call is not the call.** `1:5` sat in every folio opener
+  and got written down as `FindNamedItem` because it was the only SWI in
+  sight. The real lookup was a `bl` to a wrapper two instructions earlier,
+  because it takes a tag list and needed one. When a routine's name comes
+  from *proximity*, check what the arguments are.
+- **A number in one file that predicts another file is the best check there
+  is.** `SpeakLine`'s seek arithmetic is three instructions in a program that
+  never opens `SpeechStream`; the stream's own marker table agreed with it on
+  six speakers out of seven, line for line. That is worth more than any
+  amount of internal consistency — and the seventh disagreement was a real
+  finding, not a bug in the reading.
+- **Shipped data can be wrong and the game still works.** A duplicate rule
+  that can never fire, a rule out of sort order, a switch with no arm for a
+  phoneme the table uses 459 times, two lines of dialogue with no audio. Do
+  not "fix" the reading when the data looks wrong: check whether the wrongness
+  is reachable, then write it down.
 - **A fixed-point routine can be deliberately wrong.** Do not assume a
   multiply is a multiply: check where its intermediate overflows, then check
   whether every call site stays inside that bound. Twice in this module the

@@ -26,6 +26,14 @@ LITPOOL = re.compile(r'^(\w+), \[pc, #(-?(?:0x[0-9a-fA-F]+|\d+))\]$')
 FOLIO = {1: 'Kernel', 3: 'file / C runtime glue', 4: 'audio',
          5: 'Operamath'}
 
+# MKNODEID(kernel, n). Only the three the game asks for are named, and each
+# is named by what it finds: folios by folio name, devices by "mac", message
+# ports by "eventbroker" and "ShellMsgPort".
+FIND_NAMED_ITEM = 0x10004     # kernel 1:4, takes a TagArg list
+OPEN_ITEM = 0x10005           # kernel 1:5, takes the Item and a TagArg list
+FOLIO_NODE = 0x104
+NODE = {0x104: 'folio', 0x10a: 'msgport', 0x10f: 'device'}
+
 MAX_FOLIO = 15          # anything above this is misdecoded data
 MAX_FUNC = 255
 
@@ -39,6 +47,44 @@ def pcrel_target(insn, addr):
         r = int(m.group(3)) & 31
         d = ((d >> r) | (d << (32 - r))) & 0xFFFFFFFF
     return addr + 8 + (d if insn.mnemonic[:3] == 'add' else -d)
+
+
+def node_type(im, a, back=0x40):
+    """The item type an opener asks FindNamedItem for.
+
+    Every opener materialises it just before the lookup as `mov r0, #lo`,
+    plus `add r0, r0, #hi` when it does not fit an ARM immediate. The type
+    decides what the item is: 0x104 is a folio and has function vectors
+    behind it, 0x10f is a device and has none.
+    """
+    lo = hi = None
+    for b in range(a - 4, a - back, -4):
+        i = im.insns.get(b)
+        if not i:
+            continue
+        if i.mnemonic == 'add' and i.op_str.startswith('r0, r0, #'):
+            hi = int(i.op_str.split('#')[1], 0)
+        elif i.mnemonic == 'mov' and i.op_str.startswith('r0, #'):
+            lo = int(i.op_str.split('#')[1], 0)
+            break
+    return None if lo is None else lo + (hi or 0)
+
+
+def cstring(im, t, maxlen=24):
+    """The NUL-terminated string at `t`, or None.
+
+    `Image.strings` returns *maximal* runs of printable bytes, so a name
+    whose preceding padding happens to be printable is keyed at the wrong
+    offset and a lookup at the pointer misses it. Both of `p1e`'s unnamed
+    folio opens were that -- `File` behind two printable padding bytes,
+    `mac` behind the tail of an instruction word. A folio name is a C
+    string at the pointer, so read one instead of consulting a run table.
+    """
+    e = im.d.find(b'\0', t, t + maxlen + 1)
+    if e < 0 or e == t:
+        return None
+    s = im.d[t:e].decode('latin1')
+    return s if s.isprintable() else None
 
 
 def thunk_start(im, a, reg):
@@ -107,28 +153,52 @@ def scan(path, show_sites=False):
                 vectors[off] += 1
                 vec_funcs[off].add(im.func_of(a))
 
-    # which folios get opened, and by which helper
+    # Which items get found by name and opened, and by which helper.
+    #
+    # The lookup itself is not the SWI beside it. `FindNamedItem` is SWI
+    # 1:4 and takes a TagArg list, so the C library wraps it in a routine
+    # that builds {TAG_ITEM_NAME, name}, {TAG_END} on the stack -- there are
+    # exactly two such wrappers in each image and every opener calls one.
+    # The SWI in the opener itself, 1:5, takes the Item the wrapper returned
+    # and a null TagArg list: that is `OpenItem`, not the lookup. Anchor on
+    # the call to the wrapper, which is where the type and the name are.
+    finders = {im.func_of(a) for a in im.order
+               if im.insns[a].mnemonic.startswith('svc')
+               and int(im.insns[a].op_str.lstrip('#'), 0) == FIND_NAMED_ITEM}
     opens = []
     opens_at = []
     for a in im.order:
         i = im.insns[a]
         if not i.mnemonic.startswith('svc'):
             continue
-        if int(i.op_str.lstrip('#'), 0) != 0x10005:      # FindNamedItem
+        if int(i.op_str.lstrip('#'), 0) != OPEN_ITEM:
+            continue
+        find = None                                 # the lookup this opens
+        for b in range(a - 4, a - 0x90, -4):
+            j = im.insns.get(b)
+            if j and j.mnemonic == 'bl':
+                try:
+                    t = int(j.op_str.lstrip('#'), 0)
+                except ValueError:
+                    continue
+                if t in finders:
+                    find = b
+                    break
+        if find is None:
             continue
         name = None
-        for b in range(a - 4, a - 0x90, -4):        # nearest preceding literal
+        for b in range(find - 4, find - 0x40, -4):  # nearest preceding literal
             j = im.insns.get(b)
             if not j:
                 continue
             t = pcrel_target(j, b)
             if t is None:
                 continue
-            s = next((strings[k] for k in range(t, t + 3) if k in strings), None)
-            if s and s.isprintable() and ' ' not in s and len(s) < 24:
+            s = cstring(im, t)
+            if s and ' ' not in s and len(s) >= 3:
                 name = s
                 break
-        opens.append((im.func_of(a), name))
+        opens.append((im.func_of(a), name, node_type(im, find)))
         opens_at.append((a, im.func_of(a), name))
 
     print("%s\n" % path)
@@ -147,11 +217,16 @@ def scan(path, show_sites=False):
                 print("      fn %-3d x%-4d %s" % (fn, n,
                       ' '.join('%#x' % s for s in sites[:8])))
 
-    print("\nFolios opened by name, via FindNamedItem(0x104, name):")
+    print("\nItems found by name and opened, via FindNamedItem(type, name):")
     openers = {}
-    for f, name in opens:
-        print("  %#08x  %s" % (f, name if name else '(name not literal)'))
-        if name:
+    for f, name, ty in opens:
+        print("  %#08x  %-6s %-8s %s"
+              % (f, '%#x' % ty if ty else '?', NODE.get(ty, ''),
+                 name if name else '(name not literal)'))
+        # Only a folio has function vectors behind it. A device item
+        # has none, so caching its Item as a folio pointer would
+        # attribute vector slots to something that has no table.
+        if name and ty == FOLIO_NODE:
             openers[f] = name
 
     # A folio pointer is cached in a global straight after the lookup:
@@ -162,7 +237,7 @@ def scan(path, show_sites=False):
     ptr_global = {}
     store = re.compile(r'^r0, \[(\w+)(?:, #(\d+))?\]!?$')
     for a, f, name in opens_at:
-        if not name:
+        if f not in openers:
             continue
         for b in range(a + 4, a + 0x60, 4):
             i = im.insns.get(b)

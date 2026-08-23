@@ -140,6 +140,12 @@ The encounter executable is two thirds the main one. The film player is nearly
 three quarters. `StorageTuner`'s 54 are the library, and they are most of the
 61 proved above.
 
+`SpeechSubroutine`'s 90 unmatched functions have since been opened, and they
+were the game's own after all: the DOA conversation menu and a letter-to-sound
+engine for lip sync. See [16-speech-and-doa.md](16-speech-and-doa.md). That
+leaves `CinepakSubroutine`'s 120 as the last certainly-Immercenary,
+certainly-unread code on the disc.
+
 ## Using it
 
 ```sh

@@ -562,17 +562,25 @@ def modules(path, outdir=None):
     return out
 
 
-def markers(path):
-    """The DACQ/MTBL seek table: (time, byte offset) pairs."""
+def markers(path, show=False):
+    """The DACQ/MTBL seek table: (time, byte offset) pairs.
+
+    A generator, so a caller that wants to check a seek against the table --
+    `speech.py --slots` does -- gets the pairs rather than a printout.
+    """
     d = open(path, 'rb').read()
     bs = struct.unpack_from('>I', d, 0x18)[0] if d[:4] == b'SHDR' else 0x20000
     for c in chunks(d, bs):
         if c.tag == b'DACQ' and c.sub == b'MTBL':
             n = (c.size - 0x14) // 8
             v = struct.unpack_from('>%dI' % (n * 2), c.body, 0x14)
-            print(f'  MTBL, {n} markers')
+            if show:
+                print(f'  MTBL, {n} markers')
             for i in range(n):
-                print(f'    time {v[i * 2]:9d}  offset {v[i * 2 + 1]:#010x}')
+                if show:
+                    print(f'    time {v[i * 2]:9d}  '
+                          f'offset {v[i * 2 + 1]:#010x}')
+                yield v[i * 2], v[i * 2 + 1]
 
 
 def extract(path, outdir=None, wav=None, count=0, step=1, channel=None,
@@ -655,7 +663,8 @@ def main():
         return
     summarise(a.path, a.chunks)
     if a.markers:
-        markers(a.path)
+        for _ in markers(a.path, show=True):
+            pass
     if a.modules is not None:
         modules(a.path, a.modules or None)
     if a.frames or a.wav:

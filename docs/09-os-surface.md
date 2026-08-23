@@ -40,22 +40,25 @@ at *negative* word offsets from the returned pointer. Every call site is a
 | | Sites | Entry points |
 |---|---|---|
 | Direct SWIs | 561 | 42 |
-| Folio vectors | 110 | up to 104 |
-| **Total** | **671** | **~146** |
+| Folio vectors | 109 | 109 |
+| **Total** | **670** | **151** |
 
 Slot numbers are per folio, so a folio vector entry point is a *(folio, slot)*
-pair. 76 of the 110 sites resolve to a named folio:
+pair, and every one of them is attributed:
 
-| folio | slots |
-|---|---|
-| audio | 46 |
-| Graphics | 22 |
-| Operamath | 8 |
-| unattributed (File, timer, SPORT, mac) | 28 |
+| folio | slots in `p` | slots in `p1e` |
+|---|---|---|
+| audio | 46 | 46 |
+| Kernel | 23 | 23 |
+| Graphics | 22 | 23 |
+| File | 10 | 4 |
+| Operamath | 8 | 8 |
+| **total** | **109** | **104** |
 
-`p1e`, the second executable, uses 435 + 105 sites and the same folio split —
-22 Graphics slots become 23, everything else is identical. The two binaries
-share a runtime.
+`p1e`, the second executable, uses 435 SWI sites and 104 vector sites, and the
+same split: one more Graphics slot, six fewer File slots — the encounter
+executable loads less — and everything else identical. The two binaries share
+a runtime.
 
 Attribution is mechanical: each opener caches its folio pointer in a global
 with a `ldr rN, [pc, #imm]` / `str r0, [rN, #d]` pair, and every wrapper reads
@@ -77,24 +80,70 @@ only follows `bl` targets loses the whole renderer.
 
 ### Folios opened by name
 
-All through `FindNamedItem(0x104, name)` — `0x104` being `MKNODEID(kernel,
-folio)` — each wrapped in a helper that caches the pointer:
+Each is wrapped in a helper that finds the item by name, opens it, and caches
+the result. **The node type is part of the answer**, and reading it splits the
+list in two: `0x104` is `MKNODEID(kernel, folio)` and has a function-vector
+table behind it, `0x10f` is a device and has none.
 
-| helper | folio |
-|---|---|
-| `0x04c098` | `mac` |
-| `0x04cc3c` | `Operamath` |
-| `0x04cdb8` | `audio` |
-| `0x04d664` | `File` |
-| `0x04d718` | `timer` |
-| `0x04d854` | `Graphics` |
-| `0x04d960` | `SPORT` |
+| helper (`p`) | helper (`p1e`) | type | | name |
+|---|---|---|---|---|
+| `0x04cc38` | `0x031df8` | `0x104` | folio | `Operamath` |
+| `0x04cdb4` | `0x031f74` | `0x104` | folio | `audio` |
+| `0x04d660` | `0x0326d0` | `0x104` | folio | `File` |
+| `0x04d850` | `0x032a4c` | `0x104` | folio | `Graphics` |
+| `0x04c094` | `0x0314f4` | `0x10f` | device | `mac` |
+| `0x04d714` | `0x032784` | `0x10f` | device | `timer` |
+| `0x04d95c` | `0x0328dc` | `0x10f` | device | `SPORT` |
+| `0x04eb88` | `0x033c2c` | `0x10f` | device | `mac` |
 
-The `mac` folio is the Macintosh host file system the 3DO development hardware
-used. It is still opened in the shipping build.
+So **four folios are opened by name**, not seven, and with the Kernel — which
+is never opened, see below — that is five vector tables and no more. `timer`,
+`SPORT` and `mac` are devices reached by message, and the scanner attributes
+no vector slot to any of them, which it now cannot do by construction.
 
-`0x0018a4c` opens them in order and prints a message on each failure, which is
-what names them:
+`mac` is the Macintosh host file system the 3DO development hardware used, and
+it is opened twice, from `0x04c094` and `0x04eb88`. The first is guarded — it
+reads a word at `+0xb4` off a global and gives up if bit 15 is set — but
+neither is compiled out. It is still opened in the shipping build.
+
+Two more names go through the same lookup without being opened as folios, both
+at node type `0x10a`, a message port: `eventbroker` from `0x04dbf4` and
+`ShellMsgPort` from `0x03c208`.
+
+### The lookup is not the SWI beside it
+
+The helper's own SWI is `0x10005`, and reading that as the lookup is what an
+earlier pass here did. It is not. The lookup is a **tag-list** call, so the C
+library wraps it:
+
+```
+0004e628  mov r2, #1
+0004e62c  str r1, [sp, #-0xc]!    ; [sp+4] = the name
+0004e630  str r2, [sp, #-4]!      ; [sp+0] = 1, TAG_ITEM_NAME
+0004e638  str r1, [sp, #8]        ; [sp+8] = 0, TAG_END
+0004e63c  mov r1, sp
+0004e640  svc #0x10004            ; FindNamedItem(type, tags)
+```
+
+`0x04e64c` is the same wrapper with two more tags, `3` and `4` — version and
+revision — from two byte-wide arguments. Between them they are the only two
+`0x10004` sites in the image, and all ten of their callers are lookups.
+
+The opener then does three things in a row, and a port has to do all three:
+
+```
+        item = FindNamedItem(0x104, "Graphics")     ; bl 0x4e628
+        item = OpenItem(item, NULL)                 ; svc #0x10005
+        base = LookupItem(item)                     ; bl 0x5656c
+```
+
+`0x5656c` is itself a Kernel folio vector — slot **−48** — and what it returns
+is the pointer every one of that folio's 109 vector calls dereferences. 27
+call sites, everywhere an Item has to become a pointer. That names a fifth
+vector slot.
+
+`0x0018a4c` calls the openers in order and prints a message on each failure,
+which is the other half of what names them:
 
 ```
 0x18a60  bl 0x4cc38 ; "Operamath returned an error during FindMathFolio!!!"
@@ -107,7 +156,8 @@ what names them:
 
 | SWI | folio:fn | calls | What, and how it is known |
 |---|---|---|---|
-| `0x10005` | 1:5 | 8 | **FindNamedItem(type, name)** — every folio-open helper calls it with `r0 = 0x104` and a name string |
+| `0x10004` | 1:4 | 2 | **FindNamedItem(type, TagArg\*)** — both sites are inside the two C wrappers that build the tag list, `0x04e628` and `0x04e64c` |
+| `0x10005` | 1:5 | 8 | **OpenItem(item, TagArg\*)** — takes the Item the lookup returned and a null tag list; exactly eight sites, one per named item opened |
 | `0x1000e` | 1:14 | 68 | **Debug print** — 42 of the 68 sites put a literal string in `r0` first, including *"Starting to load the world..."* |
 | `0x10015` | 1:21 | 36 | **AllocSignal(0)** — called with `r0 = 0`, results stored and later OR'd |
 | `0x10001` | 1:1 | 64 | **WaitSignal(mask)** — takes the OR of the previously allocated signals |
@@ -145,9 +195,13 @@ that were never folio vectors at all.
 [15-library-and-game.md](15-library-and-game.md) for how the kernel pointer
 was pinned.
 
+`p1e` is closed too, and was the last thing open: its four remaining slots are
+the File folio's, `−4` to `−16`. 40 SWI entry points over 435 sites and 104
+vector slots over 104 sites, nothing left over in either image.
+
 ## Named vector slots
 
-Four of the 76 folio slots are now pinned to a name, each by what the game's
+Five of the 109 folio slots are now pinned to a name, each by what the game's
 own code does with it rather than by guessing at an SDK header.
 
 | Folio | Slot | Wrapper | Name | How it was pinned |
@@ -156,10 +210,22 @@ own code does with it rather than by guessing at an SDK header.
 | Graphics | −160 | `0x04d840` | **DisplayScreen** | see below |
 | Operamath | −8 | `0x04cce8` | **MulSF16** | `0x056c58` and `0x056ea8` are the same routine written twice; one calls this slot where the other calls the open-coded `MulSF16` |
 | Operamath | −28 | `0x04ccd0` | a 16.16 reciprocal | `BuildReciprocalTable` calls it 1,600 times |
+| Kernel | −48 | `0x05656c` | **LookupItem** | every opener passes it the Item `OpenItem` returned and caches what comes back as the folio pointer; 27 call sites, all Item-to-pointer |
 
-### A correction to `swiscan.py`
+### Two corrections to `swiscan.py`
 
-The thin wrappers come in runs of three-instruction thunks, and only the first
+**The name at the pointer.** `Image.strings` returns *maximal* runs of
+printable bytes, so a name whose preceding padding happens to be printable is
+keyed at the wrong offset, and looking it up at the pointer misses it. Both of
+`p1e`'s unnamed opens were that — `File` sits behind two printable pad bytes,
+`mac` behind the tail of an instruction word. A folio name is a C string at the
+pointer, so the scanner reads one instead of consulting a run table. That, plus
+anchoring the scan on the real `FindNamedItem` call rather than the `OpenItem`
+SWI beside it, closed `p1e`'s last four slots: they are the **File** folio,
+`−4` to `−16`, and their wrappers at `0x325f8`–`0x326a4` are the same shape as
+`p`'s, three arguments, two, two and one.
+
+**The thunk runs.** The thin wrappers come in runs of three-instruction thunks, and only the first
 of a run is a `bl` target. `func_of` therefore lumped every later thunk in with
 the one before it, which paired the right slot numbers with the *wrong* wrapper
 addresses — Operamath showed −24 and −20 both at `0x4ccb8`, and Graphics
@@ -197,5 +263,10 @@ work is:
 - **Graphics, no SWIs at all and 22 vector slots.** Small in count and by far
   the largest in effort: this is the CEL engine, as true of any 3DO port.
 - **Operamath, one function.** A single matrix-by-vectors multiply. Trivial.
-- **File, timer, SPORT, mac.** Thin. `SPORT` is the Opera SPORT bus used for
-  fast framebuffer clears and copies; `mac` can be stubbed out entirely.
+- **File, 10 vector slots.** Thin, and `p1e` gets by on four of them.
+- **timer, SPORT, mac — not folios at all.** Devices, with no vector table to
+  implement. `SPORT` is the Opera SPORT bus used for fast framebuffer clears
+  and copies; `mac` can be stubbed out entirely.
+
+`p1e` is closed on the same terms: 435 SWI sites over 40 entry points, 104
+vector sites over 104, nothing unattributed in either image.

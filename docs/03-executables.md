@@ -39,6 +39,7 @@ which words in the image are absolute addresses rather than data.
 | `p1e` | 276,200 | 0x3B690 | 0x6E08 | 0x32644 | 60,379 | 1,125 | ~850–950 |
 | `launchme` | 12,236 | 0x2BD8 | 0x1CC | 0x44C | 2,755 | 91 | ~60 |
 | `Film/CinepakSubroutine` | 86,844 | 0x1427C | 0xC54 | 0x44C | 20,414 | 236 | ~400 |
+| `DOASys/SpeechSubroutine` | 45,964 | 0x904C | 0x14D0 | 0x3D0 | 9,081 | 877 | 230 |
 
 Measured with [`tools/armscan.py`](../tools/armscan.py). Function estimates come
 from `push {…, lr}` prologues plus distinct `BL` targets; treat them as an
@@ -53,6 +54,12 @@ project.
 - **`launchme`** — the 3DO shell entry point. Minimal; loads `p`.
 - **`p`** — the game: overworld, all nine boss encounters, HUD, inventory,
   DOASys, streaming, audio.
+- **`DOASys/SpeechSubroutine`** — not a speech player. It is the DOA
+  conversation menu and the *lip sync*: an English letter-to-sound ruleset,
+  323 rules, that turns each word of dialogue into phonemes and each phoneme
+  into a mouth shape. Read end to end in
+  [16-speech-and-doa.md](16-speech-and-doa.md). 230 functions exactly, not an
+  estimate — the count there comes from `armxref.py`'s call graph.
 - **`p1e`** — the Perfect One final encounter, shipped as a separate
   executable. It re-links a large part of the same engine (identical strings,
   identical loaders) around a different world file (`P1EncWorld.B3D`) and
