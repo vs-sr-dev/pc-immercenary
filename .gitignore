@@ -15,3 +15,6 @@ build/
 __pycache__/
 *.pyc
 .venv/
+png/
+sheets/
+*.png

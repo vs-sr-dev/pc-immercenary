@@ -22,8 +22,19 @@ IFF-style chunked. Observed on every 153,636-byte file:
        u8  colorSpace
        u32 ...
 'PDAT' u32 chunkSize=0x25808
-       320*240 u16 pixels, 3DO RGB555 (bit 15 unused//PLUT select)
+       320*240 u16 pixels, 3DO RGB555
 ```
+
+**The pixels are in 3DO frame-buffer order, not raster order.** The 32-bit word
+at index `(y >> 1) * width + x` holds the even-row pixel in its high half and
+the odd-row pixel in its low half. Reading these files as a plain raster gives a
+recognisable but heavily striped image. De-interleaving:
+
+```python
+pixel(x, y) = u16[((y >> 1) * width + x) * 2 + (y & 1)]
+```
+
+CEL pixel data is *not* stored this way — only these direct frame-buffer dumps.
 
 ### `.anim`, `.cel`, `.mask`, `.glow`, `.bcel`, `.scel`, `.hcel`, `.3cel`, `.cels`
 
@@ -44,10 +55,81 @@ files used as an alpha/additive layer over the matching `.anim`. Characters are
 consistently stored as an `<Name>.<action>.anim` + `.mask` (+ `.glow` for the
 Perfect One) triple.
 
-Decoding CELs means implementing the 3DO CEL engine's pixel formats: 1/2/4/6/8/16
-bits per pixel, packed (RLE-like) or literal, with PLUT indirection and the
-per-cel PIXC blending controls. This is the single largest piece of graphics
-work in the project.
+**Implemented and verified** in [`tools/cel.py`](../tools/cel.py): 449 asset
+files decode to 5,874 PNGs with no failures.
+
+#### CCB chunk (80 bytes)
+
+```
+'CCB ' u32 size = 0x50
+       u32 ccbversion
+       u32 ccb_Flags
+       u32 ccb_NextPtr, ccb_SourcePtr, ccb_PLUTPtr    (zero on disc)
+       i32 ccb_XPos, ccb_YPos
+       i32 ccb_HDX, ccb_HDY, ccb_VDX, ccb_VDY         (12.20 / 16.16 fixed)
+       i32 ccb_HDDX, ccb_HDDY
+       u32 ccb_PIXC                                   blend control
+       u32 ccb_PRE0, ccb_PRE1                         preamble words
+       i32 ccb_Width, ccb_Height
+```
+
+#### Preamble words
+
+| Field | Location | Meaning |
+|---|---|---|
+| `BPP` | `PRE0 & 7` | 1=1, 2=2, 3=4, 4=6, 5=8, 6=16 bits per pixel |
+| `VCNT` | `(PRE0 >> 6) & 0x3FF` | height − 1 |
+| `TLHPCNT` | `PRE1 & 0x7FF` | width − 1 |
+| `WOFFSET10` | `(PRE1 >> 16) & 0x3FF` | words per row − 2, **when bpp ≥ 8** |
+| `WOFFSET8` | `(PRE1 >> 24) & 0xFF` | words per row − 2, **when bpp < 8** |
+
+The moving `WOFFSET` field is the trap: reading it at bits 16–23 for a 4- or
+6-bpp cel yields a stride of 2 words and produces the classic diagonal-stripe
+garbage. Verified against actual `PDAT` sizes across every literal cel on the
+disc.
+
+#### Packing
+
+`ccb_Flags & 0x200` (`CCB_PACKED`) selects RLE data. Each row begins with an
+offset field — 1 byte when bpp < 8, 2 bytes when bpp ≥ 8 — whose value is
+`(32-bit words in this row) − 2`, so the next row starts `(value + 2) * 4` bytes
+later. After it comes an MSB-first bitstream of packets:
+
+```
+2-bit type, then for types 1-3 a 6-bit (count - 1):
+  0  end of line            rest of the row is transparent
+  1  literal                count pixels follow, bpp bits each
+  2  transparent            skip count pixels
+  3  repeat                 one pixel follows, drawn count times
+```
+
+Literal (unpacked) cels are a plain bit-packed raster at the `WOFFSET` stride.
+
+#### Colour and transparency
+
+Coded cels index the PLUT; entries are `u16` RGB555. Pixel value 0 is
+transparent unless `CCB_BGND` (`0x20`) is set. For 6-bpp cels the PLUT holds 32
+entries, so only the low 5 bits index colour — the 6th bit is a blend selector,
+not a palette bit.
+
+#### What the game actually uses
+
+| Encoding | Files |
+|---|---|
+| 6 bpp packed, 32-entry PLUT | 151 |
+| 4 bpp packed, 16-entry PLUT | 136 |
+| 16 bpp packed | 61 |
+| 4 bpp literal, 16-entry PLUT | 24 |
+| 6 bpp literal, 32-entry PLUT | 22 |
+| 2 bpp, 1 bpp, and odd PLUT sizes | ~20 |
+
+#### `.anim` / `.mask` pairs
+
+A character is an `.anim` (the sprite, typically 6 bpp) plus a `.mask` (4 bpp,
+mostly transparent, holding only an anti-aliased outline with
+`PIXC = 0xc301c381`). The mask is the translucent rim light drawn over the
+sprite — it is not an alpha channel, and it decodes to a hollow silhouette by
+design.
 
 ### `.strm` and the `Stream/` files — 3DO DataStream
 
