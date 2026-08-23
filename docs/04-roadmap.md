@@ -51,6 +51,18 @@ The decisive argument for C: the game is only 88,000 instructions, and an ARM6
 interpreter is a few thousand lines. The hard part of a 3DO port was never the
 CPU — it is the CEL engine, and all three approaches need it.
 
+## Progress
+
+| Phase | State |
+|---|---|
+| 0 — Tooling and inventory | ✅ done |
+| 1 — Asset decoders | 🟡 CEL, `.anim` and `.img` decode; fonts, streams and audio pending |
+| 2 — B3D world format | 🟡 container solved, see [05-b3d-format.md](05-b3d-format.md) |
+| 3 — Code map | ⬜ not started |
+| 4 — Runtime | ⬜ not started |
+| 5 — Native systems | ⬜ not started |
+| 6 — Beyond parity | ⬜ not started |
+
 ## Phases
 
 ### Phase 0 — Tooling and inventory ✅ done
@@ -110,9 +122,15 @@ save states, and ports to other platforms.
 
 ## Immediate next steps
 
-1. Write the CEL decoder — it unlocks the most content per unit of work.
-2. Crack the B3D header and the quad index.
-3. Set up a disassembly project for `p` with the relocation list applied and the
+1. Disassemble the world loader in `p` and read the section C record lengths out
+   of the code — the remaining B3D question is a code question now, not a data
+   one.
+2. Recover the numeric object-ID table that maps placement records to
+   `Perfect/Objects/*.anim` (the executable carries *"Unrecognized anim ID %d!"*).
+3. Decode the second `.B3D` family used by Chameleon, Medusa and Riberto.
+4. Render the overworld: buildings from section B, objects from section C,
+   checked against the known-good coordinates in `PerfectLocation.Init`.
+5. Set up a disassembly project for `p` with the relocation list applied and the
    debug strings mapped to their referencing functions.
 
 ## Open questions
