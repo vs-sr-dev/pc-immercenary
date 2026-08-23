@@ -15,8 +15,8 @@ only shipping build is the 3DO ARM6 executable on the retail CD.
 
 | Path | Contents |
 |---|---|
-| `tools/` | Opera (3DO) filesystem reader, CEL/anim decoder, CEL bank reader, B3D world parser, OBJ exporter, textured software renderer, ARM cross-referencer |
-| `docs/` | Findings: disc layout, file formats, executables, roadmap, B3D format, code map, CEL banks, the ground |
+| `tools/` | Opera (3DO) filesystem reader, CEL/anim decoder, CEL bank reader, B3D world parser, ground tile map reader, OBJ exporter, textured software renderer, ARM cross-referencer, OS-surface scanner |
+| `docs/` | Findings: disc layout, file formats, executables, roadmap, B3D format, code map, CEL banks, the ground, the OS surface |
 
 ## Quick start
 
@@ -42,6 +42,10 @@ python tools/b3dmap.py extracted/Perfect/CondensedPerfectWorld.B3D worldmap.png 
 # Cross-reference the executable: which code uses which string?
 python tools/armxref.py extracted/p -s 'load the world'
 python tools/armxref.py extracted/p -d 13e4c -n 60
+python tools/armxref.py extracted/p -a 89680
+
+# What of the 3DO OS does the game actually touch?
+python tools/swiscan.py extracted/p
 ```
 
 ## Status
@@ -64,8 +68,11 @@ Early, but moving. Nothing is playable yet.
   textured perspective view with walls and ground — all from the disc, with no
   ARM emulation.
 - The executable is being mapped: the world loader, the record parser and all
-  seven of its sub-handlers, the CEL bank loader, the object id table and the
-  world globals are identified.
+  seven of its sub-handlers, the CEL bank loader, the floor renderer, the object
+  id table and the world globals are identified.
+- **The OS surface is enumerated**: 90 entry points — 42 direct SWIs and 48
+  folio function vectors — across the Kernel, Graphics, audio, File, timer,
+  SPORT and Operamath folios. That is the exact set a port must implement.
 
 See [docs/04-roadmap.md](docs/04-roadmap.md).
 

@@ -30,6 +30,7 @@ every reference beyond 255 bytes.
 | `0x00fe30` | **DrawFloor** — the 16 x 16 ground patch around the camera | reads the tile map at `0x58bd4` |
 | `0x013e4c` | **LoadWorld** — loads and indexes `CondensedPerfectWorld.B3D` | *"Starting to load the world..."* |
 | `0x015c08` | LoadStaticObjects | *"Loaded static objects ..."* |
+| `0x0018a4c` | **OpenAllFolios** — math, graphics, audio, event broker | its four failure messages |
 | `0x01cc58` | LoadCelGroup(name, out, count) | splits a chunked cel file |
 | `0x036ca8` | LoadWorldCels — opens `PerfectWorld.Cels` | *"$Perfect/PerfectWorld.Cels"* |
 | `0x037dd8` | **ObjectAnimById** — id to `.anim` dispatcher | *"Unrecognized anim ID %d!"* |
@@ -49,9 +50,16 @@ every reference beyond 255 bytes.
 | `0x03e0ec` | second encounter loader variant | same globals as `0x03d430` |
 | `0x04b72c` | LoadAnim(name, flags) | called by every id handler |
 | `0x04b7cc` | LoadFile(name, &size, flags) | called by both B3D loaders |
-| `0x04d438` | virtual-call thunk, slot −4, two arguments | `ldr pc, [r2, #-4]` |
-| `0x04d46c` | virtual-call thunk, slot −8, three arguments | `ldr pc, [r3, #-8]` |
-| `0x04d660` | dispatch-table fetch used by both thunks | |
+| `0x04c098` | OpenMacFolio | `FindNamedItem(0x104, "mac")` |
+| `0x04cc38` | OpenMathFolio | *"Operamath returned an error…"* |
+| `0x04cdb8` | OpenAudioFolio | `FindNamedItem(0x104, "audio")` |
+| `0x04d438` | File folio call, slot −4, two arguments | `ldr pc, [r2, #-4]` |
+| `0x04d46c` | File folio call, slot −8, three arguments | `ldr pc, [r3, #-8]` |
+| `0x04d660` | **OpenFileFolio** — used by both stubs above | `FindNamedItem(0x104, "File")` |
+| `0x04d718` | OpenTimerFolio | `FindNamedItem(0x104, "timer")` |
+| `0x04d850` | OpenGraphicsFolio | *"unable to open GraphicsFolio!"* |
+| `0x04d960` | OpenSportFolio | `FindNamedItem(0x104, "SPORT")` |
+| `0x04e274` | printf | varargs, formats through `0x4ef5c` |
 | `0x04e348` | memcpy(dst, src, n) | ubiquitous |
 | `0x04e488` | the 32-bit RNG `RandomBelow` draws from | |
 
@@ -144,13 +152,17 @@ So runtime object records are **44 bytes**, one per object id — next to the
 43-byte on-disc placement record, which suggests the disc record is loaded
 almost verbatim.
 
-## C++ in the image
+## Folio calls, not `bl` targets
 
-`0x4d438` and `0x4d46c` are not functions but **virtual-call thunks**: both call
-`0x4d660` to fetch a dispatch table and then tail-call through a negative slot
-offset. Part of the executable is therefore C++ with vtables, which matters for
-a port — those call sites cannot be named by following a `bl` target, and a
-cross-referencer needs to model the dispatch table to get past them.
+`0x4d438` and `0x4d46c` are not functions of their own but **folio call
+stubs**: both call `0x4d660` to open the **File** folio by name and then
+tail-call through a negative word offset from the folio pointer, which is the
+standard 3DO convention. There are 110 such sites across 48 distinct slots, and
+none of them is reachable by following `bl` targets — which is why the graphics
+folio, the whole CEL engine, is invisible to a naive cross-referencer.
+
+The full accounting is in [09-os-surface.md](09-os-surface.md): 42 direct SWI
+entry points plus 48 folio vector slots, 90 in total.
 
 ## What the record parser tells you about the game
 

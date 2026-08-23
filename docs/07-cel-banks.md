@@ -105,22 +105,21 @@ and the encounter arenas draw from.
 `0x4d46c` and the three globals at `0x58a54`, `0x58a58` and `0x58a5c`, in
 `0x12c4`-byte units.
 
-Both helpers are **virtual-call thunks**, not functions of their own:
+Both helpers are **File folio call stubs**, not functions of their own:
 
 ```
-0004d438  bl  0x4d660            ; fetch the object's dispatch table
+0004d438  bl  0x4d660            ; open the "File" folio, cached
 0004d458  mov r2, r0
-0004d468  ldr pc, [r2, #-4]      ; tail-call slot -4  (this, arg)
+0004d468  ldr pc, [r2, #-4]      ; tail-call folio slot -4  (arg, arg)
 
 0004d46c  bl  0x4d660
-0004d4a4  ldr pc, [r3, #-8]      ; tail-call slot -8  (this, arg, arg)
+0004d4a4  ldr pc, [r3, #-8]      ; tail-call folio slot -8  (arg, arg, arg)
 ```
 
-So a chunk of the executable is C++ with vtables, and the bank is opened as an
-object with a 8 KiB buffer and then read three times into three separate
-destinations — a multi-buffered background loader, which is how a 3DO keeps
-17.8 MiB of texture available off a 2× CD. Resolving `0x4d660` is what turns
-this from a shape into a name.
+So the bank is opened as a file with an 8 KiB buffer and then read three times
+into three separate destinations — a multi-buffered background loader, which is
+how a 3DO keeps 17.8 MiB of texture available off a 2× CD. See
+[09-os-surface.md](09-os-surface.md) for the folio calling convention.
 
 Immediately before it, seven identical `SWI 0x10015` calls with `r0 = 0` store
 their results into `0x58a68` … `0x58f14` and are later OR'd into a single mask —

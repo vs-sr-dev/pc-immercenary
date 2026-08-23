@@ -11,6 +11,12 @@ open-ended research.
   See [docs/08-the-ground.md](docs/08-the-ground.md) and `tools/floor.py`.
 - `armxref.py` gained `-a/--addr`, which finds every instruction that
   materialises a given address. That is what found the floor renderer.
+- The OS surface: 90 entry points, 42 direct SWIs plus 48 folio function
+  vectors. See [docs/09-os-surface.md](docs/09-os-surface.md) and
+  `tools/swiscan.py`.
+- **Correction.** `0x4d438` / `0x4d46c` are not C++ virtual calls, as the last
+  session's notes said. They are 3DO folio call stubs: `0x4d660` opens the
+  `File` folio by name and the negative offsets are folio function vectors.
 
 ## Done in session 2
 
@@ -96,15 +102,15 @@ python tools/armxref.py extracted/p -s 'WallData|AnimData|StaticData'
 
 Worth doing early because it makes everything else cheaper:
 
-- **Resolve `0x4d660`.** Part of `p` is C++ with vtables, and both
-  virtual-call thunks (`0x4d438`, `0x4d46c`) go through it. Until it is
-  modelled, every virtual call site is a dead end for the cross-referencer.
+- **Name the 48 folio vector slots.** `swiscan.py --sites` lists every one
+  with its wrapper. Slot number plus folio identifies a 3DO SDK function
+  exactly, and the graphics folio's slots are the CEL engine — the single
+  largest piece of work in any port.
+- **Name the remaining 36 kernel/audio SWIs.** Six are identified in
+  `docs/09`; the rest have call sites listed and need one context read each.
 - Identify the 3DO Portfolio SDK library code inside `p` (DataStream,
   subscribers, SoundSpooler, EZFlix) and mark it as *not to be reversed*. It is
   a large fraction of the 88,000 instructions.
-- Enumerate the SWI folio calls actually used, by folio and function number.
-  That is the exact OS surface a port has to implement or intercept. The CEL
-  bank loader alone uses seven `SWI 0x10015` calls in a row.
 - Name functions from the debug strings systematically rather than one at a
   time, and emit a symbol file `tools/armxref.py` can consume.
 
