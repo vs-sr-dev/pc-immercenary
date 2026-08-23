@@ -15,8 +15,8 @@ only shipping build is the 3DO ARM6 executable on the retail CD.
 
 | Path | Contents |
 |---|---|
-| `tools/` | Opera (3DO) filesystem reader, CEL/anim decoder, CEL bank reader, B3D world parser, ground tile map reader, OBJ exporter, textured software renderer, font decoder, DataStream demuxer with Cinepak and SDX2 decoders, HUD radar map decoder, ARM cross-referencer and call-graph reader, symbol-file builder, OS-surface scanner, the hand-written ARM math module reimplemented and self-checking |
-| `docs/` | Findings: disc layout, file formats, executables, roadmap, B3D format, code map, CEL banks, the ground, the OS surface, the second B3D family, the fonts, the DataStream, the HUD maps |
+| `tools/` | Opera (3DO) filesystem reader, CEL/anim decoder, CEL bank reader, B3D world parser, ground tile map reader, OBJ exporter, textured software renderer, font decoder, DataStream demuxer with Cinepak and SDX2 decoders, HUD radar map decoder, ARM cross-referencer and call-graph reader, symbol-file builder, OS-surface scanner, DSP instrument reader, the hand-written ARM math module reimplemented and self-checking |
+| `docs/` | Findings: disc layout, file formats, executables, roadmap, B3D format, code map, CEL banks, the ground, the OS surface, the second B3D family, the fonts, the DataStream, the HUD maps, the DSP instruments |
 
 ## Quick start
 
@@ -69,6 +69,10 @@ python tools/strm.py extracted/Perfect/Stream/AllCinepaks.strm -m out/fmod
 # ...and check the frames are the console's own dithered RGB555, not a
 # modern eight-bit decode of the same Cinepak
 python tools/strm.py . --verify-dither extracted/p
+
+# The 64 DSP instruments: the catalogue, and which ones the game names
+python tools/dsp.py extracted/System/Audio/dsp --verify
+python tools/dsp.py extracted/System/Audio/dsp --used extracted/p
 
 # What of the 3DO OS does the game actually touch?
 python tools/swiscan.py extracted/p
@@ -151,6 +155,13 @@ Early, but moving. Nothing is playable yet.
   agreeing with the general routine on 20,000 random quads. Two of the game's
   three multiplies turn out to be deliberately approximate, and their contracts
   are now written down.
+- **Every asset format on the disc is now readable.** The last one was the
+  64 `.dsp` files: plain IFF instruments for the 3DO's DSP, and the stock
+  Portfolio library rather than anything Immercenary wrote. All 64 walk to
+  their last byte — 1,950 DSP code words, 220 knobs, 668 relocations — and the
+  part that matters to a port is that the game names only **21** of them, of
+  which its own code asks for four by name and the audio folio picks the rest
+  to match a sample's format. It also asks for two the disc does not carry.
 - **The OS surface is enumerated**: 671 call sites reaching at most 146 entry
   points — 42 direct SWIs plus the folio function vectors, 46 of them audio,
   22 Graphics, 8 Operamath. That is the exact set a port must implement.

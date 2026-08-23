@@ -33,6 +33,14 @@ open-ended research.
   product, `MapCelFixed`. The shape of a slightly larger engine than shipped.
 - **`swiscan.py` paired slot numbers with the wrong wrapper addresses** for
   four of the 76 slots; runs of three-instruction thunks are now recognised.
+- **The last unread asset format is read**: the 64 `.dsp` instruments. Plain
+  IFF, and the stock 3DO Portfolio library rather than the game's own work.
+  `tools/dsp.py --verify` walks all 64 to the last byte and checks every
+  structural claim — 1,950 code words, 220 knobs, 668 relocations. The game
+  names **21**; its own code asks for four (`mixer4x2`, `directout`,
+  `halfmono8`, `noise`) and the audio folio's chooser at `0x04d160` picks the
+  rest by sample format. Two names it asks for are not on the disc at all.
+  See [docs/14](docs/14-dsp-instruments.md).
 - **The films now decode in the console's own colours.** The colour table is
   built at `0x04f338` off an allocation at `0x04f49c`, and it holds 384 luma
   levels with the chroma bias, the clamp, the cut to RGB555 and an ordered
@@ -40,8 +48,10 @@ open-ended research.
   the V1 path, luma-only on V4. `strm.py` decodes that way by default;
   `--verify-dither` rebuilds the table from the game's own builder and checks
   the decoder against it, 332,863 lookups, clean against `p` and `p1e`. It
-  changes 70% of the bytes of a busy frame, so **`out/fmodpng` and any other
-  frames extracted before this are worth regenerating.**
+  changes 70% of the bytes of a busy frame, so every Cinepak frame extracted
+  before it — `out/i01`, `out/balkan`, `out/ealogo` — was regenerated.
+  `out/fmodpng` and `out/medusa` were not, and did not need to be: those are
+  cels decoded by `celbatch.py`, not video.
 
 ## 1. The interactive viewer  *(closest to a real artefact)*
 
@@ -65,11 +75,8 @@ camera in about 1.5 seconds a frame. What is missing:
 - Real-time interaction means leaving Python for the inner loop, or accepting
   a frame or two a second. Either is fine; the data side is done.
 
-## 2. The last unread asset format
+## 2. Small unread call sites
 
-- **`System/Audio/dsp/*.dsp`** — 64 3DO DSP instruments, the only asset format
-  left. Any port needs them, and the audio folio's 46 vector slots are the
-  other half of that job.
 - `Floor/Highlight.cel` and `Floor/SpirePad.Cel`, loaded at `0x014b4c` and
   `0x03238c` — small overlays drawn on top of the ground. Not a format, just
   unread call sites.
@@ -84,6 +91,18 @@ camera in about 1.5 seconds a frame. What is missing:
   every one with its wrapper, and the addresses are right now: 46 audio, 22
   Graphics, 8 Operamath. Four are named. The Graphics folio's slots are the
   CEL engine — the single largest piece of work in any port.
+- **The DSP instruction set.** `tools/dsp.py` reads everything around the
+  code and not one word of the code itself: 1,950 sixteen-bit instructions
+  across the 64 files, of which a port needs the 21 named instruments'
+  worth. The relocation mask (`0x00020a00` on 519 of 668 sites,
+  `0x00010a00` on 128) says which field of an instruction word takes an
+  address, so it is the natural way in. `directout` is eight words and does
+  almost nothing — start there.
+- **The knob frequency hint.** Two words at `+0x38` of a `DKNB` record,
+  non-zero on exactly fourteen knobs and always an oscillator's `Frequency`:
+  3, or 4 with a second word of 8 on the two `_lfo` variants, or −1 on
+  `pulse_lfo`. It is the hertz-to-phase-increment rule and the files alone do
+  not give it.
 - **Name the remaining kernel/audio SWIs.** Six are identified in
   [docs/09](docs/09-os-surface.md); the rest have call sites listed and need
   one context read each.
@@ -168,6 +187,11 @@ camera in about 1.5 seconds a frame. What is missing:
   turned the Cinepak-style tail of the font decoder inside out for an hour.
   When a decode almost works, re-read the branch senses before re-reading the
   data.
+- **A "last unread format" can turn out not to be the game's.** The 64
+  `.dsp` files are the stock Portfolio instrument library, shipped whole
+  because libraries ship whole. Reading the format was still worth it, but
+  the answer a port needed was *which 21 of them the game names*, not what
+  the other 43 do. Ask which question the format is being read to answer.
 - **A decoder that never computes anything is a lookup table.** When ported
   code reads a table where the reference implementation does arithmetic, the
   table is not just a speed trick: it is where the platform's own quirks got
