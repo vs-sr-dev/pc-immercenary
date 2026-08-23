@@ -117,7 +117,29 @@ what names them:
 The remaining 36 entry points are enumerated by `swiscan.py --sites` with their
 call sites but are not yet named.
 
-## One graphics vector identified
+## Named vector slots
+
+Four of the 76 folio slots are now pinned to a name, each by what the game's
+own code does with it rather than by guessing at an SDK header.
+
+| Folio | Slot | Wrapper | Name | How it was pinned |
+|---|---|---|---|---|
+| Graphics | −4 | `0x04d8f8` | **MapCel** | `MapCel2x2` at `0x05664c` tail-branches here for any cel that is not 2x2, and the module's own full `MapCel` at `0x05795c` — which is read end to end in [06](06-code-map.md) — produces the same eight CCB words |
+| Graphics | −160 | `0x04d840` | **DisplayScreen** | see below |
+| Operamath | −8 | `0x04cce8` | **MulSF16** | `0x056c58` and `0x056ea8` are the same routine written twice; one calls this slot where the other calls the open-coded `MulSF16` |
+| Operamath | −28 | `0x04ccd0` | a 16.16 reciprocal | `BuildReciprocalTable` calls it 1,600 times |
+
+### A correction to `swiscan.py`
+
+The thin wrappers come in runs of three-instruction thunks, and only the first
+of a run is a `bl` target. `func_of` therefore lumped every later thunk in with
+the one before it, which paired the right slot numbers with the *wrong* wrapper
+addresses — Operamath showed −24 and −20 both at `0x4ccb8`, and Graphics
+showed −108 and −92 both at `0x4da64`. `swiscan.py` now recognises the thunk
+shape itself, which moves four wrapper addresses. The slot counts are
+unchanged; the addresses beside them are now right.
+
+## The busiest graphics vector
 
 `0x4d840` — Graphics folio slot −160 — is the busiest of the 22, 52 calls from
 all over the game including the world and floor renderers:

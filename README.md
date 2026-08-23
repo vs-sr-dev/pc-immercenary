@@ -15,7 +15,7 @@ only shipping build is the 3DO ARM6 executable on the retail CD.
 
 | Path | Contents |
 |---|---|
-| `tools/` | Opera (3DO) filesystem reader, CEL/anim decoder, CEL bank reader, B3D world parser, ground tile map reader, OBJ exporter, textured software renderer, font decoder, DataStream demuxer with Cinepak and SDX2 decoders, HUD radar map decoder, ARM cross-referencer and call-graph reader, symbol-file builder, OS-surface scanner |
+| `tools/` | Opera (3DO) filesystem reader, CEL/anim decoder, CEL bank reader, B3D world parser, ground tile map reader, OBJ exporter, textured software renderer, font decoder, DataStream demuxer with Cinepak and SDX2 decoders, HUD radar map decoder, ARM cross-referencer and call-graph reader, symbol-file builder, OS-surface scanner, the hand-written ARM math module reimplemented and self-checking |
 | `docs/` | Findings: disc layout, file formats, executables, roadmap, B3D format, code map, CEL banks, the ground, the OS surface, the second B3D family, the fonts, the DataStream, the HUD maps |
 
 ## Quick start
@@ -68,6 +68,9 @@ python tools/strm.py extracted/Perfect/Stream/AllCinepaks.strm -m out/fmod
 
 # What of the 3DO OS does the game actually touch?
 python tools/swiscan.py extracted/p
+
+# The game's own 3D and CEL math, reimplemented and checked against real maths
+python tools/armmath.py extracted/p --verify
 ```
 
 ## Status
@@ -128,6 +131,18 @@ Early, but moving. Nothing is playable yet.
   choice between the plain and the `NoEncounter` file is made per cell by eight
   rectangles that turn out to be the lieutenants' own patrol rectangles, which
   finally names the render-flag bits.
+- **The hand-written math module is read end to end.** The 5,408-byte
+  assembler object linked past `image_ro_size` is one object linked into both
+  executables, byte-identical apart from fifteen words — six globals, two
+  branches to the Graphics folio's `MapCel`, four to Operamath's multiply and
+  two to the C divide. That is the whole of its external interface. It is not
+  only 3D math: half of it is the Cinepak decoder, and the rest is `Sin`/`Cos`,
+  the projector, the two multiplies and the CEL mapper. `tools/armmath.py` is
+  the Python transcription, and its fourteen checks pass against both `p` and
+  `p1e` — `Sin` to 1.5e-5 of real trigonometry, `MapCel`'s 2x2 fast path
+  agreeing with the general routine on 20,000 random quads. Two of the game's
+  three multiplies turn out to be deliberately approximate, and their contracts
+  are now written down.
 - **The OS surface is enumerated**: 671 call sites reaching at most 146 entry
   points — 42 direct SWIs plus the folio function vectors, 46 of them audio,
   22 Graphics, 8 Operamath. That is the exact set a port must implement.

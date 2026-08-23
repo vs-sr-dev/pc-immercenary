@@ -90,6 +90,12 @@ every reference beyond 255 bytes.
 | `0x04e274` | printf | varargs, formats through `0x4ef5c` |
 | `0x04e348` | memcpy(dst, src, n) | ubiquitous |
 | `0x04e488` | the 32-bit RNG `RandomBelow` draws from | |
+| `0x016014` | **ProjectFace** — projects a face's four corner records and gathers the four rejects into a nibble; `0xf` culls the face | four `ProjectPoint` calls |
+| `0x046774` | **GetCPakCel** — the `FHDR`/`FRME` handler for the DataStream video channel | *"GetCPakCel: Unknown Chunk Type"* |
+| `0x04cce8` | **OperamathMulSF16** — the folio's own 16.16 multiply, slot −8 | `0x56c58` and `0x56ea8` are the same routine, one calling this and one the open-coded `MulSF16` |
+| `0x04d8f8` | **GraphicsMapCel** — the folio's own cel mapper, slot −4 | `MapCel2x2` tail-branches here for any cel that is not 2x2 |
+| `0x04f570` | **CinepakCodebooks** — walks the strips, copies the previous codebook for an inter strip, dispatches chunks `0x20`–`0x23` | calls `0x5704c` |
+| `0x04f6c4` | **CinepakFrame** — walks the strips and dispatches chunks `0x30`–`0x32` | calls the three block renderers |
 
 `LoadEncounterB3D` starts its cursor at **24**, skipping the six header words it
 does not need: every encounter shares the same bounding box and cell size, so it
@@ -99,8 +105,8 @@ confirmation of the header layout.
 ## The assembler module past `image_ro_size`
 
 `p`'s AIF header says the read-only image ends at `0x565ec`. **The code does
-not.** A hand-written ARM module is linked after it and runs to `0x57b0c`,
-where the zero-initialised globals start — 1,350 instructions that a
+not.** A hand-written ARM object is linked after it and runs to `0x57b0c`,
+where the zero-initialised globals start — 1,352 instructions that a
 cross-referencer stopping at `image_ro_size` never sees, and that the rest of
 the executable calls **265 times**.
 
@@ -108,29 +114,179 @@ It is easy to tell apart from the compiler's output: no APCS frame on most of
 it, `push {r4-fp, lr}` / `pop {..., pc}` instead of the `mov ip, sp` prologue,
 and constants kept in registers across whole routines.
 
-`armxref.py` now walks on from `image_ro_size` to the first run of eight zero
+`armxref.py` walks on from `image_ro_size` to the first run of eight zero
 words, which lands on `0x57b0c` for every threshold from 4 to 16.
+
+`tools/armmath.py` is the whole module reimplemented in Python, with a
+`--verify` pass that checks the transcription against independent maths and
+against the module's own duplicated code paths. It runs against either
+executable.
+
+### One object, linked into both executables
+
+`p1e` carries the same 5,408 bytes at `0x3b690`, again immediately past its own
+`image_ro_size`, and the two copies differ in **fifteen words** — nothing else.
+Those fifteen words are the module's entire external interface, which is
+therefore also the list of things a port has to hand it:
+
+| Fifteen words | Where |
+|---|---|
+| seven literal-pool globals, six distinct: `0x08c16c` the reciprocal table, `0x08bb2c` and `0x08b8ec` the two 8.8 horizon tables, `0x058a18` camera height, `0x06bed0` camera position (loaded twice), `0x0594fc` the sine table | `0x056a4c`–`0x056a58`, `0x056e5c`, `0x056ff4`, `0x057048` |
+| two branches to the Graphics folio's own `MapCel` | `0x05665c`, `0x056664` |
+| four calls to Operamath's 16.16 multiply | inside `0x056c58` |
+| two calls to the C library's signed divide at `0x354` | inside `0x0578c4` |
+
+Everything else it needs, it computes.
+
+### Part one: the game's own 3D math, `0x0565ec`–`0x057048`
 
 | Address | What it is | Calls |
 |---|---|---|
-| `0x05664c` | **MapCel2x2** — the `MapCel` fast path when `ccb_Width` and `ccb_Height` are both 2; anything else tail-calls `0x04d8f8` | 2 |
-| `0x0566e0` | **RejectByBounds** — four-component reject: returns 1 as soon as `b[i] > abs(a[i])` | 10 |
-| `0x056738` | **SignCount** — sign count of four words, `-4 .. +4` — all four corners on one side of a plane | 26 |
-| `0x056778` | gathers four indirect vertex pairs into two four-word vectors | 10 |
-| `0x0568a8` | **ProjectPoint** — the reader of the two 8.8 horizon tables | 8 |
-| `0x056a04` | **HorizonY(height, depth)** — `0xa000 - 0.625 * height / depth`, the divide done through the reciprocal table | 42 |
-| `0x056a34` | **MulSF16** — 16.16 multiply | 63 |
-| `0x056d00` | **MulFast** — fixed-point multiply with fast paths when either operand is whole | 14 |
+| `0x0565ec` | **FillWords(dst, value, count)** — word fill unrolled to eight, `-1` if `dst` is not word aligned | dead |
+| `0x05664c` | **MapCel2x2** — `MapCel` for a 2x2 cel with every shift a constant; anything else tail-branches to the Graphics folio's `MapCel`, slot **-4** | 2 |
+| `0x0566e0` | **RejectByBounds** — 1 as soon as `b[i] > abs(a[i])` for any of four components | 10 |
+| `0x056738` | **SignCount** — sign count of four words, `-4 .. +4`; a magnitude of 4 means all four corners are one side of a plane | 26 |
+| `0x056778` | **GatherCorners** — four doubly-indirect vertex pairs into two four-word vectors, ready for `SignCount` | 10 |
+| `0x0567bc` | **TripleProduct** — the 3x3 determinant of three vectors, the third read through a pointer array at `+4` and biased by −6.0, clamped at zero | dead |
+| `0x056848` | `ProjectPoint`'s ground-level tail: the branch that reads the 8.8 horizon tables instead of dividing | — |
+| `0x0568a8` | **ProjectPoint** | 8 |
+| `0x056960` | **ProjectPointFlat** — `ProjectPoint` without the off-axis depth widening | dead |
+| `0x056a04` | **HorizonY(height, depth)** — `0xa000 - 0.625 * height/depth`, the divide done through the reciprocal table | 42 |
+| `0x056a34` | **MulSF16** — 16.16 multiply, five instructions, no folio call | 63 |
+| `0x056a5c` | **UnprojectFace** — walks a face's corner pointers, clears the projected bit on each 3D vertex and on its footprint, returns how many were distinct | dead |
+| `0x056b40` | **BuildMatrix3(ax, ay, az, out)** — three angles to a nine-word 16.16 matrix, through `SinCos` and `MulFast` | dead |
+| `0x056c58` | **TransformFootprints(recs, matrix, n)** — the same routine as `0x056ea8`, but multiplying through Operamath instead | dead |
+| `0x056d00` | **MulFast** — 16.16 multiply for operands in [−1, 1] | 14 |
+| `0x056d50` | **SinCos(angle)** → `(cos, sin)` | 3 |
+| `0x056d74` | **OffsetPoints(pts, dx, dy, n)** — in place, unrolled by four | 2 |
+| `0x056de4` | **OffsetPointsFrom(dst, src, &delta, n)** — the same, out of place | 2 |
+| `0x056e60`, `0x056ea8` | **TransformFootprintsIndexed** and its inner routine, which expects the record base in `r4` from its caller | dead |
+| `0x056f30`, `0x056f78` | the same pair again, taking pointers instead of indices | dead |
 | `0x056ff8` | **Cos(angle)** — `add #0x400000`, then falls into `Sin` | 21 |
-| `0x056ffc` | **Sin(angle)** — quadrant fold, `0x0594fc` table on `angle >> 10`, linear interpolation on the low ten bits | 23 |
-| `0x0578c4` | **CelLogSize** — replaces `ccb_Width`/`ccb_Height` with their base-2 logarithms when both are powers of two | 26 |
-| `0x05795c` | **MapCel** — four corners to `ccb_HDX`/`HDY`/`VDX`/`VDY`/`HDDX`/`HDDY` | 10 |
-| `0x057a24` | the same again for the non-power-of-two case | — |
+| `0x056ffc` | **Sin(angle)** — quadrant fold, then the table at `0x0594fc` | 23 |
 
-Nine more routines in the module are only reached from inside it.
+`Sin` is a 4,097-entry quarter-wave table indexed by `angle >> 10`, with linear
+interpolation on the low ten bits. A full turn is `0x1000000` and entry *i* is
+`round(sin(i·π/8192) · 2**31)`. Reconstructed from the table and compared
+against real trigonometry it is accurate to **1.5 × 10⁻⁵**, about one unit of
+16.16, all the way round the circle, and exact at the four cardinal angles.
 
-This is the game's 3D and CEL math library, which is precisely the part a port
-has to reimplement first.
+`ProjectPoint` takes one 3D vertex record: `+0` a pointer to the camera-relative
+`(depth, lateral)` pair, `+4` the height, `+8` and `+0xc` the projected screen
+`(x, y)` in 8.8, `+0x10` flags with **bit 0 meaning "already projected this
+frame"**. It returns 1 when the depth is at or below 2.0 and the point has to be
+rejected, 0 otherwise. `0x016014` calls it on the four pointers a face keeps at
+`+4 .. +0x10` and gathers the four answers into a nibble: `0xf` rejects the
+face outright. Off-axis points get their depth pushed out by a quarter of the
+excess before the divide — a cheap guard against the reciprocal table running
+off its end.
+
+A point exactly at ground level (`height + cameraHeight == cameraHeight`)
+takes the tail at `0x056848`, which reads a horizon table instead of dividing
+twice. There are two of them and the switch is at depth 36.0: below it the
+144-entry fine table at `0x08b8ec`, indexed by `depth >> 14`, so 0.25 a step
+from 0 to 36.0 with the first eight entries unreachable; above it the
+400-entry coarse table at `0x08bb2c`, indexed by `floor(depth) - 36`, a whole
+unit a step from 36.0 to 436.0. Neither index is bounded above, and neither is
+the reciprocal table's.
+
+**`MulSF16` is not a general multiply.** It splits only the first operand,
+multiplying its low half by the whole of the second in one 32-bit `MUL`, so it
+is exact only while `(a & 0xffff) * |b| < 2**31` — that is, whenever `|b| ≤ 0.5`,
+and above that it can come out exactly 1.0 short. That threshold is not a
+coincidence: the reciprocal table starts at depth 2.0, so its largest entry is
+exactly 0.5, and every projection call site is inside the contract by
+construction. The rotation call sites are not — the camera keeps a raw
+`Sin`/`Cos` at `+0x64`/`+0x68` — so `DrawHUDMap`'s placement can be a world
+unit out, which at two units a pixel is half a pixel.
+
+`MulFast` is stranger still: a zero fraction is taken to mean ±1.0, not "a whole
+number", and the general path replaces the true high half of the product with
+the high halfword of `a ^ b`. Both are sound exactly when the operands lie in
+[−1, 1] — and its one caller is `BuildMatrix3`, whose operands are sines and
+cosines. That is what pins the contract down.
+
+### Part two: the Cinepak decoder, `0x05704c`–`0x0578c0`
+
+More than half the module is not 3D math at all. It is the video decoder, and
+it is reached only from the two C wrappers `0x04f570` and `0x04f6c4`, which are
+in turn reached only from `GetCPakCel` at `0x046774` and `0x04694c` — the
+`FHDR`/`FRME` handler for the DataStream video channel described in
+[12-datastream.md](12-datastream.md).
+
+| Address | What it is | Chunk |
+|---|---|---|
+| `0x05704c` | **CinepakCodebook** — decodes a codebook chunk straight to RGB555 | `0x20`–`0x23` |
+| `0x057574` | **CinepakBlocks** — one bit a block: V4 or V1 | `0x30` |
+| `0x05769c` | **CinepakBlocksInter** — one bit "changed", then one bit V4 or V1 | `0x31` |
+| `0x057824` | **CinepakBlocksV1** — every block V1, no flag stream | `0x32` |
+
+The strip context is `0xc + strip * 0x2800` bytes into the object at `[movie +
+0x38]`: the **V4 codebook at `+0`, 256 entries of 8 bytes**, and the **V1
+codebook at `+0x800`, 256 entries of 32 bytes** — that is, the V1 codebook is
+pre-expanded from four luma samples to the full sixteen pixels, so the renderer
+is nothing but `ldm`/`stm`. An inter-coded strip copies the previous strip's
+whole `0x2800` forward first (`0x04f554`).
+
+Two things a straightforward Cinepak decoder does not do:
+
+- **The luma is dithered.** The four pixels of a codebook entry are looked up
+  at luma index `Y + 0`, `Y + 6`, `Y + 4`, `Y + 2` — a 2×2 ordered dither
+  applied before the colour table, which is the only difference between the
+  four lookups. Nothing else varies.
+- **Chroma is a table offset, not arithmetic.** The colour table at `[ctx + 8]`
+  is indexed by luma and *biased* by the chroma: `+2V` entries for red, `+2U`
+  for blue, `−(V + U/2)` for green, which is Cinepak's YUV→RGB with the clamp
+  already baked in. The table itself is built outside this module and is not
+  read here.
+
+The output pairs pixels **vertically**, not horizontally: word 0 holds the left
+column of a 2×2 and word 1 the right, and the renderer keeps two write pointers
+half a scanline apart. That is the 3DO frame buffer's own interleave.
+
+### Part three: the CEL mapper, `0x0578c4`–`0x057b0c`
+
+| Address | What it is | Calls |
+|---|---|---|
+| `0x0578c4` | **CelLogSize** | 26 |
+| `0x05795c` | **MapCel** — four integer corners to the CCB's eight mapping words | 10 |
+| `0x057a24` | **MapCelFixed** — the same taking 16.16 corners | dead |
+
+`CelLogSize` overwrites `ccb_Width` and `ccb_Height` in place. If both are
+powers of two it stores their base-2 logarithms; otherwise it stores
+`-(0x10000/w)` and `+(0x10000/h)`. **The sign of the first word is the flag**,
+so the CCB carries its own division method and `MapCel` needs no extra state:
+non-negative and it divides by shifting, negative and it divides by multiplying.
+
+`MapCel` then takes `(x0,y0, x1,y1, x2,y2, x3,y3)` clockwise from the top left —
+the same order the SDK's own `MapCel` takes — and writes
+
+```
+XPos = x0 << 16                    YPos = y0 << 16
+HDX  = ((x1-x0) << 20) / w         HDY  = ((y1-y0) << 20) / w
+VDX  = ((x3-x0) << 16) / h         VDY  = ((y3-y0) << 16) / h
+HDDX = (((x2-x3)-(x1-x0)) << 20) / (w*h)     HDDY = likewise
+```
+
+which is the whole of the 3DO's affine-plus-one-second-difference cel mapping.
+The shift path forms `delta << 20` in a 32-bit register, so it holds only while
+every corner-to-corner difference stays under **2048** — six screen widths, and
+the corners are screen coordinates.
+
+`MapCel2x2` is the same eight words with `w = h = 2` folded into the shifts, and
+it agrees with the general routine on every one of 20,000 random screen-sized
+quads, save the half pixel it adds to `XPos`/`YPos` and the general routine does
+not. That agreement is the cross-check that the reading of both is right.
+
+### Ten routines that are dead in both executables
+
+The dead set is *identical* in `p` and `p1e`, which is what one expects from a
+single hand-written object linked whole because some of its routines are used:
+`FillWords`, `TripleProduct`, `ProjectPointFlat`, `UnprojectFace`,
+`BuildMatrix3`, `TransformFootprints`, the two indexed/pointer transform pairs,
+and `MapCelFixed`. They are the shape of a slightly larger engine than the one
+that shipped — a general Euler-angle matrix builder and a footprint transformer
+that the released game does in C instead.
 
 ## Known globals
 

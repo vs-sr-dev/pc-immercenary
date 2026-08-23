@@ -3,29 +3,36 @@
 Everything below has a concrete starting address or file. Nothing here is
 open-ended research.
 
-## Done in session 5
+## Done in session 6
 
-- **The HUD radar, the last unread asset format.** The six `.Maps` files are
-  256 raw CEL tiles each, one per world grid cell: 256 x 256 at 2 bpp and two
-  world units a pixel up close, 160 x 160 at 1 bpp and eight further out, both
-  drawn at the same screen scale, which is why every far tile is blank over
-  exactly the square the near map covers. Verified twice — overlapping tiles
-  agree 99.99%, and 99.86% of the world file's 94,581 wall pixels land on a
-  non-open map pixel. See [docs/13](docs/13-hud-maps.md) and `tools/hudmap.py`.
-- **The eight territories that choose between the plain and the `NoEncounter`
-  file are the lieutenants' patrol rectangles**, so the render-flag bit is the
-  mover index minus three, from the HUD side as well as from `0xb760`.
-- **Render-flag bits 12-23 are the weapon inventory**, one bit per weapon type,
-  set by `PickUpWeapon` at `0x043d0c`. The twelve names are at `0x058fd4`.
-- **The cross-referencer was blind twice over.** An APCS function starts at the
-  `mov ip, sp` before its `push`, not at the push — that off-by-four made 1,111
-  of 2,164 functions look unreachable. And the code does not end where the AIF
-  header's `image_ro_size` says: a hand-written assembler module runs on to
-  `0x57b0c`, 265 call sites' worth. `armxref.py -c` now prints callers and
-  callees, and `docs/06` has the module's thirteen routines.
-- **`0x8b8ec` and `0x8bb2c` are answered**: one horizon array in two
-  resolutions, read by `ProjectPoint` at `0x0568a8` — the object and character
-  projector, not the ground's.
+- **The assembler module is read end to end**, all 5,408 bytes of it. See
+  [docs/06](docs/06-code-map.md); `tools/armmath.py` is the transcription and
+  `--verify` is fourteen checks that pass against both `p` and `p1e`.
+- **It is one object, linked whole into both executables**, byte-identical bar
+  fifteen words — and those fifteen are its entire external interface: six
+  globals, two branches to the Graphics folio's `MapCel`, four calls to
+  Operamath's multiply, two to the C divide.
+- **Half of it is not 3D math at all**: `0x05704c`–`0x0578c0` is the Cinepak
+  decoder, four routines reached only from `GetCPakCel`. The V1 codebook is
+  pre-expanded to sixteen pixels an entry, chroma is a table bias rather than
+  arithmetic, and **the luma is dithered** — the four pixels of a codebook
+  entry look up at `Y+0`, `Y+6`, `Y+4`, `Y+2`.
+- **`0x04d8f8` is not a function.** It is a folio thunk: Graphics slot **−4**,
+  the SDK's own `MapCel`. Nothing there to reverse — but the module's own
+  reimplementation at `0x05795c` is read, so the algorithm is written down
+  anyway, and the 2x2 fast path agrees with it on 20,000 random quads.
+- **Operamath slot −8 is `MulSF16`**, pinned by `0x056c58` and `0x056ea8`
+  being the same routine written twice, one calling the folio and one the
+  open-coded multiply.
+- **Two of the three multiplies are deliberately approximate.** `MulSF16` is
+  exact only while `|b| ≤ 0.5` — which is exactly the largest reciprocal-table
+  entry, because the table starts at depth 2.0 — and `MulFast` reads a zero
+  fraction as ±1.0. Both contracts are now written down and machine-checked.
+- **Ten routines are dead in both executables**, the same ten in each: a
+  general Euler-angle matrix builder, a footprint transformer, a triple
+  product, `MapCelFixed`. The shape of a slightly larger engine than shipped.
+- **`swiscan.py` paired slot numbers with the wrong wrapper addresses** for
+  four of the 76 slots; runs of three-instruction thunks are now recognised.
 
 ## 1. The interactive viewer  *(closest to a real artefact)*
 
@@ -44,7 +51,8 @@ camera in about 1.5 seconds a frame. What is missing:
   they agree with the geometry to within a pixel.
 - **The radar.** `tools/hudmap.py` gives the tile, the world-to-pixel
   transform and the rotation the CCB applies. A viewer can draw the real HUD
-  map with no further reversing.
+  map with no further reversing. `tools/armmath.py` now gives the exact
+  `Sin`/`Cos`/`MulSF16` the game rotates it with, half-pixel slip included.
 - Real-time interaction means leaving Python for the inner loop, or accepting
   a frame or two a second. Either is fine; the data side is done.
 
@@ -61,20 +69,27 @@ camera in about 1.5 seconds a frame. What is missing:
 - `Perfect/Music/*.music` needs no work — it is plain uncompressed AIFF, mono
   16-bit at 44.1 kHz.
 
-## 3. Code map, wider  *(the call graph is new, use it)*
+## 3. Cinepak, exactly  *(new, and cheap)*
 
-- **Read the rest of the assembler module.** Thirteen of its routines are named
-  in [docs/06](docs/06-code-map.md); nine more are only reached from inside it
-  and none of them is read. This is the game's 3D and CEL math library and a
-  port reimplements it first, so it is worth finishing properly. Start at
-  `0x05704c`, `0x057574`, `0x05769c` and `0x057824`, the four one-call-site
-  entry points.
-- **`0x04d8f8`**, the general `MapCel` the 2x2 fast path falls back to.
-- **Name the 76 folio vector slots.** `swiscan.py --sites` lists every one with
-  its wrapper: 46 audio, 22 Graphics, 8 Operamath. Slot number plus folio
-  identifies a 3DO SDK function exactly, and the Graphics folio's slots are the
-  CEL engine — the single largest piece of work in any port. Operamath slot
-  **-28 is a 16.16 reciprocal**.
+`tools/strm.py` already decodes the films. What it does not reproduce is the
+console's own pixels, because the game's decoder dithers the luma and looks
+its colours up in a prebuilt table.
+
+- **Find who builds the colour table at `[ctx + 8]`.** It is not in the
+  module and not obviously in `p`; the codebook builder reads it with a
+  4-byte stride at `+0x3100` and a 32-byte stride at `+0x800`, biased by
+  `+2V` for red, `+2U` for blue and `−(V + U/2)` for green. `[ctx]` itself
+  comes from `[movie + 0x38]`, set somewhere around `0x046774` / `0x04694c`.
+- Then **add the 2×2 luma dither to `strm.py`** and compare a frame against
+  the current output. If it is visible, every PNG in `out/fmodpng` is
+  slightly wrong and worth regenerating.
+
+## 4. Code map, wider  *(the call graph is new, use it)*
+
+- **Name the remaining 72 folio vector slots.** `swiscan.py --sites` lists
+  every one with its wrapper, and the addresses are right now: 46 audio, 22
+  Graphics, 8 Operamath. Four are named. The Graphics folio's slots are the
+  CEL engine — the single largest piece of work in any port.
 - **Name the remaining kernel/audio SWIs.** Six are identified in
   [docs/09](docs/09-os-surface.md); the rest have call sites listed and need
   one context read each.
@@ -84,7 +99,9 @@ camera in about 1.5 seconds a frame. What is missing:
   `FMOData` subscriber implementations at `0x2c5b4`, `0x2e0e8`, `0x2f940`,
   `0x31488` and `0x3443c` use the same words. Reachability from a hand-checked
   seed set is the way to do it properly — and now that `bl` targets resolve,
-  reachability is a five-line script.
+  reachability is a five-line script. The Cinepak routines are a worked
+  example of the trap: they *look* like game code because `GetCPakCel` is,
+  but the decoder itself is library.
 - **356 functions still have no direct caller.** Some are entry points and some
   are called through tables; a pass over them would find the dispatch
   mechanism, which is the last blind spot in the call graph. `SetHUDPixel` at
@@ -92,9 +109,10 @@ camera in about 1.5 seconds a frame. What is missing:
 - Feed named functions back into `docs/06-code-map.md`, not into the symbol
   file: `tools/symbols.py` reads the doc, so the doc stays the authority. Put
   the **name first** in the description column, or the harvester takes the
-  leading word as the name.
+  leading word as the name — and keep the description in the **second**
+  column, or it is not harvested at all.
 
-## 4. Loose ends worth an hour each
+## 5. Loose ends worth an hour each
 
 - **`0x89f40`'s runtime fields.** `PerfectMovers` fills bits 24-31 of the word
   at `+0x20` and the bytes at `+0x1c`-`+0x1f`; `0xb784` reads bits 13-20 of the
@@ -104,11 +122,20 @@ camera in about 1.5 seconds a frame. What is missing:
   and `0x0438c8` clears bit 0 of it first. How many slots there are, and what
   the other bits of `[0x89d40 + 0xf4 + slot*4]` hold, is two reads away.
 - **`p1e`.** The encounter executable has never been walked. It shares the
-  world format and the `.Maps` format — `P1ENearHUD.Maps` stitches at 100.00%
-  — and should be a cheap cross-check on anything uncertain in `p`.
+  world format, the `.Maps` format and — now proven byte for byte — the whole
+  math module, so it should be a cheap cross-check on anything uncertain
+  in `p`.
 - **The far horizon table overruns the reciprocal table** for depths above
-  402.0. Harmless in the ground lattice; check whether `ProjectPoint` can
-  reach it.
+  402.0. Harmless in the ground lattice — but `ProjectPoint` *can* reach it.
+  It rejects depth at or below 2.0 and then indexes `0x08c16c` by
+  `(depth - 2.0) >> 14` with **no upper bound at all**, so anything past 401.75
+  reads whatever sits at `0x08da6c`. Its ground-level tail is bounded no
+  better: it switches at depth 36.0 between the 144-entry fine table at
+  `0x08b8ec` (2.0–38.0 in 0.25 steps) and the 400-entry coarse one at
+  `0x08bb2c` (36.0–436.0 in whole units), and past 436.0 walks straight into
+  the reciprocal table. The open question is whether the per-cell cull ever
+  hands it a point that far away — the overworld is 512 units across, so it
+  is not obviously impossible.
 
 ## Notes to self
 
@@ -121,10 +148,18 @@ camera in about 1.5 seconds a frame. What is missing:
 - A literal pool word decodes as an instruction under a linear sweep, and one
   starting `0x?B` looks like a `BL` to nowhere. Filter targets by the code
   range or the call graph fills with ghosts.
+- **A three-instruction `ldr`/`ldr`/`ldr pc` run is a folio thunk, not part of
+  the function before it.** Neither `func_of` nor a `bl`-target scan sees the
+  second and later thunks of a run, and `0x04d8f8` — the "general `MapCel`"
+  that looked like an unread function for two sessions — is one of them.
+- **A hand-written routine may use a register the caller left set.**
+  `0x056ea8` reads `r4` before writing it; only `0x056e60` can call it. A
+  cross-referencer will happily list it as a function.
 - The Opera FS gotcha: multi-block directories use consecutive LBAs, and
   `next`/`prev` in the block header are indices inside the extent, not LBAs.
 - `.img` files are frame-buffer dumps, not rasters. De-interleave before
-  looking at them.
+  looking at them — and the Cinepak renderer shows why: it pairs pixels
+  *vertically* in a word, two write pointers half a scanline apart.
 - The CEL `WOFFSET` field moves with bit depth: bits 16-25 at bpp >= 8, bits
   24-31 below.
 - **CEL pixel data is MSB first.** The `.Maps` read the right way round give a
@@ -139,3 +174,8 @@ camera in about 1.5 seconds a frame. What is missing:
   turned the Cinepak-style tail of the font decoder inside out for an hour.
   When a decode almost works, re-read the branch senses before re-reading the
   data.
+- **A fixed-point routine can be deliberately wrong.** Do not assume a
+  multiply is a multiply: check where its intermediate overflows, then check
+  whether every call site stays inside that bound. Twice in this module the
+  bound turned out to be a design decision — the reciprocal table's floor of
+  2.0 is what makes `MulSF16` exact.

@@ -41,6 +41,31 @@ def pcrel_target(insn, addr):
     return addr + 8 + (d if insn.mnemonic[:3] == 'add' else -d)
 
 
+def thunk_start(im, a, reg):
+    """Where the bare three-instruction folio thunk ending at `a` begins.
+
+    The library wrappers come in runs:
+
+        ldr rN, [pc, #imm]      ; the cached folio pointer
+        ldr rN, [rN]
+        ldr pc, [rN, #-slot]
+
+    Only the first of a run is a BL target or has a prologue, so `func_of`
+    lumps every later thunk in with the one before it -- which pairs the
+    right slot numbers with the wrong wrapper addresses.  Recognise the shape
+    instead.  Returns None if this tail call is inside a real function.
+    """
+    one, two = im.insns.get(a - 8), im.insns.get(a - 4)
+    if not one or not two:
+        return None
+    if not (one.mnemonic.startswith('ldr') and two.mnemonic.startswith('ldr')):
+        return None
+    m = LITPOOL.match(one.op_str)
+    if not m or m.group(1) != reg:
+        return None
+    return a - 8 if two.op_str == '%s, [%s]' % (reg, reg) else None
+
+
 def pool_values(im, start, end):
     """Every literal-pool value an instruction in [start, end) loads."""
     out = []
@@ -170,7 +195,7 @@ def scan(path, show_sites=False):
         if not m:
             continue
         off = int(m.group(2), 0)
-        f = im.func_of(a) or a
+        f = thunk_start(im, a, m.group(1)) or im.func_of(a) or a
         folio = None
         for b in range(f, a, 4):                  # opened inline?
             j = im.insns.get(b)
