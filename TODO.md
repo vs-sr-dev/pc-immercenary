@@ -41,6 +41,28 @@ open-ended research.
   11 lines and the stream holds 9 slots; lines 9 and 10 — *"hex dear hex the
   one we all search for and never find"* and *"where owhere Iask you do you
   havean ounce to spare"* — survived the marks and not the voice track.
+- **The whole DOA conversation tree is decoded**, and it closes to the byte.
+  `0x9480` is 22 rows of 25 subjects by 2 questions; a subject's two bytes are
+  always consecutive (185 pairs, no exceptions), so the code adds the question
+  index rather than reading the second. A row is a head *and a coin flip*
+  drawn at the top of the conversation, and the flip doubles as the `+1` that
+  skips the second variant's greeting:
+  `line = answers[variant + 2*id][subject] + base + variant + question`.
+  Under that rule **every recording of six of the seven speakers is reached
+  exactly once**, no gaps, no overlaps. `tools/speech.py --doa` prints the
+  tree; `--verify` is 31 checks now.
+- **A character id is not a speaker index**, and the code reconciles the two
+  spaces by hand. Ids 0-5 are the six generic heads; ids 6-15 are the ten
+  bosses in the film-table order, of which only Riberto (11) has a face and a
+  voice — and he is speaker 6, so `0x19e4` rewrites 11 to 6 going in and
+  `0x1b0c` rewrites 6 back to 11 for the menu. The row that falls out of the
+  collision, row 12 (boss id 6), is the only unreachable row *and* the only
+  empty one. The other nine boss rows hold 4 to 10 answers that no file on the
+  disc can speak.
+- **Picasso has two more orphan recordings**, lines 9 and 10 — *"The silver
+  lady, she is nine, she's our ally, she protects us from Balkan"* and *"Ummm,
+  the residential districts"*. One subject's pair was lifted out of the answer
+  table and the audio left behind.
 - **The shipped data has four small flaws, all harmless and all found by
   checking.** `RGEN` is in the rule table twice and the second entry can
   never fire; `TROUBLE` is out of length order (harmless — nothing earlier is
@@ -208,12 +230,6 @@ camera in about 1.5 seconds a frame. What is missing:
   is left. Its strings are `$Perfect/film/…`, and the film subjects the DOA
   menu asks for — `MedusaFiles`, `TeslaFiles` and eight more — are its input,
   so [docs/16](docs/16-speech-and-doa.md) is the way in.
-- **Who indexes the DOA answer matrix.** `BuildMenu` at `0x21cc` reads a
-  1,100-byte table at `0x9480` as 50-byte rows of 25 two-byte entries, indexed
-  `who + 2 * question`, with `0x63` meaning *no answer*. 22 rows and only
-  seven speakers, so `who` is not a speaker index. One read of `0x21cc`'s
-  callers settles it, and the reward is the whole conversation tree — which
-  character will answer which of the 25 subjects.
 - **The per-face mouth mapping.** A shape number is `0x00`–`0x2a`, 43 of them,
   and no `.aanim` has 43 frames (35, 25, 27, 33, 38, 33, 19). So a table
   stands between them, inside the seven renderers `0x97c` dispatches to:

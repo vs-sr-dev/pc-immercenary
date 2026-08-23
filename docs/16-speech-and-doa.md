@@ -19,14 +19,15 @@ Produced with [`tools/speech.py`](../tools/speech.py).
 
 ```sh
 python tools/speech.py --verify
+python tools/speech.py --doa
 python tools/speech.py --say "why did you come here"
 python tools/speech.py --rules
 python tools/speech.py --script
 python tools/speech.py --slots extracted/Perfect/Stream/SpeechStream
 ```
 
-`--verify` is 21 checks against the image and the seven Marks files. They all
-pass.
+`--verify` is 31 checks against the image, the answer tables and the seven
+Marks files. They all pass.
 
 ## The program
 
@@ -66,35 +67,104 @@ STUNYA  PUSHYA  HEX  ASHFLAY  ANNABALLS  ICE  OFA  CHAFF  SWITCHYA
 BOOMERANG  PEMS  NUKEYA
 ```
 
-`BuildMenu` at `0x21cc` assembles the list you actually see. It walks all 25
-subjects against a 1,100-byte table at `0x9480`, laid out as 50-byte rows of
-25 two-byte entries and indexed `who + 2 * question`; `0x63` — 99 — is the
-sentinel for *this person has nothing to say about that*. What survives is
-appended to a list of (label, line number) pairs, and the list always ends
-with two fixed entries the table has no say over:
+`BuildMenu` at `0x21cc` assembles the list you actually see, out of a
+1,100-byte table at `0x9480`. The table is **22 rows of 50 bytes**, and a row
+is 25 subjects by 2 questions, one byte each — the number of the recording to
+play. `0x63`, 99, means *this person has nothing to say about that*.
+
+Two facts make the rest fall out.
+
+**A subject's two bytes are always consecutive.** 185 live pairs across all
+22 rows, not one exception and not one half-empty pair. So the code never
+reads the second byte: `0x2258` adds the question index to the first one.
+
+**A row is a head and a coin flip**, not a head and a question:
+
+```
+21ec  cmp r0, #6
+21f4  addge r0, r0, #6           ; a boss:  row = id + 6
+21fc  addlt r0, r4, r0, lsl #1   ; a head:  row = variant + 2*id
+```
+
+`0x1abc` draws the coin at the top of the conversation and it does two things
+at once — it picks the row, and it becomes the `+1` that skips the second
+variant's own greeting:
+
+```
+line = answers[row][subject] + base + variant + question
+base = 0                    for variant 0
+     = 0x93e0[id]           for variant 1
+greeting = base + variant
+```
+
+`0x93e0` is six bytes, `20 28 20 14 36 14`, and each is one past the last
+recording the first variant uses.
+
+That model is checkable, and it checks out to the byte: **every recording of
+six of the seven speakers is reached exactly once**, no gaps and no overlaps.
+
+| | lines | reached |
+|---|---|---|
+| Goner | 50 | 50 |
+| Picasso | 60 | 58 |
+| Tork | 56 | 56 |
+| Kilroy | 48 | 48 |
+| Venus | 58 | 58 |
+| David | 48 | 48 |
+| Riberto | 11 | 9 |
+
+The two Picasso lines nothing reaches are lines 9 and 10 — *"The silver lady,
+she is nine, she's our ally, she protects us from Balkan"* and *"Ummm, the
+residential districts"* — a subject's pair lifted out of the table with the
+recordings left behind. Riberto's two are the same pair that has no audio in
+the stream.
+
+And the menu is not the whole table. Before appending anything, `0x222c`
+draws `rand() % 100` and **drops the subject if the draw is under 50**. Plug
+into the same head twice and you get a different list. That is gameplay, not
+presentation.
+
+The list always ends with two entries the table has no say over:
 
 ```
 0x2278  add r2, pc, #18, #30    ; "* NEVER MIND"
 0x2298  add ip, pc, #14, #30    ; "* GOODBYE"
 ```
 
-**A topic that exists is only offered half the time.** Before appending
-anything, `0x222c` draws `rand() % 100` and drops the subject if the draw
-comes up under 50 — unless the question index is 6 or more, where the
-threshold is set to zero and nothing is dropped. So the menu is different
-every time you plug into the same head, which is the effect the game wants and
-a detail a port has to keep.
+### A character id is not a speaker index
 
-> What indexes the 22 rows is the one thing here not pinned. `who` arrives in
-> `r1` from the caller and the arithmetic is `who + 2 * question`, so the rows
-> are not simply per-speaker — there are seven speakers and 22 rows. One read
-> of `0x21cc`'s callers settles it.
+Ids `0`–`5` are the six generic heads and double as speaker indices. Ids
+`6`–`15` are the ten bosses, in the order of the film-name table at `0x93f0`:
+Medusa, Tesla, Balkan, Silva, Fly, **Riberto**, Chameleon, Chance, Loki,
+Raven. Riberto is the only one of the ten with a face and a voice on the
+disc, and he is speaker 6 — so the two numbering spaces collide on 6, and the
+code reconciles them by hand, twice:
 
-Asking *who is* a character plays a film: `0x93e8` holds two NULLs and then
-ten names — `MedusaFiles`, `TeslaFiles`, `BalkanFiles`, `SilvaFiles`,
-`FlyFiles`, `RibertoFiles`, `ChameleonFiles`, `ChanceFiles`, `LokiFiles`,
-`RavenFiles` — which the `$Perfect/Film/` prefix at `0x1fc8` turns into paths
-into the Cinepak stream.
+```
+0019e4  teq r0, #0xb ; moveq r0, #6      ; entering: id 11 -> speaker 6
+001b0c  teq r2, #6   ; moveq r0, #0xb    ; menu:     speaker 6 -> id 11
+```
+
+Which means **row 12 — boss id 6, Medusa — is the one row no caller can
+select. It is also the only empty one.** The other nine boss rows hold 4 to
+10 answers each and there is no `All<Name>Marks` on the disc to speak them.
+
+Asking *who is* a character plays a film instead: the same table of ten names
+at `0x93f0`, indexed `0x93d8 + 4*id`, which the `$Perfect/Film/` prefix at
+`0x1fc8` turns into a path into the Cinepak stream.
+
+```sh
+python tools/speech.py --doa      # the whole tree: question, subject, answer
+```
+
+```
+== Goner, id 0, variant 0 -- row 0, greeting line 0
+   Why did you come here Dont you know whats happening ...
+   WHAT/WHO IS THE GARDEN line  3  Thats what they call the city They shouldve called it the jun gle
+   WHERE IS    THE GARDEN line  4  Theres nothing out side of the Garden If you cross the peri meter you die
+   WHAT/WHO IS TESLA      line  7  He is tenth in the higher archy
+   WHERE IS    TESLA      line  8  The Power Plant in the in dus trial dis trict up north
+```
 
 ## The letter-to-sound rules
 
@@ -281,7 +351,12 @@ An idle, an anticipation, and the word itself.
   articulation classes and the three-step vowel are the whole animation model.
 - **The seek formula is the contract with the stream.** Speaker index times a
   million is not derivable from the Marks files; it only exists in `0x7c8`.
-- **The 50% topic draw** is gameplay, not presentation. Remove it and the DOA
-  system stops feeling like a conversation.
+- **The 50% topic draw and the opening coin flip** are gameplay, not
+  presentation. Between them they are why the same head says different things
+  on a second visit; remove either and the DOA system stops feeling like a
+  conversation.
+- **The answer tables are three small arrays** — 1,100 bytes at `0x9480`, six
+  bytes at `0x93e0`, 25 pointers at `0x941c` — and `--doa` prints the tree
+  they encode. Nothing else is needed to reproduce the conversation.
 - The per-face shape-to-cel mapping is the one piece still unread; it is
   inside the seven renderers above.

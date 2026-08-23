@@ -35,6 +35,23 @@ DOASYS = os.path.join(ROOT, 'extracted', 'Perfect', 'DOASys')
 # into a seek time, so it is what pairs a Marks file with its audio.
 SPEAKERS = ['Goner', 'Picasso', 'Tork', 'Kilroy', 'Venus', 'David', 'Riberto']
 
+# The DOA conversation tables, all read by `BuildMenu` at 0x21cc.
+QUESTIONS = 0x93d4      # 3 char*: WHAT/WHO IS, WHERE IS, GOODBYE
+VARIANT_BASE = 0x93e0   # 6 bytes: where speaker i's second variant starts
+SUBJECTS = 0x941c       # 25 char*: the things you can ask about
+ANSWERS = 0x9480        # 22 rows x 25 subjects x 2 questions, 0x63 = none
+NO_ANSWER = 0x63
+ROWS, SUBJECT_COUNT = 22, 25
+
+# A character id is not a speaker index. Ids 0-5 are the six generic heads
+# and are also speaker indices; ids 6-15 are the ten bosses, in the order of
+# the film-name table at 0x93f0. Only Riberto has a face and a voice, and
+# `0x19c8` reconciles the two spaces by rewriting id 11 to speaker 6 on the
+# way in -- then `0x1b0c` turns speaker 6 back into id 11 for the menu.
+BOSSES = ['Medusa', 'Tesla', 'Balkan', 'Silva', 'Fly',
+          'Riberto', 'Chameleon', 'Chance', 'Loki', 'Raven']
+RIBERTO_ID = 11
+
 
 # --------------------------------------------------------------------------
 # the image
@@ -310,6 +327,39 @@ def marks(path):
     return lines
 
 
+def answer_row(char_id, variant):
+    """0x21ec-0x2214. Which of the 22 rows a conversation reads.
+
+    Two rows per generic head, picked by a coin flip at the top of the
+    conversation, and one row each for the ten bosses -- whose variant is
+    forced to zero by the one caller that can reach them.
+    """
+    return variant + 2 * char_id if char_id < 6 else char_id + 6
+
+
+def menu(im, char_id, variant):
+    """0x21cc, without the dice. Every (question, subject, line) the table
+    offers for one head and one variant.
+
+    The answer byte is the *first* of a pair, and the second is always the
+    first plus one -- 185 pairs, no exceptions -- so `0x2258` gets the second
+    question's line by adding the question index rather than reading it. The
+    line is then offset by where this variant's block of recordings starts.
+    """
+    row = ANSWERS + 50 * answer_row(char_id, variant)
+    base = 0 if variant == 0 else im.d[VARIANT_BASE + char_id]
+    ques = [im.cstr(im.w(QUESTIONS + 4 * i)) for i in range(2)]
+    subj = [im.cstr(im.w(SUBJECTS + 4 * i)) for i in range(SUBJECT_COUNT)]
+    out = []
+    for s in range(SUBJECT_COUNT):
+        a = im.d[row + 2 * s]
+        if a == NO_ANSWER:
+            continue
+        for q in (0, 1):
+            out.append((ques[q], subj[s], a + base + variant + q))
+    return base + variant, out
+
+
 def seek_time(speaker, line):
     """0x7f0-0x814.  Where line `line` of speaker `speaker` starts in
     `SpeechStream`: a million per speaker, ten thousand per line, and the
@@ -356,6 +406,22 @@ def show_script(im):
             words = ' '.join(w for _, w in line)
             print('  %2d @%-9d %s' % (k, seek_time(i, k), words))
             print('       %s' % translate(words, rs))
+
+
+def show_doa(im):
+    """The whole conversation tree, as the tables hold it."""
+    for i, name in enumerate(SPEAKERS):
+        lines = [' '.join(w for _, w in l)
+                 for l in marks(os.path.join(DOASYS, 'All%sMarks' % name))]
+        cid = RIBERTO_ID if name == 'Riberto' else i
+        for v in (0, 1) if cid < 6 else (0,):
+            greet, items = menu(im, cid, v)
+            print('%s== %s, id %d, variant %d -- row %d, greeting line %d'
+                  % (chr(10), name, cid, v, answer_row(cid, v), greet))
+            print('   %s' % lines[greet])
+            for q, s, ln in items:
+                print('   %-11s %-10s line %2d  %s'
+                      % (q, s, ln, lines[ln] if ln < len(lines) else '??'))
 
 
 def show_slots(im, stream):
@@ -449,6 +515,45 @@ def verify(im):
           set(unknown) <= {'Y', 'd', 'n', 'o'},
           'strays: %s' % ' '.join('%s x%d' % (t, toks[t]) for t in unknown))
 
+    print('\nthe DOA answer tables (0x9480, read by 0x21cc)')
+    pairs = odd = half = 0
+    empty = []
+    for r in range(ROWS):
+        row = ANSWERS + 50 * r
+        live = 0
+        for s in range(SUBJECT_COUNT):
+            a, b = im.d[row + 2 * s], im.d[row + 2 * s + 1]
+            if a == NO_ANSWER and b == NO_ANSWER:
+                continue
+            if NO_ANSWER in (a, b):
+                half += 1
+                continue
+            live += 1
+            pairs += 1
+            if b != a + 1:
+                odd += 1
+        if not live:
+            empty.append(r)
+    check('every answer is a pair, and the pair is consecutive',
+          odd == 0 and half == 0,
+          '%d pairs, %d non-consecutive, %d half-empty' % (pairs, odd, half))
+    # 0x1b0c never passes id 6 through: it substitutes Riberto's id 11,
+    # because 6 has already been used as the *speaker* index for Riberto.
+    # So row 12 is the one row the caller cannot select.
+    reach = {answer_row(c, v) for c in range(6) for v in (0, 1)}
+    reach |= {answer_row(c, 0) for c in range(7, 16)}
+    reach.add(answer_row(RIBERTO_ID, 0))
+    check('the one row no caller can select is the one with no answers',
+          empty == sorted(set(range(ROWS)) - reach) == [12],
+          'row %s, which is boss id 6' % ', '.join(str(r) for r in empty))
+    check('each variant base is one past the last line before it',
+          all(im.d[VARIANT_BASE + i] ==
+              max(im.d[ANSWERS + 100 * i + 2 * s]
+                  for s in range(SUBJECT_COUNT)
+                  if im.d[ANSWERS + 100 * i + 2 * s] != NO_ANSWER) + 1
+              for i in range(6)),
+          ' '.join(str(im.d[VARIANT_BASE + i]) for i in range(6)))
+
     print('\nMarks files')
     total_lines = total_words = 0
     for name in SPEAKERS:
@@ -466,6 +571,24 @@ def verify(im):
               '%3d lines, %4d words' % (len(lines), sum(len(l) for l in lines)))
     check('seven speakers', total_lines and len(SPEAKERS) == 7,
           '%d lines, %d words' % (total_lines, total_words))
+
+    print('\nthe conversation against the recordings')
+    for i, name in enumerate(SPEAKERS):
+        n = len(marks(os.path.join(DOASYS, 'All%sMarks' % name)))
+        cid = RIBERTO_ID if name == 'Riberto' else i
+        hit = collections.Counter()
+        for v in (0, 1) if cid < 6 else (0,):
+            greet, items = menu(im, cid, v)
+            hit[greet] += 1
+            for _, _, ln in items:
+                hit[ln] += 1
+        twice = [k for k, c in hit.items() if c > 1]
+        missed = sorted(set(range(n)) - set(hit))
+        check('%-8s every recording is reached exactly once' % name,
+              not twice and (not missed or (name in ('Picasso', 'Riberto')
+                                            and missed == [9, 10])),
+              '%d lines, %d reached%s' %
+              (n, len(hit), ', orphans %s' % missed if missed else ''))
 
     print('\nthe whole script through the translator')
     longest = 0
@@ -512,6 +635,8 @@ def main():
     ap.add_argument('--say', help='translate this text and show the mouth')
     ap.add_argument('--script', action='store_true',
                     help='the whole dialogue, translated')
+    ap.add_argument('--doa', action='store_true',
+                    help='the conversation tree: question, subject, answer')
     ap.add_argument('--marks', help='parse one Marks file')
     ap.add_argument('--slots', help='check the seek times against this stream')
     ap.add_argument('--verify', action='store_true')
@@ -524,6 +649,8 @@ def main():
         show_say(im, a.say)
     elif a.script:
         show_script(im)
+    elif a.doa:
+        show_doa(im)
     elif a.marks:
         for k, line in enumerate(marks(a.marks)):
             print('%2d (%2d) %s' %
