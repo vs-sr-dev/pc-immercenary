@@ -66,6 +66,10 @@ python tools/font.py extracted/Perfect --verify -o sheets/fonts
 python tools/strm.py extracted/Perfect/Film/I01.strm -f out/i01 -w out/i01.wav
 python tools/strm.py extracted/Perfect/Stream/AllCinepaks.strm -m out/fmod
 
+# ...and check the frames are the console's own dithered RGB555, not a
+# modern eight-bit decode of the same Cinepak
+python tools/strm.py . --verify-dither extracted/p
+
 # What of the 3DO OS does the game actually touch?
 python tools/swiscan.py extracted/p
 
@@ -103,9 +107,13 @@ Early, but moving. Nothing is playable yet.
   anti-aliased coverage compressed by a 16-bit token stream that the game's
   blitter dispatches through the ARM condition-code flags. All 851 glyphs
   decode byte-exactly.
-- **The 473 MiB of film opens up.** The `.strm` and `*Files` containers are 3DO
-  DataStreams; video is Cinepak with one constant six-byte quirk, audio is
-  SDX2. And the game's private `FMOD` channel is not gameplay data at all —
+- **The 473 MiB of film opens up, in the console's own colours.** The `.strm`
+  and `*Files` containers are 3DO DataStreams; video is Cinepak with one
+  constant six-byte quirk, audio is SDX2. The game's decoder never computes a
+  colour: it looks every pixel up in a 384-level table that bakes in the
+  chroma bias, the clamp, the cut to RGB555 and **an ordered dither, on a
+  different pattern for each colour component**. Decoding that way instead of
+  the textbook eight-bit conversion changes 70% of the bytes of a busy frame. And the game's private `FMOD` channel is not gameplay data at all —
   it delivers whole cel files down the same pipe, 61 of them in
   `AllCinepaks.strm`, every one reassembling to its declared length.
 - **The second `.B3D` family is decoded too** — all twelve files read to the

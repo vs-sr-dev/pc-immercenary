@@ -174,23 +174,141 @@ def yuv2rgb(y, u, v):
     return (clamp(y + 2 * v), clamp(y - (u >> 1) - v), clamp(y + 2 * u))
 
 
-class Cinepak:
-    """Cinepak decoder producing an RGB byte buffer, `width * height * 3`."""
+# The console did not stop at eight bits a component.  `p`'s Cinepak codebook
+# builder at 0x05704c looks every pixel up in a table that the C side fills at
+# 0x04f338, and that table folds three things together: the chroma bias, a
+# clamp to 0..255, and **an ordered dither**, added to the component before it
+# is cut down to the five bits of a 3DO RGB555 pixel.
+#
+# The dither matrix is the sixteen signed halfwords at 0x4fd24 in `p`: four
+# groups of four, red, green, blue and one the decoder never reads.  The
+# V1 path uses all three groups, so each component is dithered on its own
+# pattern.  The V4 path uses the smaller table at +0x3100, which has no
+# per-component room, so it dithers the luma alone and every component of a
+# pixel shifts together.
+#
+# Positions below are in raster order across the 2x2 a codebook sample covers:
+# top-left, top-right, bottom-left, bottom-right.
+DITHER_V1 = ((0, 7, 5, 2),        # red
+             (1, 6, 4, 3),        # green
+             (6, 1, 3, 4))        # blue
+DITHER_V4 = (0, 6, 4, 2)          # luma, and so all three components together
 
-    def __init__(self, width, height):
+
+def rgb555(y, u, v, dr, dg, db):
+    """One pixel the way the console made it: bias, dither, clamp, five bits.
+
+    Returned back at eight bits a component by the usual bit replication, so
+    a PNG of it looks like the television did.
+    """
+    r = clamp(y + 2 * v + dr) >> 3
+    g = clamp(y - (u >> 1) - v + dg) >> 3
+    b = clamp(y + 2 * u + db) >> 3
+    return ((r << 3) | (r >> 2), (g << 3) | (g >> 2), (b << 3) | (b >> 2))
+
+
+def verify_dither(image_path):
+    """Check `rgb555` against the console's table, rebuilt from the game's own
+    builder rather than from this file's reading of it.
+
+    `0x04f338` fills 384 levels, -64 .. 319: first sixteen dithered halfwords
+    a level at the table's start, then one undithered word a level at
+    `+0x3000`.  `0x05704c` reaches level 0 of the first at `+0x800` and of the
+    second at `+0x3100`, and biases the level by the chroma.  Rebuild both,
+    index them the way the decoder does, and the answers have to match.
+    """
+    d = open(image_path, 'rb').read()
+    # 0x4fd24 in `p`, 0x34dc8 in `p1e`; find it rather than hard-coding either.
+    want = [v for g in DITHER_V1 for v in (g[0], g[2], g[1], g[3])]
+    at = d.find(struct.pack('>16h', *(want + [7, 2, 0, 5])))
+    if at < 0:
+        print('%s: no dither matrix matching DITHER_V1 in this image -- FAIL'
+              % image_path)
+        return 1
+    dith = [struct.unpack_from('>h', d, at + 2 * i)[0] for i in range(16)]
+    print('%s: dither matrix at %#x = %s' % (image_path, at, dith))
+
+    rows = [[clamp(l + dith[k]) >> 3 for k in range(16)] for l in range(-64, 320)]
+    words = [clamp(l) >> 3 for l in range(-64, 320)]
+
+    def e8(v):
+        return (v << 3) | (v >> 2)
+
+    # The decoder's own slot order inside a group is TL, BL, TR, BR; the
+    # tables here are in raster order, so the two disagree on purpose.
+    slot = (0, 2, 1, 3)
+    v4off = (0, 6, 4, 2)
+    bad = n = past = 0
+
+    def look(tbl, level, col=None):
+        """None once the level leaves the 384 the table holds."""
+        nonlocal past
+        if not -64 <= level <= 319:
+            past += 1
+            return None
+        r = tbl[level + 64]
+        return e8(r if col is None else r[col])
+
+    for y in range(0, 256, 3):
+        for u in range(-32, 33, 3):
+            for v in range(-32, 33, 3):
+                for p in range(4):
+                    s = slot[p]
+                    for tbl, off, want_dither, cols in (
+                            (rows, 0, DITHER_V1, (s, 4 + s, 8 + s)),
+                            (words, v4off[p],
+                             (DITHER_V4,) * 3, (None,) * 3)):
+                        want = (look(tbl, y + off + 2 * v, cols[0]),
+                                look(tbl, y + off - (v + (u >> 1)), cols[1]),
+                                look(tbl, y + off + 2 * u, cols[2]))
+                        if None in want:
+                            continue
+                        n += 1
+                        got = rgb555(y, u, v,
+                                     want_dither[0][p] if cols[0] is not None
+                                     else DITHER_V4[p],
+                                     want_dither[1][p] if cols[1] is not None
+                                     else DITHER_V4[p],
+                                     want_dither[2][p] if cols[2] is not None
+                                     else DITHER_V4[p])
+                        bad += got != want
+    print('  %d (y, u, v, position) lookups, both paths: %d disagreements'
+          % (n, bad))
+    print('  %d lookups fell outside the 384 levels the table holds; the game '
+          'has no bound check' % past)
+    print('  %s' % ('ok' if bad == 0 else 'FAIL'))
+    return 0 if bad == 0 else 1
+
+
+class Cinepak:
+    """Cinepak decoder producing an RGB byte buffer, `width * height * 3`.
+
+    `console=True` reproduces the 3DO's own pixels, dither and all.  False
+    keeps the straight eight-bit conversion, which is smoother than anything
+    the hardware could show.
+    """
+
+    def __init__(self, width, height, console=True):
         self.w, self.h = width, height
+        self.console = console
         self.rgb = bytearray(width * height * 3)
         self.strips = []          # per-strip persistent codebooks
 
     def _strip_state(self, i):
         while len(self.strips) <= i:
-            self.strips.append({'v1': [(0, 0, 0)] * 4 * 256,
+            self.strips.append({'v1': [(0, 0, 0)] * 16 * 256,
                                 'v4': [(0, 0, 0)] * 4 * 256})
         return self.strips[i]
 
-    @staticmethod
-    def _codebook(book, cid, data):
-        """0x2000/0x2100/0x2400/0x2500 -> V4, 0x2200/... -> V1."""
+    def _codebook(self, book, cid, data):
+        """0x2000/0x2100/0x2400/0x2500 -> V4, 0x2200/... -> V1.
+
+        A V4 entry decodes to the four pixels of one 2x2.  A V1 entry decodes
+        to all sixteen pixels of a 4x4 -- the 3DO expands it in the codebook
+        rather than at draw time, and once the dither is per pixel the four
+        pixels of a quadrant are no longer the same colour anyway.
+        """
+        v1 = bool(cid & 0x0200)
         n = 4 if cid & 0x0400 else 6
         selective = cid & 0x0100
         p, flag, mask, i = 0, 0, 0, 0
@@ -216,8 +334,23 @@ class Cinepak:
                 else:
                     u = v = 0
                 p += n
-                for k in range(4):
-                    book[i * 4 + k] = yuv2rgb(y[k], u, v)
+                if not v1:
+                    for k in range(4):
+                        d = DITHER_V4[k] if self.console else 0
+                        book[i * 4 + k] = (rgb555(y[k], u, v, d, d, d)
+                                           if self.console
+                                           else yuv2rgb(y[k], u, v))
+                else:
+                    cell = book_slice = [None] * 16
+                    for q in range(4):                # quadrant TL TR BL BR
+                        for pos in range(4):          # pixel inside it
+                            row = (q >> 1) * 2 + (pos >> 1)
+                            col = (q & 1) * 2 + (pos & 1)
+                            cell[row * 4 + col] = (
+                                rgb555(y[q], u, v, DITHER_V1[0][pos],
+                                       DITHER_V1[1][pos], DITHER_V1[2][pos])
+                                if self.console else yuv2rgb(y[q], u, v))
+                    book[i * 16:i * 16 + 16] = book_slice
             i += 1
 
     def _vectors(self, st, cid, data, x1, y1, x2, y2):
@@ -277,13 +410,12 @@ class Cinepak:
                 else:
                     if p + 1 > len(data):
                         return
-                    c = data[p] * 4
+                    c = data[p] * 16
                     p += 1
-                    cell = (v1[c], v1[c + 1], v1[c + 2], v1[c + 3])
                     for j in range(4):
                         o = (y + j) * w3 + x * 3
                         for k in range(4):
-                            rgb[o:o + 3] = bytes(cell[(j >> 1) * 2 + (k >> 1)])
+                            rgb[o:o + 3] = bytes(v1[c + j * 4 + k])
                             o += 3
 
     def frame(self, d):
@@ -443,7 +575,8 @@ def markers(path):
                 print(f'    time {v[i * 2]:9d}  offset {v[i * 2 + 1]:#010x}')
 
 
-def extract(path, outdir=None, wav=None, count=0, step=1, channel=None):
+def extract(path, outdir=None, wav=None, count=0, step=1, channel=None,
+            console=True):
     """Decode every film and every sound header in a stream.
 
     A container may hold many films back to back (the `*Files` blobs hold
@@ -469,7 +602,7 @@ def extract(path, outdir=None, wav=None, count=0, step=1, channel=None):
             continue
         if c.tag == b'FILM' and c.sub == b'FHDR':
             fh = FilmHeader(c)
-            cp = Cinepak(fh.width, fh.height)
+            cp = Cinepak(fh.width, fh.height, console)
             film, n = film + 1, 0
             print(f'  film {film}: {fh}')
         elif c.tag == b'FILM' and c.sub == b'FRME' and cp:
@@ -505,7 +638,15 @@ def main():
                     help='reassemble the FMOD files, optionally writing them here')
     ap.add_argument('--markers', action='store_true', help='print the DACQ seek table')
     ap.add_argument('--scan', action='store_true', help='summarise every stream found')
+    ap.add_argument('--verify-dither', metavar='IMAGE',
+                    help="rebuild the console's colour table from this ARM "
+                         "image and check the decoder against it")
+    ap.add_argument('--truecolor', action='store_true',
+                    help="skip the console's RGB555 dither, keep eight bits")
     a = ap.parse_args()
+
+    if a.verify_dither:
+        raise SystemExit(verify_dither(a.verify_dither))
 
     if a.scan or os.path.isdir(a.path):
         for p in sorted(glob.glob(os.path.join(a.path, '**', '*.strm'),
@@ -518,7 +659,8 @@ def main():
     if a.modules is not None:
         modules(a.path, a.modules or None)
     if a.frames or a.wav:
-        extract(a.path, a.frames, a.wav, a.count, a.step, a.channel)
+        extract(a.path, a.frames, a.wav, a.count, a.step, a.channel,
+                console=not a.truecolor)
 
 
 if __name__ == '__main__':

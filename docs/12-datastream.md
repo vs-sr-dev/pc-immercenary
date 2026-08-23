@@ -118,6 +118,64 @@ Colour is the classic Cinepak conversion:
 r = y + 2v      g = y - u/2 - v      b = y + 2u
 ```
 
+### ...but not at eight bits, and not undithered
+
+That formula is what a modern decoder does. It is not what the console showed,
+and the game's own decoder — read in [06](06-code-map.md), `0x05704c` through
+`0x0578c0` — says so plainly: it never computes a colour at all. It looks every
+pixel up in a table that the C side allocates at `0x04f49c` and fills at
+`0x04f338`, and that table folds four things together.
+
+The table is `0x3c00` bytes and holds **384 luma levels, -64 to 319**, in two
+blocks:
+
+| Offset | Shape | Level 0 at | Read by |
+|---|---|---|---|
+| `+0x0000` | 384 rows of sixteen big-endian `u16` | `+0x800` | the V1 codebook builder |
+| `+0x3000` | 384 words, one `u16` each | `+0x3100` | the V4 codebook builder |
+| `+0x3600` | 320 words, an unrelated ramp | — | nothing in the decoder |
+
+Each entry is `clamp(level + dither, 0, 255) >> 3` — five bits, a 3DO RGB555
+component. The **chroma is a bias on the row index**, not arithmetic: `+2V`
+rows for red, `+2U` for blue, `-(V + U/2)` for green, which is the conversion
+above with the clamp already baked in.
+
+And the dither is real. The sixteen signed halfwords at `0x4fd24` in `p`
+(`0x34dc8` in `p1e`, the same sixteen values) are
+
+```
+red     0  5  7  2        as a 2x2:  0 7      the frame buffer pairs pixels
+green   1  4  6  3                   5 2      vertically, so the file order
+blue    6  3  1  4                            is TL, BL, TR, BR
+unused  7  2  0  5
+```
+
+added to the component before the shift down to five bits — an ordered dither
+over the 2x2 that one codebook luma sample covers, **with a different pattern
+per colour component**. The V4 path cannot do that: its table has one value a
+level, not sixteen, so it dithers the luma alone, by offsetting the index
+`0`, `6`, `4`, `2` across the same 2x2, and all three components of a pixel
+move together.
+
+The consequences for a decoder that wants the console's pixels:
+
+- A V1 codebook entry is **sixteen distinct pixels**, not four quadrant
+  colours. The 3DO expands it in the codebook rather than at draw time, and
+  once the dither is per pixel the four pixels of a quadrant differ anyway.
+- Output is RGB555. Coming back to eight bits by the usual bit replication,
+  `(v << 3) | (v >> 2)`, and comparing against the undithered eight-bit
+  decode, **70% of the bytes of a busy frame differ**, by up to 13.
+- The table has no bound check, and 384 levels is only enough for
+  `|chroma| <= 32` at the extremes of luma. Across two films and 6.9 million
+  codebook pixels exactly **one** lookup fell outside, and by two levels — so
+  the range is well judged for the material, but a decoder should clamp where
+  the console would have read whatever sat next to its table.
+
+`tools/strm.py` decodes this way by default. `--truecolor` restores the plain
+eight-bit conversion, and `--verify-dither IMAGE` rebuilds the console's table
+from the game's own builder and checks the decoder against it — 332,863
+lookups across both paths, and it passes against `p` and `p1e` alike.
+
 ## Audio
 
 `SNDS`/`SHDR` fields that matter, from the chunk start:
@@ -180,6 +238,12 @@ python tools/strm.py extracted/Perfect/Film/BalkanFiles -f out/balkan --step 50
 python tools/strm.py extracted/Perfect/Film/I01.strm -w out/i01.wav
 python tools/strm.py extracted/Perfect/Stream/AllCinepaks.strm -m out/fmod --markers
 python tools/celbatch.py out/fmod out/fmodpng
+
+# the plain eight-bit decode instead of the console's dithered RGB555
+python tools/strm.py .../I01.strm -f out/i01 --truecolor
+
+# and check the dithered path against the game's own colour table
+python tools/strm.py . --verify-dither extracted/p
 ```
 
 Frames are named `film_frame.png`, so a container with thirteen films comes

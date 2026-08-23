@@ -33,6 +33,15 @@ open-ended research.
   product, `MapCelFixed`. The shape of a slightly larger engine than shipped.
 - **`swiscan.py` paired slot numbers with the wrong wrapper addresses** for
   four of the 76 slots; runs of three-instruction thunks are now recognised.
+- **The films now decode in the console's own colours.** The colour table is
+  built at `0x04f338` off an allocation at `0x04f49c`, and it holds 384 luma
+  levels with the chroma bias, the clamp, the cut to RGB555 and an ordered
+  dither all folded in — a different dither pattern per colour component on
+  the V1 path, luma-only on V4. `strm.py` decodes that way by default;
+  `--verify-dither` rebuilds the table from the game's own builder and checks
+  the decoder against it, 332,863 lookups, clean against `p` and `p1e`. It
+  changes 70% of the bytes of a busy frame, so **`out/fmodpng` and any other
+  frames extracted before this are worth regenerating.**
 
 ## 1. The interactive viewer  *(closest to a real artefact)*
 
@@ -69,22 +78,7 @@ camera in about 1.5 seconds a frame. What is missing:
 - `Perfect/Music/*.music` needs no work — it is plain uncompressed AIFF, mono
   16-bit at 44.1 kHz.
 
-## 3. Cinepak, exactly  *(new, and cheap)*
-
-`tools/strm.py` already decodes the films. What it does not reproduce is the
-console's own pixels, because the game's decoder dithers the luma and looks
-its colours up in a prebuilt table.
-
-- **Find who builds the colour table at `[ctx + 8]`.** It is not in the
-  module and not obviously in `p`; the codebook builder reads it with a
-  4-byte stride at `+0x3100` and a 32-byte stride at `+0x800`, biased by
-  `+2V` for red, `+2U` for blue and `−(V + U/2)` for green. `[ctx]` itself
-  comes from `[movie + 0x38]`, set somewhere around `0x046774` / `0x04694c`.
-- Then **add the 2×2 luma dither to `strm.py`** and compare a frame against
-  the current output. If it is visible, every PNG in `out/fmodpng` is
-  slightly wrong and worth regenerating.
-
-## 4. Code map, wider  *(the call graph is new, use it)*
+## 3. Code map, wider  *(the call graph is new, use it)*
 
 - **Name the remaining 72 folio vector slots.** `swiscan.py --sites` lists
   every one with its wrapper, and the addresses are right now: 46 audio, 22
@@ -112,7 +106,7 @@ its colours up in a prebuilt table.
   leading word as the name — and keep the description in the **second**
   column, or it is not harvested at all.
 
-## 5. Loose ends worth an hour each
+## 4. Loose ends worth an hour each
 
 - **`0x89f40`'s runtime fields.** `PerfectMovers` fills bits 24-31 of the word
   at `+0x20` and the bytes at `+0x1c`-`+0x1f`; `0xb784` reads bits 13-20 of the
@@ -174,6 +168,11 @@ its colours up in a prebuilt table.
   turned the Cinepak-style tail of the font decoder inside out for an hour.
   When a decode almost works, re-read the branch senses before re-reading the
   data.
+- **A decoder that never computes anything is a lookup table.** When ported
+  code reads a table where the reference implementation does arithmetic, the
+  table is not just a speed trick: it is where the platform's own quirks got
+  folded in. Immercenary's Cinepak hides a per-component ordered dither in
+  one, and nothing in the decoder itself hints at it.
 - **A fixed-point routine can be deliberately wrong.** Do not assume a
   multiply is a multiply: check where its intermediate overflows, then check
   whether every call site stays inside that bound. Twice in this module the
