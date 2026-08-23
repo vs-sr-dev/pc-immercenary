@@ -96,7 +96,7 @@ camera in about 1.5 seconds a frame. What is missing:
 - `Perfect/Music/*.music` needs no work — it is plain uncompressed AIFF, mono
   16-bit at 44.1 kHz.
 
-## 3. Code map, wider  *(the call graph is new, use it)*
+## 3. Code map, wider
 
 - **Name the remaining 105 folio vector slots.** Every one is now attributed
   to a folio — 46 audio, 23 Kernel, 22 Graphics, 10 File, 8 Operamath, none
@@ -153,7 +153,19 @@ camera in about 1.5 seconds a frame. What is missing:
 - **`p1e`.** The encounter executable has never been walked. It shares the
   world format, the `.Maps` format and — now proven byte for byte — the whole
   math module, so it should be a cheap cross-check on anything uncertain
-  in `p`.
+  in `p`. Its folio surface has **four slots still unattributed**,
+  `-4`/`-8`/`-12`/`-16` at `0x325f8`–`0x326a4`; `p`'s File folio thunks open
+  the folio inline and `p1e`'s look like the same shape, so naming them is
+  one read.
+- **The other two Immercenary executables have never been walked either.**
+  `Perfect/Film/CinepakSubroutine` (86 KiB) and
+  `Perfect/DOASys/SpeechSubroutine` (46 KiB) are the game's own programs —
+  their strings are `$Perfect/film/…` and `$DOAsys/AllGonerSpeech.aanim` —
+  and `tools/libscan.py` says **131** and **91** of their functions have no
+  counterpart in `p` at all. That is the film player's and the speech
+  player's own logic, and it is the only code on the disc that is certainly
+  Immercenary's and certainly unread. The speech one is small enough to
+  finish in a session.
 - **The far horizon table overruns the reciprocal table** for depths above
   402.0. Harmless in the ground lattice — but `ProjectPoint` *can* reach it.
   It rejects depth at or below 2.0 and then indexes `0x08c16c` by
