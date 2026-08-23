@@ -11,7 +11,7 @@ from capstone import *
 
 STR = {}
 LITPOOL = re.compile(r'^\w+, \[pc, #(-?(?:0x[0-9a-fA-F]+|\d+))\]$')
-PCREL   = re.compile(r'^\w+, pc, #(-?(?:0x[0-9a-fA-F]+|\d+))$')
+PCREL   = re.compile(r'^\w+, pc, #(-?(?:0x[0-9a-fA-F]+|\d+))(?:, #(\d+))?$')
 
 class Image:
     def __init__(self, path):
@@ -57,6 +57,11 @@ class Image:
             pm = PCREL.match(ops)
             if pm and m[:3] in ('add', 'sub'):
                 delta = int(pm.group(1), 0)
+                if pm.group(2) is not None:
+                    # ARM rotated immediate: capstone prints "#imm, #rot",
+                    # the real value is imm rotated right by rot bits.
+                    rot = int(pm.group(2), 0) & 31
+                    delta = ((delta >> rot) | (delta << (32 - rot))) & 0xFFFFFFFF
                 self.litrefs[a + 8 + (delta if m[:3] == 'add' else -delta)].append(a)
         self.fstarts = sorted(self.funcs)
 
@@ -95,7 +100,9 @@ def main():
         rx = re.compile(a.string)
         for off, s in sorted(im.strings().items()):
             if not rx.search(s): continue
-            refs = im.litrefs.get(off, [])
+            # a string's first byte can be swallowed by the preceding word,
+            # so accept a reference to any of the first few bytes
+            refs = [r for k in range(off, off+4) for r in im.litrefs.get(k, [])]
             print(f"{off:#08x}  {s!r}")
             for r in refs:
                 f = im.func_of(r)
@@ -117,4 +124,5 @@ def main():
                 lit = f"   ; = {v:#x}" + (f'  "{txt}"' if txt else '')
             print(f"  {addr:08x}  {m:<10} {ops}{lit}{mark}")
 
-main()
+if __name__ == '__main__':
+    main()

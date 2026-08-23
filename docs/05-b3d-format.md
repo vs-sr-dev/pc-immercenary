@@ -134,37 +134,127 @@ quads, not triangles, matching the 3DO CEL engine's native primitive and the
 
 ## Section C — object placement
 
-A stream of tagged, variable-length records:
+A stream of variable-length records. Every record starts with the same 8 bytes:
 
 ```
-u8  type
-u8  subtype
-u16 length      total record length in bytes, header included
-... payload
+u8  type        culling flags
+u8  sub         record kind, selects the parser
+i16 skipLength  see below
+u32 field       purpose not yet known
 ```
 
-The stream tiles the section exactly. All five encounter files walk to the last
-byte with no desync:
+### `skipLength` is a culling hint, not the record length
 
-| File | Records in section C |
-|---|---|
-| `TeslaEncounter` | 80 |
-| `LokiEncounter` | 91 |
-| `balkanencounter` | 40 |
-| `chanceencounter` | 35 |
-| `flyencounter` | 34 |
+This one cost real effort to pin down, so it is worth stating plainly.
 
-A `6.6` / `0.6` record is 43 bytes and places a named animated object:
+`ParseWorldRecord` at `0x03929c` reads the eight header bytes, then consults a
+global flags word and decides whether to cull the record. On the cull path it
+does exactly one thing:
 
 ```
-06 06 002b        type 6.6, 43 bytes
-0001 0004         ?
+0x393fc   ldr r0, [sp, #0x3c]      ; skipLength, sign-extended from i16
+0x39400   add r0, r4, r0           ; recordStart + skipLength
+0x39408   str r0, [0x584b4]        ; cursor = next record
+```
+
+On the parse path it never touches the field — it reads the record member by
+member, advancing the cursor as it goes, which is why the function references
+the cursor global sixty times.
+
+And the culling test at `0x393dc` starts with:
+
+```
+teq r2, #0                        ; r2 = type
+beq  <parse>                      ; type 0 is never culled
+```
+
+So for `type == 0` records the length field is dead data, and the exporter did
+not always fill it in correctly. On the overworld it is wrong for **1,876 of
+4,047** records. Walking section C by trusting it works on the small encounter
+files and desyncs on the two large worlds — which is exactly the behaviour
+that was observed before the code was read.
+
+**To walk section C you must implement the per-`sub` parsers.** There is no
+shortcut in the data.
+
+### Dispatch on `sub`
+
+```
+0x39438   cmp r6, #3 ; beq 0x3a660        sub 3
+0x39440   bgt 0x397f4                     sub > 3
+0x39444   teq r6, #0 ; beq 0x398a4        sub 0
+0x3944c   teq r6, #1 ; beq 0x3a32c        sub 1
+0x39454   teq r6, #2 ; bne 0x3a8ec        sub 2, else default
+```
+
+Sizes seen across the five encounter files, where the length field *is* valid:
+
+| `sub` | Size | Count | Kind |
+|---|---|---|---|
+| 0 | variable, `17 + 3N` | 39 | geometry instance |
+| 1 | 18 | 89 | |
+| 2 | 48 (one 56) | 80 | |
+| 3 | 19 | 25 | |
+| 6 | 43 | 29 | named animated object |
+
+### `sub = 0` — a placed instance of a geometry template
+
+```
++0   u8  type
++1   u8  sub = 0
++2   i16 skipLength
++4   u32 field
++8   i16 X            promoted to 16.16 and written to 0x58498
++10  i16 Y            promoted to 16.16 and written to 0x58498+4
++12  u8  flags        bit 0 selects the template table, bit 1 gates a tail loop
++13  u32 index        index into that table
++17  variable tail    N 16-bit values followed by N bytes
+```
+
+The template table is chosen by `flags & 1`:
+
+```
+0x39958   ldr r0, [0x584cc]        ; flags bit 0 clear -> tableA
+0x39964   ldr r4, [r0, r1, lsl #2] ;   entry = tableA[index]
+
+0x39f5c   ldr r0, [0x584d0]        ; flags bit 0 set   -> tableB
+0x39f68   ldr r0, [r0, r1, lsl #2] ;   entry = tableB[index]
+```
+
+The handler then reads the template's own header and drives its tail loops from
+counts held **in the template**, not in the placement record. That is why a
+`sub = 0` record's byte length cannot be computed from the record alone, and why
+the exporter had nothing sensible to put in `skipLength` for it.
+
+This makes the whole design legible: **sections A and B hold geometry
+templates, section C places instances of them.** Checking that reading against
+the five encounter files:
+
+| File | `sub=0` records | to tableA | to tableB | index in range | X,Y inside the world box |
+|---|---|---|---|---|---|
+| `TeslaEncounter` | 39 | 17 | 22 | yes | yes |
+| `chanceencounter` | 9 | 0 | 9 | yes | yes |
+| `flyencounter` | 9 | 0 | 9 | yes | yes |
+| `balkanencounter` | 0 | – | – | – | – |
+| `LokiEncounter` | 0 | – | – | – | – |
+
+Tesla has three templates in section A instantiated 17 times and four in
+section B instantiated 22 times — an arena built from a handful of repeated
+pieces, which is what a 1995 3DO game would do.
+
+### `sub = 6` — named animated object
+
+43 bytes, carrying an asset name inline:
+
+```
+06 06 002b        type 6, sub 6, 43 bytes
+0001 0004         field
 fac6              X = -1338
 07c2              Y =  1986
 0000              Z
 22 1f 16 1c       ?
 0000 08           ?
-00                instance index (0, 1, 2 across the three sphere records)
+00                instance index (0, 1, 2 across three sphere records)
 00
 "sphere.anim\0"   asset name, padded to the record length
 ```
@@ -179,33 +269,17 @@ Objects named directly in the world files:
 | `flag.anim` | 10 |
 | `fountain.anim` | 5 |
 
-`Perfect/Objects/` holds far more than these five, and the executable carries
-the string *"Unrecognized anim ID %d!"* — so most object placement must go
-through a numeric ID table held in `p`, with only a handful of objects named
-inline. Recovering that table is a code-map task.
+`Perfect/Objects/` holds more than these five. The rest are placed by numeric
+id through the dispatcher at `0x037dd8`, whose full table is recovered in
+[06-code-map.md](06-code-map.md) — 27 ids covering the world props and the
+twelve weapon pickups.
 
-### Open: the large-world record types
+### What is left
 
-`CondensedPerfectWorld.B3D` and `P1EncWorld.B3D` desync partway through section
-C (at bytes 24560 and 55554 respectively). They carry record types the small
-encounters do not, and at least one of them does not put a usable byte length in
-the `u16` at offset 2.
-
-Evidence from the overworld's first grid cell, `[43, 209)` — 166 bytes that
-divide as `19 + 47 + 47 + 53`:
-
-```
-type 0.3   19 bytes   length field = 0x13 = 19   correct
-type 0.0   47 bytes   length field = 0x2f = 47   correct
-type 0.0   47 bytes   length field = 0x2f = 47   correct
-type 0.0   53 bytes   length field = 0x1d = 29   WRONG
-```
-
-The two 47-byte records hold 10 coordinate pairs, the 53-byte one holds 12, and
-`17 + 3N` reproduces both lengths (`N` pairs of 2 bytes plus `N` single bytes
-plus a 17-byte fixed part). So the real length is derived from a count that is
-not the `u16` at offset 2 for this record type. Pinning it down needs the
-world-loader disassembly rather than more guessing at the data.
+The per-`sub` handlers still need reading end to end to produce a complete
+walker: the tail loops of `sub = 0`, and the fixed layouts of `sub = 1`, `2`
+and `3`. Those are bounded, well-located tasks now — the handlers are at
+`0x398a4`, `0x3a32c`, `0x3945c` and `0x3a660`.
 
 ## Two families
 
