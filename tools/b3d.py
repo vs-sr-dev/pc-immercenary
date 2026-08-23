@@ -38,13 +38,12 @@ class B3D:
 
         payload = self.sizeA + self.sizeB + self.sizeC
         self.hdr_bytes = len(d) - payload
-        self.exact = (self.hdr_bytes == (11 + self.countA + self.countB + 1 + 256) * 4)
+        self.exact = (self.hdr_bytes == (11 + self.countA + self.countB + 257) * 4)
 
         self.tableA = list(w[11:11+self.countA])
         self.tableB = list(w[11+self.countA:11+self.countA+self.countB])
-        # the grid is always the last 256 words before the payload
-        gstart = self.hdr_bytes // 4 - 256
-        self.grid = list(w[gstart:gstart+256])
+        gstart = 11 + self.countA + self.countB
+        self.grid = list(w[gstart:gstart+257])
 
         base = self.hdr_bytes
         self.secA = d[base:base+self.sizeA]
@@ -63,16 +62,16 @@ class B3D:
                 f"bbox=({self.minX},{self.minY})..({self.maxX},{self.maxY}) "
                 f"cell={self.cellW}x{self.cellH} grid={self.gridW}x{self.gridH}  "
                 f"A={self.countA}/{self.sizeA} B={self.countB}/{self.sizeB} "
-                f"C=256/{self.sizeC}  exact={self.exact}")
+                f"C=256/{self.sizeC}  cells={sum(1 for _ in self.cells())}  "
+                f"exact={self.exact}")
 
     def cells(self):
-        """Yield (cellIndex, gx, gy, byteRange) for every non-empty grid cell.
-        Grid entries are END offsets: cell i covers [prev, grid[i])."""
-        prev = 0
-        for i, off in enumerate(self.grid):
-            if off >= 0:
-                yield i, i % 16, i // 16, (prev, off)
-                prev = off
+        """Yield (cellIndex, gx, gy, (start, end)) for every non-empty cell."""
+        for i in range(256):
+            a, b = self.grid[i], self.grid[i+1]
+            if a < 0 or b < 0 or b <= a:
+                continue
+            yield i, i % 16, i // 16, (a, b)
 
     def records(self, sec=None):
         """Walk the tagged record stream of section C.

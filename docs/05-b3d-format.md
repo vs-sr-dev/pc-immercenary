@@ -22,17 +22,16 @@ w[8]      sizeA         section A size, bytes
 w[9]      sizeB         section B size, bytes
 w[10]     sizeC         section C size, bytes
 
-w[11 ..]  tableA[countA]   start offsets into section A
-          tableB[countB]   start offsets into section B
-          1 filler word
-          grid[256]        offsets into section C, -1 = empty cell
+w[11 ..]  tableA[countA]   byte offsets into section A
+          tableB[countB]   byte offsets into section B
+          grid[257]        byte offsets into section C
 
           section A                (sizeA bytes)
           section B                (sizeB bytes)
           section C                (sizeC bytes)
 ```
 
-The header block is `(11 + countA + countB + 1 + 256) * 4` bytes and the three
+The header block is `(11 + countA + countB + 257) * 4` bytes and the three
 sections follow immediately. **On every file of this family the two add up to
 the file size exactly**, which is what confirms the layout:
 
@@ -46,10 +45,56 @@ the file size exactly**, which is what confirms the layout:
 | `P1EncWorld.B3D` | 2636 | 3634 | 35001 | 89179 | 130450 | 130450 |
 | `CondensedPerfectWorld.B3D` | 2636 | 3634 | 35001 | 90340 | 131611 | 131611 |
 
-The single filler word between the tables and the grid holds `sizeC` in the
-encounter files and `0` in the two large world files; its purpose is unclear and
-nothing appears to read it. The grid is always the last 256 words before the
-payload, so locating it does not depend on that word.
+### Confirmed against the loader
+
+The layout above is not inferred from the data alone. The world loader in `p`
+sits at **`0x013e4c`** — it is the function that references both
+*"Starting to load the world..."* and `$Perfect/CondensedPerfectWorld.B3D` —
+and it reads the file field by field with a cursor and a 4-byte `memcpy` per
+word. Reading it settles every open question about the container:
+
+```
+0x13e6c   add  r0, pc, #0x368        ; "$Perfect/CondensedPerfectWorld.B3D"
+0x13e74   bl   0x4b7cc               ; load file -> base pointer
+0x13e7c   str  r0, [0x57db4]         ; g_worldFile
+
+          11 x memcpy(dst, base + cursor, 4), cursor += 4
+            -> 0x58434  minX      0x58438  maxY
+               0x5843c  maxX      0x58440  minY
+               0x58444  cellW     0x58448  cellH
+               sp+0x10  countA    sp+0x14  countB
+               sp+0x0c  sizeA     sp+0x08  sizeB     sp+0x04  sizeC
+
+0x14018   str  ...,  [0x584cc]       ; g_tableA = base + 44
+0x1402c   str  ...,  [0x584d0]       ; g_tableB = g_tableA + countA*4
+0x1404c   mov  r2, #4
+0x1404c   add  r2, r2, #0x400        ; 0x404 = 1028 bytes
+0x14050   bl   memcpy                ; grid -> 0x8988c, 257 words
+0x14068   str  ...,  [0x584d4]       ; g_sectionA
+0x1407c   str  ...,  [0x584d8]       ; g_sectionB
+0x14090   str  ...,  [0x584dc]       ; g_sectionC
+0x140bc   loop: tableA[i] += g_sectionA    ; offsets relocated to pointers
+```
+
+Two things fall out of this that guessing at the data could not settle:
+
+- **The grid is 257 words, not 256 plus a filler.** The `memcpy` moves
+  `0x404` = 1028 bytes. The extra entry is a terminator, so cell `i` covers
+  `[grid[i], grid[i+1])` — a standard prefix-offset array. On the overworld
+  `grid[0]` is 0 and `grid[256]` is 90340, exactly `sizeC`.
+- **The table entries are byte offsets**, confirmed by the relocation loop at
+  `0x140bc` that rewrites each one to `entry + sectionBase` in place.
+
+Useful globals in `p` for the code map:
+
+| Address | Holds |
+|---|---|
+| `0x57db4` | loaded world file base pointer |
+| `0x58434`–`0x58448` | minX, maxY, maxX, minY, cellW, cellH |
+| `0x584b4` | load cursor |
+| `0x584cc` / `0x584d0` | tableA / tableB pointers |
+| `0x584d4` / `0x584d8` / `0x584dc` | section A / B / C pointers |
+| `0x8988c` | the 257-word grid |
 
 ## The spatial grid
 
@@ -58,10 +103,12 @@ Every file of this family shares the same bounding box:
 `256 × 256` cells, giving a **16 × 16 grid of 256 cells**. That constant is why
 the encounter arenas and the overworld can use one addressing scheme.
 
-Grid entries are *end* offsets: cell `i` covers `[grid[i-1], grid[i])` of
-section C, with cell 0 starting at 0. `-1` marks a cell with no content — the
-overworld has 7 empty cells, `balkanencounter` and `LokiEncounter` have all 256
-empty (their content is not grid-addressed at all).
+Cell `i` covers `[grid[i], grid[i+1])` of section C; `-1` marks an empty cell.
+The overworld populates **241 of 256 cells**, `P1EncWorld` 235.
+
+Every encounter file has all 256 cells empty. Their section C still holds a
+valid record stream — it simply is not reached through the grid, which makes
+sense for a single-arena fight where nothing needs spatial culling.
 
 ## Section B — building geometry
 
