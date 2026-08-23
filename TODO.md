@@ -41,6 +41,14 @@ open-ended research.
   11 lines and the stream holds 9 slots; lines 9 and 10 — *"hex dear hex the
   one we all search for and never find"* and *"where owhere Iask you do you
   havean ounce to spare"* — survived the marks and not the voice track.
+- **The mouth map is one table, not seven.** All seven face renderers index
+  `0x9090`, 44 words, doubling the result because a mouth position is two
+  cels; anything past the table takes the rest pose. It collapses the 43
+  phoneme shapes onto **18 positions**, and the grouping is textbook — B/P/M
+  closed, F/V labiodental, S/Z, D/T, Th/Dh, Ch/Sh/J/Zh, and the velars with
+  `H` on a neutral shape. Position 6 is drawn in every face and nothing ever
+  selects it. That grouping is the check that the whole chain from text to
+  cel is read right: a wrong table would not sort by place of articulation.
 - **The whole DOA conversation tree is decoded**, and it closes to the byte.
   `0x9480` is 22 rows of 25 subjects by 2 questions; a subject's two bytes are
   always consecutive (185 pairs, no exceptions), so the code adds the question
@@ -230,11 +238,6 @@ camera in about 1.5 seconds a frame. What is missing:
   is left. Its strings are `$Perfect/film/…`, and the film subjects the DOA
   menu asks for — `MedusaFiles`, `TeslaFiles` and eight more — are its input,
   so [docs/16](docs/16-speech-and-doa.md) is the way in.
-- **The per-face mouth mapping.** A shape number is `0x00`–`0x2a`, 43 of them,
-  and no `.aanim` has 43 frames (35, 25, 27, 33, 38, 33, 19). So a table
-  stands between them, inside the seven renderers `0x97c` dispatches to:
-  `0x4f54`, `0x4c44`, `0x4958`, `0x4640`, `0x4194`, `0x3ba0`, `0x3660`. One of
-  the seven is enough — they are the same routine seven times.
 - **How `p` and the subroutine programs talk.** `SpeechSubroutine` reaches the
   DataStream through a *function pointer* in a global, with command codes
   `0x2000` (seek), `0x3000` and `0x5000` in `r0`. That is a message protocol

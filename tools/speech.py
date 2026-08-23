@@ -215,6 +215,14 @@ SHAPES = {
 # 'E' -- so only the first letter decides whether a phoneme is known at all.
 KNOWN_FIRST = set('ABCDEFGHIJKLMNOPQRSTUVWZ')
 
+# Shape numbers are not cel numbers. All seven face renderers index the same
+# 44-entry table, doubled because a mouth position is two cels:
+#     0x3958/0x4b1c  ldr r0, [0x9090, shape, lsl #2] ; lsl #1 ; lsl #16
+# and anything above MOUTH_MAX takes the rest pose instead.
+MOUTH = 0x9090
+MOUTH_MAX = 0x2b        # the last entry; 0xfe and 0xff fall past it
+REST = 0x24 // 2        # `mov r0, #0x240000` -- cel 36, position 18
+
 PAUSE = 0xff        # a space: mouth closed
 STRESS = '^'        # sets the stress flag for the phoneme after it
 
@@ -234,6 +242,13 @@ def shape_of(tok):
     if tok[0] in KNOWN_FIRST:
         return SHAPES.get(tok[0])
     return None
+
+
+def mouth(im, shape):
+    """The mouth position a shape draws: `0x9090[shape]`, or the rest pose."""
+    if shape is None:
+        return None
+    return im.w(MOUTH + 4 * shape) if shape <= MOUTH_MAX else REST
 
 
 def klass(shape):
@@ -391,8 +406,9 @@ def show_say(im, text):
         elif sh == PAUSE:
             print('    %-4r  closed' % tok)
         else:
-            print('    %-4r  %#04x  %-9s%s' %
-                  (tok, sh, klass(sh), '  stressed' if st else ''))
+            print('    %-4r  %#04x  %-9s mouth %2d%s' %
+                  (tok, sh, klass(sh), mouth(im, sh),
+                   '  stressed' if st else ''))
 
 
 def show_script(im):
@@ -553,6 +569,26 @@ def verify(im):
                   if im.d[ANSWERS + 100 * i + 2 * s] != NO_ANSWER) + 1
               for i in range(6)),
           ' '.join(str(im.d[VARIANT_BASE + i]) for i in range(6)))
+
+    print('\nmouth positions (0x9090, doubled into cels by all seven faces)')
+    groups = collections.defaultdict(list)
+    for tok, sh in sorted(SHAPES.items(), key=lambda kv: kv[1]):
+        m = mouth(im, sh)
+        if tok not in groups[m]:
+            groups[m].append(tok)
+    check('43 shapes collapse onto 18 positions', len(groups) == 17,
+          '%d used, %s never selected'
+          % (len(groups),
+             ' '.join('position %d' % p for p in range(18)
+                      if p not in groups)))
+    check('every voiced/unvoiced pair shares a position',
+          all(set(a) <= set(groups[mouth(im, SHAPES[a[0]])])
+              for a in (('B', 'P', 'M'), ('F', 'V'), ('S', 'Z'), ('D', 'T'),
+                        ('Th', 'Dh'), ('Ch', 'Sh', 'J', 'Zh'), ('W', 'Wh'),
+                        ('R', 'Er'), ('K', 'G', 'Ng', 'Nk', 'H'))),
+          'B P M closed, F V labiodental, the velars neutral')
+    check('the rest pose is one past the last speaking position',
+          REST == max(groups) + 1, 'position %d' % REST)
 
     print('\nMarks files')
     total_lines = total_words = 0

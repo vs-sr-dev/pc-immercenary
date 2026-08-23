@@ -26,8 +26,8 @@ python tools/speech.py --script
 python tools/speech.py --slots extracted/Perfect/Stream/SpeechStream
 ```
 
-`--verify` is 31 checks against the image, the answer tables and the seven
-Marks files. They all pass.
+`--verify` is 34 checks against the image, the answer tables, the mouth map
+and the seven Marks files. They all pass.
 
 ## The program
 
@@ -326,16 +326,57 @@ header-inclusive size convention.
 | cels | 70 | 50 | 54 | 66 | 76 | 66 | 38 |
 | frames | 35 | 25 | 27 | 33 | 38 | 33 | 19 |
 
-None of them has 43 frames, so the shape number is **not** a frame index: a
-per-face mapping stands between them. `0x97c` stores the shape at `+0x108`
-off a global — or reloads the last one when handed `0xff` — and then dispatches
-through a seven-way switch on a mode global to one of seven renderers:
+None of them has 43 frames, so the shape number is **not** a cel index.
+`0x97c` stores the shape at `+0x108` off a global — or reloads the last one
+when handed `0xff` — and dispatches through a seven-way switch on a mode
+global to one of seven renderers:
 
 ```
 0x4f54  0x4c44  0x4958  0x4640  0x4194  0x3ba0  0x3660
 ```
 
-Seven renderers, seven speakers. Two shape numbers never come from the
+Seven renderers, seven speakers — and **all seven index the same table**:
+
+```
+004b14  cmp r4, #0x2b            ; a shape the table covers?
+004b1c  ldr r0, [0x9090, r4, lsl #2]
+004b24  lsl r0, r0, #1           ; two cels to a mouth position
+004b28  lsl r0, r0, #0x10        ; the animation's index is 16.16
+004b34  mov r0, #0x240000        ; anything else: the rest pose
+```
+
+`0x9090` is 44 words, and it is the whole lip-sync model:
+
+| position | phonemes |
+|---|---|
+| 0 | **B P M** |
+| 1 | **F V** |
+| 2 | E Ee |
+| 3 | Ae Eh |
+| 4 | A |
+| 5 | Ih |
+| 6 | *never selected* |
+| 7 | Ah Aw I Ow Ue |
+| 8 | Oo U Uh |
+| 9 | **W Wh** |
+| 10 | O Oy |
+| 11 | **S Z** |
+| 12 | **D T** |
+| 13 | L N |
+| 14 | **Th Dh** |
+| 15 | **Ch Sh J Zh** |
+| 16 | **R Er Ur** |
+| 17 | H G C K Q Ng Nk |
+| 18 | the rest pose, `0xfe` and `0xff` |
+
+Forty-three shapes onto eighteen positions, and the grouping is textbook:
+every voiced/unvoiced pair collapses — B/P/M closed, F/V labiodental, S/Z,
+D/T, Th/Dh, Ch/Sh/J/Zh — and **the velars go to a neutral shape with H**,
+which is right, because nothing visible happens at the back of the mouth.
+That is the check that says the whole chain from text to cel is read
+correctly: a wrong table would not group by place of articulation.
+
+Position 6 is drawn in every face and nothing ever selects it. Two shape numbers never come from the
 phoneme switch; `SpeakLine` passes them in directly, off the clock rather than
 off the text. More than `0x50` ticks before the next word's time it sends
 `0xff` and the mouth reloads its last shape; inside `0x50` but not yet within
@@ -358,5 +399,6 @@ An idle, an anticipation, and the word itself.
 - **The answer tables are three small arrays** — 1,100 bytes at `0x9480`, six
   bytes at `0x93e0`, 25 pointers at `0x941c` — and `--doa` prints the tree
   they encode. Nothing else is needed to reproduce the conversation.
-- The per-face shape-to-cel mapping is the one piece still unread; it is
-  inside the seven renderers above.
+- **The mouth map is 44 words at `0x9090`** and is shared by all seven faces,
+  so a port needs one table, not seven. Doubling it is the only per-face
+  arithmetic there is.
