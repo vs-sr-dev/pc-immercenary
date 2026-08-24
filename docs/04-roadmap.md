@@ -191,9 +191,10 @@ See [../TODO.md](../TODO.md) for the addressed version. In short:
   carried by all three fire buttons and not by C alone
   ([19](19-the-doasys-spire.md)) — the same claim, read off one block and
   generalised too far.
-- **Whether the far horizon table is ever indexed past its end.**
-  `ProjectPoint` bounds its depth below and not above; the overworld is 512
-  units across, so it is not obviously impossible.
+- **Where Chance's face builder is.** Its arena is 587 units across, larger
+  than the reciprocal table covers, and no face builder appears in its
+  driver's call graph — so its frame loop is reached by an address rather
+  than a branch ([08](08-the-ground.md)).
 - Does the disc's redundant-copy layout matter for streaming timing (burst/gap
   fields are populated), and does the port need to care? Almost certainly not.
 
@@ -236,6 +237,13 @@ See [../TODO.md](../TODO.md) for the addressed version. In short:
   ([08](08-the-ground.md)).
 - *What is `0x4d660`?* Not a C++ dispatch fetch: `OpenFileFolio`
   ([06](06-code-map.md)).
+
+- *Is the far horizon table ever indexed past its end?* **Yes, in the Loki
+  encounter.** The bound is not the per-cell cull but a three-instruction gate
+  on a face's average depth, present in five of the six face builders at 250,
+  200 or the draw distance. The sixth is Loki's, it has no gate, and Loki's
+  arena is 579 units across against a table that stops at 401.75
+  ([08](08-the-ground.md)).
 
 - *What are the three unnamed columns of a `PerfectMovers` character block?*
   The stat half of the difficulty curve — `0x008dc4` sums your earned D+O+A

@@ -98,6 +98,10 @@ python tools/frontend.py --verify
 python tools/doasys.py extracted/p
 python tools/doasys.py extracted/p --roster --art extracted/Perfect/DOASys
 python tools/doasys.py extracted/p --verify     --art extracted/Perfect/DOASys --movers extracted/Perfect/PerfectMovers.B3D
+
+# How far can the game see, and what is past the end of its divide table?
+python tools/horizon.py extracted/p --arenas extracted/Perfect
+python tools/horizon.py extracted/p --verify --arenas extracted/Perfect
 ```
 
 ## Status
@@ -147,7 +151,7 @@ Early, but moving. Nothing is playable yet.
   seven of its sub-handlers, the CEL bank loader, the floor renderer, the object
   id table and the world globals are identified. `tools/symbols.py` turns the
   code map plus the image's own strings into a symbol file that
-  `armxref.py -S` reads, which names 310 of the 1,477 functions. The call
+  `armxref.py -S` reads, which names 313 of the 1,477 functions. The call
   graph is readable too, after two fixes: an APCS function starts one
   instruction before its `push`, and the code does not stop where the AIF
   header's `image_ro_size` says it does. Past that boundary sits a
@@ -251,6 +255,18 @@ Early, but moving. Nothing is playable yet.
   one — `round((3 * rankTier + statTier) / 4)`, clamped to 1-5. Its stat
   thresholds are three columns of `PerfectMovers.B3D` that had sat in the
   notes for two sessions with no meaning.
+- **The projection table's overrun is reachable, and the place is the Loki
+  fight.** `ProjectPoint` divides by depth through a 1,600-entry table that
+  stops at 401.75 units, indexes it with no upper bound, and *raises* depth
+  off-axis. What keeps it in range is not the per-cell cull — the renderer is
+  handed records up to 768 units away — but a three-instruction gate on a
+  face's average depth, present in five of the six face builders at 250, 200
+  or a settable draw distance. The sixth belongs to Loki, has no gate, and
+  Loki's arena is 579 units across with the draw distance deliberately raised
+  to 600. Past the table the code reads the ground lattice template as
+  reciprocals, so a port that divides correctly will not match the console
+  there. The nine encounter drivers came out of the same read, dispatched on
+  bit `id - 3`.
 
 See [docs/04-roadmap.md](docs/04-roadmap.md).
 

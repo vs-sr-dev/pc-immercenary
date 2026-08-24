@@ -96,7 +96,38 @@ open-ended research.
   rectangle and no arena — but so is Raven, who stays in the list, so the
   exclusion is recorded and not explained.
 
-- **Where the verifiers stand after all of it**: `savegame.py --verify` 61,
+- **The far horizon overrun is answered: yes, and the place is the Loki
+  fight.** The bound on `ProjectPoint` is not the per-cell cull — `0x0387f0`
+  hands the parser a 5 x 5 block of 256-unit cells, so records arrive up to
+  768 units out. It is a three-instruction gate on a face's average depth,
+  `cmp limit, (d0 + d1) asr #17`, and there are exactly five in the image:
+  250 in `0x0014e0`, 200 in three, and `[0x058a40]` — the **draw distance** —
+  in `0x0027d0`. See [docs/08](docs/08-the-ground.md);
+  `tools/horizon.py --verify` is 30 checks, 33 with `--arenas`.
+- **Eight functions call `ProjectFace`; six of them build corners.** The other
+  two walk the list a builder already filled, and `ProjectPoint`
+  short-circuits on a corner whose flag bit is set, so only a builder can see
+  a fresh depth — which is why only builders have gates. **Five of the six do.
+  The sixth is `0x021130`, it has no gate, and it is the only builder the Loki
+  driver reaches.**
+- **Loki's arena is 579 units across and `PrepareForLokiThread` sets the draw
+  distance to 600** — the one call out of twelve that goes past the table's
+  401.75. Everything else sets 200 or 250. So the table is read past its end,
+  deterministically, and what it reads is the ground lattice template: a
+  legitimate reciprocal is at most 0.5 and a lattice coordinate is up to
+  112.0, two hundred times outside `MulSF16`'s contract.
+- **`SetDrawDistance` is `0x012b64`**, `[0x058a40]` plus a fade step in
+  `[0x058bc0]`, called only from the encounters' `PrepareFor…Thread`
+  routines.
+- **And the nine encounter drivers are named.** `0x03c9ac` dispatches on bit
+  `id - 3` — the same numbering `LieutenantGone` uses — with one arm each for
+  ids 6 to 14 and none for Raven: Medusa `0x022a4c`, Tesla `0x04099c`,
+  Balkan `0x00102c`, Silva `0x03c550`, Fly `0x010574`, Riberto `0x03b558`,
+  Chameleon `0x00232c`, Chance `0x003750`, Loki `0x020cb4`. That pins the
+  README's "all nine boss encounters" to nine addresses.
+
+- **Where the verifiers stand after all of it**: `horizon.py --verify` 30, 33
+  with `--arenas`; `savegame.py --verify` 61,
   67 with `--movers`; `doasys.py --verify` 59, 68 with `--art` and
   `--movers`; `speech.py --verify` 34, `frontend.py --verify`
   `frontend.py --verify` 19, `armmath.py --verify` 14, `dsp.py --verify` and
@@ -514,17 +545,22 @@ camera in about 1.5 seconds a frame. What is missing:
   arguments, and the shell treats its result as six coin flips
   ([docs/09](docs/09-os-surface.md)). Everything about it says random source
   and nothing proves it.
-- **The far horizon table overruns the reciprocal table** for depths above
-  402.0. Harmless in the ground lattice — but `ProjectPoint` *can* reach it.
-  It rejects depth at or below 2.0 and then indexes `0x08c16c` by
-  `(depth - 2.0) >> 14` with **no upper bound at all**, so anything past 401.75
-  reads whatever sits at `0x08da6c`. Its ground-level tail is bounded no
-  better: it switches at depth 36.0 between the 144-entry fine table at
-  `0x08b8ec` (2.0–38.0 in 0.25 steps) and the 400-entry coarse one at
-  `0x08bb2c` (36.0–436.0 in whole units), and past 436.0 walks straight into
-  the reciprocal table. The open question is whether the per-cell cull ever
-  hands it a point that far away — the overworld is 512 units across, so it
-  is not obviously impossible.
+- **Where Chance's face builder is.** `ProjectPoint`'s overrun is answered
+  for Loki ([docs/08](docs/08-the-ground.md)) but Chance's arena is **587**
+  units across, larger still, and **no** face builder appears in its driver's
+  call graph — `0x003750`, dispatched on bit `0x400`. Its frame loop is
+  entered through an address handed to `CreateThread`, the way
+  `PrepareForLokiThread` hands out `0x030e40`. Find it and the second half of
+  the answer follows. Silva (`0x03c550`) and Fly (`0x010574`) are the same
+  shape; Fly's arena is 395 units, inside the table, and Silva has no arena
+  file at all.
+- **The 8.8 horizon tables are the *same* routine's other unbounded end.**
+  `0x056848`, the `height == 0` arm that both `ProjectPoint` and
+  `ProjectPointFlat` branch to, takes screen Y straight out of `0x08b8ec`
+  below depth 36.0 and `0x08bb2c` above, and the coarse one stops at 437.0.
+  So one routine has two table ends; 401.75 is the tighter, which is why it
+  breaks first. Nothing more to read here — it is checked — but a port needs
+  both numbers.
 
 ## Notes to self
 
@@ -736,3 +772,24 @@ camera in about 1.5 seconds a frame. What is missing:
   files exist — and the answer here was one missing and one unreachable, in
   the same directory, in opposite directions. A hardcoded name list gives you
   nothing to check.
+
+- **The bound you are looking for may not be where the culling is.** Two
+  sessions assumed the per-cell cull was what kept `ProjectPoint` inside its
+  table. It is not — the cull submits records 768 units out, and the real
+  bound is three instructions in each *face builder*, a comparison against
+  the mean of two corner depths. Grep for the comparison, not for the cull.
+- **Count the callers, then ask which of them can see a new value.** Eight
+  functions call `ProjectFace` and only six can introduce a depth, because
+  `ProjectPoint` short-circuits on corners already done. Splitting callers by
+  *whether they call `GatherCorners`* turned an eight-way muddle into a clean
+  six-and-two, and it is why "five of six have the gate" is a statement worth
+  making.
+- **A constant that is out of line with its eleven siblings is the answer.**
+  Twelve `SetDrawDistance` calls: ten 250, two 200, one **600**. The one that
+  does not fit is the one that matters, and it named the encounter before any
+  geometry was measured.
+- **Threads hide the last `bl`.** Four encounter drivers reach no gated face
+  builder at all, because their frame loops are entered through addresses
+  handed to `CreateThread`. `armxref -c` cannot follow that, and the fix is
+  the same one from session 9: look for the *address* being loaded, not the
+  branch.

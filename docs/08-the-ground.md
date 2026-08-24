@@ -219,6 +219,10 @@ One rough edge: the far table's last 36 entries, depth 402.0 and up, index the
 far — the farthest ground corner is 181 units — but a port that reimplements
 the table builder literally will read whatever follows it.
 
+`ProjectPoint`'s own indexing has the same edge and it is not harmless. See
+**[How far can it see](#how-far-can-it-see)** below: the answer turned out to
+be a three-instruction gate, and one encounter does not have it.
+
 Both tables comfortably cover the lattice: its farthest corner is
 `sqrt(128² + 128²)` ≈ 181 units away, inside 201.5 and 401.75.
 
@@ -237,6 +241,118 @@ screenY = horizon[(depth - 2.0) >> 15] + (pitch >> 8)      ; pitch = [0x582a4]
 
 A quad is emitted only when **no** corner has bit 0 and **some** corner has
 bit 1 — the loop at `0x100f0` ORs the four flag bytes and tests both bits.
+
+## How far can it see
+
+`ProjectPoint` at `0x0568a8` rejects depth at or below 2.0 and then indexes
+the reciprocal table with `(depth - 2.0) >> 14` and **no upper bound at
+all**. Worse, before indexing it *raises* depth when the lateral offset
+exceeds it:
+
+```
+000568dc  movs r8, r5           ; the lateral
+000568e0  mvnmi r8, r8          ; |lateral|
+000568e4  cmp  r8, r4
+000568e8  subgt r8, r8, r4
+000568ec  addgt r4, r4, r8, asr #2   ; depth += (|lat| - depth) / 4
+```
+
+so the index can only grow. And its `height == 0` arm at `0x056848`, which
+`ProjectPointFlat` branches to as well, takes screen Y straight out of the
+8.8 tables instead of computing it — `0x08b8ec` below depth 36.0, `0x08bb2c`
+above — and is unbounded there too, with the coarse table stopping at 437.0.
+**One routine, two table ends**; 401.75 is the tighter and so the one that
+breaks first.
+
+The reciprocal table holds 1,600 entries covering depth 2.0 … 401.75 — the builder at `0x014348` is five instructions and every
+number in it is an immediate — and past its end at `0x08da6c` sit 200 bytes
+of zero-initialised space and then the **ground lattice template** at
+`0x08db34`, whose words are coordinates in −128.0 … 112.0. A legitimate
+reciprocal is at most 0.5, which is exactly `MulSF16`'s documented contract
+([06](06-code-map.md)), so past the table the multiply is handed values two
+hundred times outside it.
+
+Produced with [`tools/horizon.py`](../tools/horizon.py); `--verify` is 30
+checks, 33 with `--arenas`.
+
+### What bounds it is a gate, not the cull
+
+The renderer visits a **5 × 5 block of 256-unit cells** — `0x0387f0` scans
+`cx ± 2` and `cy ± 2` with `bics ip, #0xf` keeping it on the 16 × 16 grid —
+so the parser can be handed a record 768 units away on each axis. The cull is
+not what protects the table.
+
+What protects it is three instructions, one per face builder:
+
+```
+add r0, r0, r1              ; depth of corner 0 + depth of corner 1
+mov r1, #limit
+cmp r1, r0, asr #17         ; limit vs the mean, in whole units
+ble drop
+```
+
+There are exactly five of them in the whole image:
+
+| site | in | limit |
+|---|---|---|
+| `0x0015d0` | `0x0014e0` | 250 units |
+| `0x0028e8` | `0x0027d0` | `[0x058a40]`, the draw distance |
+| `0x02380c` | `0x023674` | 200 units |
+| `0x023a84` | `0x02390c` | 200 units |
+| `0x0411b8` | `0x0410c4` | 200 units |
+
+`[0x058a40]` is set by **`SetDrawDistance`** at `0x012b64`, which also derives
+a fade step into `[0x058bc0]`; twelve call sites set it, all of them in the
+encounters' `PrepareFor…Thread` routines. Ten set 250, two set 200 — and
+**one sets 600**.
+
+### Eight callers, six of which could see a fresh depth
+
+Eight functions call `ProjectFace`. Six of them also call `GatherCorners`, so
+they pull fresh corner pairs out of a record and are the first thing to see a
+depth; the other two walk the visible-face list a builder already filled, and
+`ProjectPoint` short-circuits on a corner whose flag bit is set
+(`tst sl, #1`), so a re-projector cannot introduce a depth of its own.
+
+**Five of the six builders carry the gate. The sixth, `0x021130`, carries
+none.**
+
+### And the sixth is Loki's
+
+The encounter dispatcher at `0x03c9ac` has one arm per character id, keyed on
+bit `id - 3` — the same numbering `LieutenantGone` uses
+([19](19-the-doasys-spire.md)). Nine arms, ids 6 to 14; Raven, id 15, has
+none:
+
+| id | boss | driver | gated builder | arena |
+|---|---|---|---|---|
+| 6 | Medusa | `0x022a4c` | `0x023674`, `0x02390c` | second family |
+| 7 | Tesla | `0x04099c` | `0x0410c4` | 318 |
+| 8 | Balkan | `0x00102c` | `0x0014e0` | 301 |
+| 9 | Silva | `0x03c550` | **none** | no arena file |
+| 10 | Fly | `0x010574` | **none** | 395 |
+| 11 | Riberto | `0x03b558` | `0x0027d0`, `0x023674` | second family |
+| 12 | Chameleon | `0x00232c` | `0x0027d0`, `0x023674` | second family |
+| 13 | Chance | `0x003750` | **none** | **587** |
+| 14 | Loki | `0x020cb4` | **none**, and `0x021130` is its builder | **579** |
+
+Loki's arena spans 420 × 398 world units, a diagonal of **579**, and
+`PrepareForLokiThread` at `0x030300` is the one call that sets the draw
+distance to **600** — which is what you set when you want nothing in a
+579-unit arena culled. Its only face builder has no depth gate.
+
+**So the reciprocal table is read past its end, and the place it happens is
+the Loki encounter.** Not the overworld: every builder the overworld and the
+other encounters reach stops at 200 or 250 units, comfortably inside 401.75.
+
+Chance is the loose end. Its arena is **587** units — larger still — and no
+face builder appears in its driver's call graph at all, so its frame loop is
+reached the way the threads are, by an address a branch scan cannot follow.
+
+A port should compute `1/depth` rather than reproduce this. But it should
+know that the console's Loki fight is reading lattice coordinates as
+reciprocals for its far walls, deterministically, and that a correct divide
+will not look the same.
 
 ## Scale and detail
 
