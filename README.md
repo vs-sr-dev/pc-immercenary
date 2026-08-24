@@ -87,6 +87,11 @@ python tools/armmath.py extracted/p --verify
 python tools/savegame.py --map
 python tools/savegame.py --tiers --movers extracted/Perfect/PerfectMovers.B3D
 python tools/savegame.py --verify --movers extracted/Perfect/PerfectMovers.B3D
+
+# The front end: the stats pages, the ammo icons, and which interlude plays when
+python tools/frontend.py --stats
+python tools/frontend.py --interludes
+python tools/frontend.py --verify
 ```
 
 ## Status
@@ -183,6 +188,21 @@ Early, but moving. Nothing is playable yet.
   ceiling is written down as plainly as its result: the corpus links the C
   runtime and folio glue, and nothing on the disc links the audio, Graphics,
   DataStream or Cinepak libraries without game code beside it.
+
+- **The 512-byte save game is read field by field, and it closes.** There is
+  no serialiser: the live game-state struct at `0x89d40` is what goes out.
+  `savegame.py --verify` is 47 checks. Four programs write it, not one — `p`
+  and `p1E` while you play, the shell between jumps, and the front end, which
+  owns a 38-byte **interlude ledger** at `+0x5c` counting how many times each
+  story film has played. That ledger is what proves the nine missing
+  interludes were cut from the code as well as from the disc: the chooser can
+  reach 27 of the 40 films, every one of the 27 is on the disc, and the nine
+  it can never reach are exactly the nine that are gone.
+- **The seven statistics counters are named**, and not from a string — the
+  labels are painted on `StatsPage2.cel`. *Lower Crashes*, *Higher Crashes*
+  and *Huffmans* were the three that had no reading; `p` splits the first two
+  by comparing the victim's rank with yours, and the third is the game's own
+  word for collecting the static a kill leaves behind.
 
 See [docs/04-roadmap.md](docs/04-roadmap.md).
 

@@ -84,15 +84,9 @@ class Image:
             # PC-relative address materialisation: add/sub rD, pc, #imm.
             # The compiler parks string literals inside the code section and
             # reaches them this way, so this is how most strings are referenced.
-            pm = PCREL.match(ops)
-            if pm and m[:3] in ('add', 'sub'):
-                delta = int(pm.group(1), 0)
-                if pm.group(2) is not None:
-                    # ARM rotated immediate: capstone prints "#imm, #rot",
-                    # the real value is imm rotated right by rot bits.
-                    rot = int(pm.group(2), 0) & 31
-                    delta = ((delta >> rot) | (delta << (32 - rot))) & 0xFFFFFFFF
-                self.litrefs[a + 8 + (delta if m[:3] == 'add' else -delta)].append(a)
+            t = pcrel_target(a, m, ops)
+            if t is not None:
+                self.litrefs[t].append(a)
         self.fstarts = sorted(self.funcs)
 
     def tail_end(self, zeros=8):
@@ -126,6 +120,37 @@ class Image:
             if start <= a < end:
                 i = self.insns[a]
                 yield a, i.mnemonic, i.op_str
+
+    def string_spans(self, minlen=5):
+        """Which addresses are inside a string literal.
+
+        The compiler parks literals in the middle of the code section, so a
+        linear sweep decodes them as instructions -- pages of `svchs` and
+        `uqsub16vs` that mean nothing.  Map every byte of every printable run
+        to the run that covers it, and the disassembler can print the text.
+        """
+        spans = {}
+        for off, s in self.strings(minlen).items():
+            for k in range(off, off + len(s) + 1):     # + the NUL
+                spans[k] = (off, s)
+        return spans
+
+
+def pcrel_target(addr, mnem, ops):
+    """The address an `add/sub rD, pc, #imm[, #rot]` materialises, or None.
+
+    Capstone prints an ARM rotated immediate as two operands, `#imm, #rot`,
+    and the real value is `imm` rotated right by `rot`.  Dropping the
+    rotation silently loses most of the string references in an image.
+    """
+    pm = PCREL.match(ops)
+    if not pm or mnem[:3] not in ('add', 'sub'):
+        return None
+    delta = int(pm.group(1), 0)
+    if pm.group(2) is not None:
+        rot = int(pm.group(2), 0) & 31
+        delta = ((delta >> rot) | (delta << (32 - rot))) & 0xFFFFFFFF
+    return addr + 8 + (delta if mnem[:3] == 'add' else -delta)
 
 
 def main():
@@ -207,9 +232,23 @@ def main():
     if a.dis:
         start = int(a.dis, 16)
         end = start + a.count * 4
+        spans = im.string_spans()
         for addr, m, ops in im.dis(start, end):
+            # An inline literal is not code.  Print the text once, at the
+            # word the string starts in, and skip the rest of its words.
+            if addr in spans:
+                off, txt = spans[addr]
+                if addr <= off < addr + 4:
+                    print(f"  {addr:08x}  {'.ascii':<10} {txt!r}")
+                continue
             mark = '  ; === FUNC ===' if addr in im.funcs else ''
             lit = ''
+            tgt = pcrel_target(addr, m, ops)
+            if tgt is not None:
+                txt = STR.get(tgt)
+                nm = SYM.get(tgt)
+                lit = f"   ; -> {tgt:#x}" + (f'  "{txt}"' if txt else
+                                             f'  {nm}' if nm else '')
             mm = LITPOOL.match(ops)
             if m.startswith('ldr') and mm:
                 l = addr + 8 + int(mm.group(1), 0)

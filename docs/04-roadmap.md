@@ -58,7 +58,7 @@ CPU — it is the CEL engine, and all three approaches need it.
 | 0 — Tooling and inventory | ✅ done |
 | 1 — Asset decoders | ✅ done — CEL, `.anim`, `.img`, the CEL banks, the fonts, the whole DataStream (Cinepak + SDX2), the HUD `.Maps` and the 64 DSP instruments all decode, and the films decode in the console's own dithered RGB555 |
 | 2 — B3D world format | ✅ done, see [05-b3d-format.md](05-b3d-format.md) — geometry and textures both |
-| 3 — Code map | 🟡 the world loader, the record parser, the CEL bank loader, the whole ground pipeline, the font blitter, the HUD radar, the hand-written math module, the DOA conversation system and its lip sync, the front end and the 512-byte save game are all read; the OS surface is **closed** in both images and the library/game split is settled as far as the disc allows. `tools/symbols.py` covers 298 of `p`'s 1,477 function starts — 91 named, 207 hinted |
+| 3 — Code map | 🟡 the world loader, the record parser, the CEL bank loader, the whole ground pipeline, the font blitter, the HUD radar, the hand-written math module, the DOA conversation system and its lip sync, the front end, its stats pages and interlude chooser, and the 512-byte save game are all read; the OS surface is **closed** in both images and the library/game split is settled as far as the disc allows. `tools/symbols.py` covers 299 of `p`'s 1,477 function starts — 92 named, 207 hinted |
 | 4 — Runtime | ⬜ not started |
 | 5 — Native systems | ⬜ not started |
 | 6 — Beyond parity | ⬜ not started |
@@ -176,8 +176,8 @@ See [../TODO.md](../TODO.md) for the addressed version. In short:
   field of an instruction takes an address, which is the way in
   ([14](14-dsp-instruments.md)).
 - **Four bits of the game state.** `+0x8c` bit 23, bit 9 and the two-bit
-  counter at bits 7-8, plus two of the seven statistics counters
-  ([18](18-the-save-game.md)).
+  counter at bits 7-8 ([18](18-the-save-game.md)). The seven statistics
+  counters are all named now.
 - **Whether the far horizon table is ever indexed past its end.**
   `ProjectPoint` bounds its depth below and not above; the overworld is 512
   units across, so it is not obviously impossible.
@@ -185,6 +185,15 @@ See [../TODO.md](../TODO.md) for the addressed version. In short:
   fields are populated), and does the port need to care? Almost certainly not.
 
 ### Answered since this list was written
+
+- *What are the last two statistics counters?* **Higher Crashes** and
+  **Huffmans**, and the one before them is **Lower Crashes**. The names are
+  painted on `StatsPage2.cel`, not written in any string
+  ([17](17-the-front-end.md)).
+- *What are the 35 untouched bytes at `+0x5c`?* The front end's **interlude
+  ledger** — one byte per film index, how many times that interlude has
+  played. Which also proves the nine cut films were cut from the selector as
+  well as from the disc ([17](17-the-front-end.md)).
 
 - *Is the FMOData subscriber payload custom?* Fully custom, and it is not
   metadata: it carries **cel files**. `AllCinepaks.strm` hides a level's

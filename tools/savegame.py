@@ -268,9 +268,11 @@ FIELDS = [
                                'shell writes it, neither game reads it'),
     (0x024, 28, 'statsJump',   'seven counters for this jump'),
     (0x040, 28, 'statsTotal',  'the same seven, carried'),
-    (0x05c, 35, '-',           'never touched by either program'),
-    (0x07f, 1,  'doasys',      'one-shot: 0x00d754 turns 1 into 2 and prints'),
-    (0x080, 12, '-',           'never touched by either program'),
+    (0x05c, 38, 'interludes',  'the front end ledger: one byte per film '
+                               'index 0-37, how many times it has played. '
+                               'Only entry 35 (+0x7f) is read by `p`, at '
+                               '0x00d754, which turns 1 into 2'),
+    (0x082, 10, '-',           'never touched by anything'),
     (0x08c, 4, 'state',        'rank in bits 24-31, three weapon slots at '
                                'bits 10, 14 and 18, flags below'),
     (0x090, 12, 'ammo',        'one count per weapon, ids 1 to 12'),
@@ -289,16 +291,22 @@ FIELDS = [
 ]
 
 # The seven per-jump counters, and the same seven again 0x1c further on.
+# Six of the seven are a row of the front end's second stats page; the names
+# are the labels drawn on `StatsPage2.cel` (see docs/17).
 STATS = [
-    (0x00, 'ticks',   'play time; 0x004ff8 divides the two added by 3600'),
-    (0x04, 'jumps',   'unused per jump; the shell counts jumps in the '
-                      'carried copy'),
-    (0x08, 'spent',   'Offense drained by firing'),
-    (0x0c, 'dealt',   'damage handed out'),
-    (0x10, 'taken',   'damage taken'),
-    (0x14, 'n',       'a count, +1 at 0x00220c and 0x00b83c'),
-    (0x18, 'pair',    'two 16-bit counters: rithms spawned at +0x18, '
-                      'crashed at +0x1a'),
+    (0x00, 'ticks',   '"Time in Combat", 60 a second'),
+    (0x04, 'lost',    'per jump, the id of the weapon you lost -- the front '
+                      'end puts the X over that icon. In the carried copy it '
+                      'is instead "Total Jumps", which is why the shell '
+                      'increments it rather than adding the jump one'),
+    (0x08, 'spent',   '"Offense Used": Offense drained by firing'),
+    (0x0c, 'dealt',   '"Damage Given"'),
+    (0x10, 'taken',   '"Damage Taken"'),
+    (0x14, 'lower',   '"Lower Crashes": a rithm ranked below you. +1 at '
+                      '0x00220c and 0x00b83c'),
+    (0x18, 'pair',    'two 16-bit counters: "Higher Crashes" at +0x18, which '
+                      'is the branch that takes the victim rank, and '
+                      '"Huffmans" at +0x1a, bumped by the huffman itself'),
 ]
 
 # 0x0007ccc writes the five rank thresholds into the mover records as it
@@ -474,10 +482,32 @@ def verify(p, p1e, movers=None):
     c(lit == 0x12345678, "0x12345678 marks a position that was never set",
       hex(lit))
 
+    print("lower crashes, higher crashes and huffmans")
+    c(text(p, 0x0021d8) == 'and r0, r8, r0, asr #7' and
+      text(p, 0x0021dc) == 'cmp r0, r6' and
+      text(p, 0x0021e0) == 'ble #0x2228',
+      "the split is the victim rank against yours, taken from its own record")
+    c(text(p, 0x00220c) == 'add r0, r0, #1' and
+      text(p, 0x002210) == 'str r0, [r7, #0x38]',
+      "the fall-through -- victim ranked below you -- bumps +0x14")
+    c(text(p, 0x0021e4) == 'ldr r0, [r7, #0xc]' and
+      text(p, 0x0021e8) == 'add r0, r0, #0x400',
+      "and pays 1/64 of a unit into each of the earned triple")
+    c(text(p, 0x002238) == 'strb r0, [r7, #0x3d]' and
+      text(p, 0x002248) == 'bl #0xaee4',
+      "the other arm bumps the 16-bit +0x18 and then claims the rank")
+    c(text(p, 0x00ccd4) == 'strb r1, [r0, #0x3f]',
+      "and the huffman itself bumps the 16-bit +0x1a")
+
     print("what nothing touches")
     dead = {x.off for x in scan(p) if not x.joined}
     c({o for o in dead if 0x5c <= o < 0x8c} == {0x7f},
-      "between +0x5c and +0x8b only the byte at +0x7f is ever touched")
+      "of the interlude ledger only entry 35 at +0x7f is touched here")
+    c(not [o for o in dead if 0x82 <= o < 0x8c],
+      "and nothing at all touches +0x82 to +0x8b")
+    c(0x28 not in {x.off for x in scan(p)} and
+      0x28 not in {x.off for x in scan(p1e, 0x6ea04)},
+      "neither program writes statsJump+0x04, so the X never appears")
     c(not [x for x in scan(p) if x.off in (0x18, 0x1c, 0x20) and not x.store],
       "and neither game program reads the jump baseline")
 

@@ -3,13 +3,55 @@
 Everything below has a concrete starting address or file. Nothing here is
 open-ended research.
 
+## Done in session 9
+
+- **The seven statistics counters are named, and the names are not in any
+  string.** They are painted on `StatsPage1.cel` and `StatsPage2.cel`;
+  decoding those two cels names the whole block at once. The three that had
+  no reading are **Lower Crashes** (`+0x14`), **Higher Crashes** (`+0x18`,
+  16-bit) and **Huffmans** (`+0x1a`, 16-bit), and `p` splits the first two at
+  `0x0021d4` by comparing the victim's rank with the player's — below you
+  pays 1/64 of a unit into each of `Dmax`/`Omax`/`Amax`, at or above you calls
+  `AllocRank` and takes its rank. See [docs/17](docs/17-the-front-end.md).
+- **Page 2 is eight rows, not six**, and row 7 is the sum of rows 5 and 6
+  computed inline at `0x1d70`. The whole page is one `sprintf` with sixteen
+  arguments across four pushes; the order is traced instruction by
+  instruction and it closes.
+- **Effectiveness is the eighth number**, `clamp(0, 100, 100 * (given -
+  taken) / (4 * used))`, and the divide pins **Operamath slot −20**.
+- **The 35 "untouched" bytes at `+0x5c` belong to the other program.** They
+  are the front end's **interlude ledger**: one byte per film index 0-37,
+  how many times that interlude has played. `0x12a0` of `CinepakSubroutine`
+  reads the whole array and returns a film index; `0x1654` bumps one byte.
+  `--interludes` prints the chooser row by row.
+- **Which also closes the nine cut films.** The chooser can reach 27 of the
+  40 films, **every one of the 27 is on the disc**, and the thirteen it never
+  reaches are the four story films played by explicit index plus **exactly
+  the nine that are missing**. The table was left whole so the later indices
+  did not move, and the selector lost its nine arms with them.
+- **`+0x7f` is not a `doasys` flag.** It is ledger entry 35, `I35.strm`, and
+  `p` reads it at `0x00d754`: play that interlude once and the next DOA
+  conversation is forced to character 15.
+- **`statsJump+0x04` is the weapon you lost**, marked with `LostWeapon.cel`
+  over its icon — and nothing on the disc ever writes it, so the `X=lost`
+  legend explains a marker the shipped game never places. In the *carried*
+  copy the same field is Total Jumps, which is why the shell increments it
+  rather than adding the jump's.
+- **The twelve ammo algorithms are named and ordered**: BOOMERANG, HEX, NUKE,
+  STUNYA, PUSHYA, ICE, OFA, SWITCHYA, ANNABALLS, ASHFLAY, CHAFF, PEMS, from
+  `p`'s table at `0x42d9c`, matched to the icons by three that carry their
+  own initial.
+- **`armxref.py --dis` now resolves `add rD, pc, #imm` to the string it
+  materialises and prints inline literals as text** instead of pages of
+  nonsense instructions. That change is what made the front end readable.
+
 ## Done in session 8
 
 - **The 512-byte save game is read, field by field**, and it closes to the
   byte. It is `0x89d40` in `p`, it is not a serialisation of anything — the
   static block is what goes out — and `p1e` keeps the same struct at
   `0x06ea04` and sends it the same way. See [docs/18](docs/18-the-save-game.md);
-  `tools/savegame.py --verify` is 44 checks that pass.
+  `tools/savegame.py --verify` is 47 checks that pass.
 - **DOA is Defense, Offense, Agility, and the block holds two of each**:
   current at `+0x00` and earned at `+0x0c`, every raise clamped at `128.0`.
   Re-entering Perfect copies earned over current, which is exactly the
@@ -306,40 +348,29 @@ camera in about 1.5 seconds a frame. What is missing:
   code sets and clears it and the renderer tests it), bit 9 (tested in five
   places), and the two-bit counter at bits 7-8 that `0x0254ec` clamps. One
   context read each.
-- **Two of the seven statistics counters have no reading.**
-  `statsJump + 0x14` is bumped at `0x00220c` and `0x00b83c`, and the 16-bit
-  pair at `+0x18`/`+0x1a` at `0x002228` and `0x00cccc`. The front end draws
-  them in a fixed order, so its stats-page layout at `0x166c` would name all
-  seven at once — that is the cheapest way to finish the block.
 - **The rest of `launchme`'s message loop.** Verbs `0x10` and `0x11` are
   read ([18](docs/18-the-save-game.md)); `1` and `0xff` are not, and neither
   is the kernel call at `0x000b70` whose returned mask decides which of the
   three stats a crash costs you. Half a page each.
-- **Which of the front end's stats rows is which.** It has three `%+3d`
-  against three `%3d`, six `%4d      %4d` and a clock, and it does not reach
-  them through the state pointer it saves with — so the argument its stats
-  page takes is the missing link, and naming those rows would name the last
-  two unread counters in the block at the same time.
 - **`p1e`'s body has still never been walked.** Its OS surface is closed now
   and it shares the world format, the `.Maps` format and — proven byte for
   byte — the whole math module, so it stays the cheapest cross-check on
   anything uncertain in `p`.
-- **`CinepakSubroutine` is mapped but not read.** It is not a film player: it
-  is the game's **front end** — logo, title, main menu, practice mode, stats
-  pages, NVRAM save/load and a music thread — 447 functions and 72 KiB
-  outside the C runtime. [docs/17](docs/17-the-front-end.md) has the
-  subsystem map, every entry pinned by a string reference. The pieces worth
-  an hour each, in order:
-  - **What the 512 bytes of a save game mean.** The front end's NVRAM code is
-    read and it is thin: it writes `argv[2]` as an opaque 512-byte blob into
-    `/NVRAM/Immerce  <slot> (<n>)`, and the only field it looks at is byte 3
-    of state word `+0x8c`, which goes in the file name. The *layout* is in
-    `p`, and `p` passes the pointer, so start from whoever builds argv for
-    `$DOAsys/SpeechSubroutine`'s sibling launch.
-  - **The main menu at `0x37c0`** and the stats pages at `0x166c`: what a
-    port has to draw before the game starts.
+- **The rest of `CinepakSubroutine`.** The stats pages at `0x166c` and the
+  interlude chooser at `0x12a0` are read now
+  ([docs/17](docs/17-the-front-end.md)); what is left, in order:
+  - **The main menu at `0x37c0`** — what a port has to draw before the game
+    starts. `argv[3]` chooses four items or five at `0x37dc`, and the strings
+    are `New Jump`, `Resume`, `Save...`, `Load...`, `Practice`.
   - **The music thread at `0x2c88`** and the spooler at `0x3260`. The same
     object is linked into `p` and `p1e`, so it cross-checks three ways.
+  - **`0x0008c0`, practice-mode availability**, *"Practice Available: %d"* —
+    small, and it is the last unread entry of the subsystem map.
+- **What the DOA conversation looks like from the game's side.** `0x00d754`
+  in `p` builds the "Video Character" and prints it, and it is the routine
+  that reads the interlude ledger. It is the join between
+  [16](docs/16-speech-and-doa.md) and [17](docs/17-the-front-end.md) and
+  neither document has walked it.
 - **The far horizon table overruns the reciprocal table** for depths above
   402.0. Harmless in the ground lattice — but `ProjectPoint` *can* reach it.
   It rejects depth at or below 2.0 and then indexes `0x08c16c` by
@@ -353,6 +384,26 @@ camera in about 1.5 seconds a frame. What is missing:
   is not obviously impossible.
 
 ## Notes to self
+
+- **Capstone prints `pop {r3}` for `ldr r3, [sp], #-4` as well as for
+  `ldr r3, [sp], #4`** — it drops the U bit, and the two move the stack
+  pointer in opposite directions. Tracking arguments through a `sprintf` with
+  sixteen of them is off by eight bytes if you believe the mnemonic. Read
+  bit 23 of the encoding, the same way you already have to read bits 27-24 to
+  tell `bl` from `blt`.
+- **`'blt'.startswith('bl')` is True**, and it cost a scan two of eighteen
+  arms of the interlude chooser before the answer looked wrong. The note
+  about conditional `BL` was already in this file; the trap is not reading
+  the mnemonic, it is *filtering* on it.
+- **A label painted in the artwork is a string the string dump cannot see.**
+  The seven statistics counters had gone two sessions without names because
+  every search was for text in the executables. `StatsPage2.cel` had them all
+  along, and `tools/cel.py` had been able to read it since session 1. When a
+  field's meaning is missing, ask what the game *draws* next to it.
+- **A field can mean two different things in two copies of the same struct.**
+  `+0x04` is the weapon you lost per jump and the number of jumps in the
+  totals, and the tell was already in the fold: the shell increments that one
+  word instead of adding, alone among the seven.
 
 - **A register carried across a label belongs to whoever branched there.**
   A forward scan that follows a base register is right until the first label,

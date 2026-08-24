@@ -23,7 +23,7 @@ python tools/savegame.py --sites 0x8c
 python tools/savegame.py --verify --movers extracted/Perfect/PerfectMovers.B3D
 ```
 
-`--verify` is 44 checks and they pass.
+`--verify` is 47 checks and they pass.
 
 ## The block is a message, and both game programs send it
 
@@ -64,9 +64,9 @@ written against the same struct and reaches it through its own literal pool.
 0x018    12  jumpBase    the earned triple as it stood when this jump began
 0x024    28  statsJump   seven counters for this jump
 0x040    28  statsTotal  the same seven, carried
-0x05c    35  --          untouched
-0x07f     1  doasys      one-shot flag; 0x00d754 turns 1 into 2
-0x080    12  --          untouched
+0x05c    38  interludes  one byte per film index 0-37: how many times that
+                         interlude has played.  The front end owns it
+0x082    10  --          untouched
 0x08c     4  state       rank, three weapon slots, four flags
 0x090    12  ammo        one count per weapon, ids 1 to 12
 0x09c     4  flags       the world flags word, a copy of [0x6bed0 + 0x78]
@@ -219,13 +219,14 @@ game clears both with two `0x1c`-byte `SetMem` calls:
 
 | | |
 |---|---|
-| `+0x00` | play time in ticks |
-| `+0x04` | unused per jump; in the totals it is the number of jumps |
-| `+0x08` | Offense drained by firing |
-| `+0x0c` | damage handed out |
-| `+0x10` | damage taken |
-| `+0x14` | a count, `+1` at `0x00220c` and `0x00b83c` |
-| `+0x18` | two 16-bit counters, big-endian bytes |
+| `+0x00` | Time in Combat, ticks at 60 Hz |
+| `+0x04` | per jump, the weapon you lost; in the totals, Total Jumps |
+| `+0x08` | Offense Used — drained by firing |
+| `+0x0c` | Damage Given |
+| `+0x10` | Damage Taken |
+| `+0x14` | Lower Crashes |
+| `+0x18` | Higher Crashes, 16-bit big-endian |
+| `+0x1a` | Huffmans, 16-bit big-endian |
 
 The pairing is not a guess: `0x009028` reads the 16-bit counter at `+0x3c`
 and the one at `+0x58` — the same field, `0x1c` apart — and adds them, and
@@ -233,9 +234,60 @@ and the one at `+0x58` — the same field, `0x1c` apart — and adds them, and
 end's `%02d:%02d  %2d:%02d:%02d` and its six rows of `%4d      %4d`: the
 stats page is two columns, this jump and the total.
 
+### The names come off the artwork, and the crash split is in the code
+
+The seven had no names in `p` — the front end's stats page draws them, and
+its labels are pixels in `StatsPage2.cel`, not strings. Decoding that cel
+names all seven at once; see [17](17-the-front-end.md).
+
+The two that had no reading at all are the crash counters, and `p` splits
+them on rank at `0x0021d4`:
+
+```
+0021d4  ldr r0, [r5]            ; the victim's own record
+0021d8  and r0, r8, r0, asr #7  ; its rank
+0021dc  cmp r0, r6              ; against yours
+0021e0  ble #0x2228
+        ; fall through -- a bigger number is a worse rank, so this one
+        ; ranked below you: +0x400 into each of Dmax/Omax/Amax, and
+00220c  add r0, r0, #1          ; Lower Crashes
+        ; 0x2228 -- it ranked at or above you: bump the 16-bit Higher
+        ; Crashes and then AllocRank, which hands you its rank
+```
+
+and `0x00ccd4`, inside the huffman routine at `0x00cb58`, bumps the third.
+So a crash you do not collect raises `Total Crashes` and not `Huffmans`,
+which is the game's own distinction: the guide's *"if you don't collect the
+static, your stats won't increase."*
+
+`+0x04` is the odd one. The shell increments the carried copy rather than
+adding the jump's, and the reason is that the two copies mean different
+things: in the totals it is **Total Jumps**, and per jump it is the id of
+the weapon you lost, which the stats page marks with an X over that icon.
+Nothing on the disc ever writes the per-jump one, so the X never appears.
+
 **And neither program ever writes the carried block.** Every store into
 `+0x40`…`+0x5b` in `p` and `p1e` together is the `SetMem` that clears it at
 a new game. The shell does it.
+
+## The untouched bytes belong to the other program
+
+`+0x5c` to `+0x81` is 38 bytes that `p` and `p1e` almost never touch, and
+they are not padding. They are the **front end's interlude ledger**: one byte
+per film index 0-37, counting how many times that interlude has played. The
+chooser at `0x12a0` of `CinepakSubroutine` reads the whole array to decide
+what to show next and bumps one byte at `0x1654`; see
+[17](17-the-front-end.md).
+
+That answers the one byte in the range this document had down as a `doasys`
+one-shot flag with no owner. `+0x7f` is entry **35**, the film `I35.strm`,
+and `p` reads it at `0x00d754`: if the front end has played that interlude
+exactly once, the next DOA conversation is forced to character 15 and the
+byte goes to 2, so it happens once. It is the only byte of the ledger either
+game program looks at.
+
+The genuinely dead bytes are now `+0x82` to `+0x8b`, ten of them, plus the
+two of padding at `+0xf2`.
 
 ## The shell owns the seams between jumps
 
@@ -272,12 +324,14 @@ still unread.
 - **Pickups are world state, not inventory.** Sixty-four positions with a
   bias, saved and restored, which is why a dropped weapon is still there
   when you jump back in.
-- **Three programs write this block**, not one: `p` and `p1e` while you
-  play, and the shell between jumps, which is where the totals and the DOA
-  baseline come from. A port that folds the stats inside the game will get
-  a different number of jumps than the disc does.
-- **47 of the 512 bytes are touched by nothing at all**, plus two of
-  padding.
+- **Four programs write this block**, not one: `p` and `p1e` while you play,
+  the shell between jumps, which is where the totals and the DOA baseline
+  come from, and the front end, which owns the interlude ledger at `+0x5c`.
+  A port that folds the stats inside the game will get a different number of
+  jumps than the disc does, and one that treats `+0x5c`…`+0x81` as padding
+  will replay the story films from the top on every load.
+- **Ten of the 512 bytes are touched by nothing at all**, `+0x82` to
+  `+0x8b`, plus two of padding.
 
 ## What this scan cannot see
 

@@ -17,11 +17,14 @@ ten music tracks the shipping code still asks for are not there.
     python tools/frontend.py --films
     python tools/frontend.py --music
     python tools/frontend.py --map
+    python tools/frontend.py --stats
+    python tools/frontend.py --interludes
     python tools/frontend.py --verify
 
 See docs/17-the-front-end.md.
 """
 import os, sys, struct, argparse, collections
+from capstone import Cs, CS_ARCH_ARM, CS_MODE_ARM, CS_MODE_BIG_ENDIAN
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -41,6 +44,7 @@ MAP = [
     (0x0008c0, 'practice mode availability', 'Practice Available: %d'),
     (0x0009a4, 'main: EA logo, title, date stamps, film playback',
      '$Perfect/film/TitleScreen.3cel'),
+    (0x0012a0, 'picks the interlude to play next', '(no string: 0x1654)'),
     (0x00166c, 'the stats pages and weapon icons',
      '$Perfect/film/StatsPage1.cel'),
     (0x002368, 'the Cinepak player proper', 'CPAK: Entering Player.'),
@@ -51,6 +55,74 @@ MAP = [
     (0x005a00, 'the NVRAM device', '/NVRAM'),
     (0x005c10, 'the save-slot name', 'Immerce  %d (%d)'),
 ]
+
+STATS = 0x166c          # the stats pages
+CHOOSER = 0x12a0        # picks the interlude to play, or 0xff
+CHOOSER_END = 0x166c
+CHOOSER_TAIL = 0x1654   # every arm branches here, where the ledger is bumped
+LEDGER = 0x5c           # the interlude ledger inside the 512-byte save game
+
+# The two stats pages, row by row, in drawing order.  The labels are read off
+# `StatsPage1.cel` and `StatsPage2.cel` -- they are artwork, not strings in the
+# image -- and each row's arguments are the sprintf at the address named.
+#
+# Both pages print two columns, `last jump` and `total`, which are the two
+# 28-byte statistics blocks of the save game at +0x24 and +0x40.  `jump` and
+# `total` below are offsets inside one of those blocks; `state` is an offset
+# in the 512-byte block itself.
+PAGE1 = [
+    ('Total Jumps',  0x1b64, '%3d          %3d', [('total', 0x04)]),
+    ('Rank',         0x1b64, None,               [('state', 0x8c)]),
+    ('Defense',      0x1c08, '%+3d       %3d',   [('state', 0x0c)]),
+    ('Offense',      0x1c08, None,               [('state', 0x10)]),
+    ('Agility',      0x1c08, None,               [('state', 0x14)]),
+]
+# Eight rows in one sprintf, then the clock in a second one.  Two of the eight
+# are derived rather than stored: Effectiveness is computed from three of the
+# others, and Total Crashes is the sum of the two rows above it.
+PAGE2 = [
+    ('Effectiveness',  None, 'per cent, clamped to 0..100; see below'),
+    ('Offense Used',   0x08, 'drained by firing, 16.16'),
+    ('Damage Given',   0x0c, '16.16'),
+    ('Damage Taken',   0x10, '16.16'),
+    ('Lower Crashes',  0x14, 'a rithm ranked below you'),
+    ('Higher Crashes', 0x18, '16-bit; you take its rank'),
+    ('Total Crashes',  None, 'the sum of the two rows above'),
+    ('Huffmans',       0x1a, '16-bit; crashes you collected'),
+]
+CLOCK = ('Time in Combat', 0x00, 'ticks at 60 Hz, a second sprintf')
+
+# Which of the 40 films the chooser can pick, and why.  The addresses are the
+# `mov r0, #n` that sets the index; `--verify` reads them back out of the image
+# rather than trusting this table.
+CHOOSER_ARMS = [
+    (0x1318, 28, 'the first lieutenant is dead'),
+    (0x1324,  2, 'no interlude from the pool 2-14 has played yet'),
+    (0x1330,  3, 'only one has'),
+    (0x1350, 15, 'earned Defense is still under 3.0'),
+    (0x1378, 25, 'all three of D/O/A past 32.0'),
+    (0x13a0, 26, 'past 64.0'),
+    (0x13c8, 27, 'past 96.0'),
+    (0x1400, 29, 'over two minutes played, or a 1-in-10 chance before that'),
+    (0x1434, 30, 'five minutes played and not one huffman collected'),
+    (0x145c, 31, 'the first huffman'),
+    (0x149c, 32, 'more than 20 huffmans, or ten minutes and at least one'),
+    (0x14b8, 35, 'more than six lieutenants dead'),
+    (0x14d8, 33, 'at least one lieutenant dead'),
+    (0x14f8, 34, 'more than four dead'),
+    (0x1520, 36, 'one lieutenant left'),
+    (0x1544, 37, 'all nine dead'),
+    (0x15f8, 14, "this jump's Effectiveness beat the running total by 15"),
+    (0x162c, 13, 'this jump earned more than 3.0 of Defense'),
+]
+CHOOSER_POOL = list(range(4, 13))   # `rand(9) + 4`, least-shown first
+
+# The twelve ammo algorithms, in weapon-id order.  The names are a table of
+# literals in `p` at 0x42d9c; the order is the order of the icons in
+# `AllWeaponIcons`, which is the order the stats page draws them in, and three
+# of the icons carry their own initial (I for Ice, A for Ashflay, C for Chaff).
+WEAPONS = ['BOOMERANG', 'HEX', 'NUKE', 'STUNYA', 'PUSHYA', 'ICE',
+           'OFA', 'SWITCHYA', 'ANNABALLS', 'ASHFLAY', 'CHAFF', 'PEMS']
 
 
 class Aif:
@@ -97,6 +169,97 @@ def named_directly(im):
         name = im.d[s:i + 5].decode('latin1').split('/')[-1]
         out.add(name.lower())
         i += 5
+
+
+def arms(im, start=CHOOSER, end=CHOOSER_END, tail=CHOOSER_TAIL):
+    """Every film index the interlude chooser can return, read out of the code.
+
+    Each arm is a `mov{cc} r0, #n` followed by a branch to the common tail at
+    `tail`, where the ledger byte is bumped and the index returned.  Read the
+    branch out of the *encoding*: capstone spells a conditional `BL` `bllt`,
+    which the mnemonic alone cannot tell from the plain branch `blt`, and
+    `'blt'.startswith('bl')` is True.
+    """
+    md = Cs(CS_ARCH_ARM, CS_MODE_ARM | CS_MODE_BIG_ENDIAN)
+    md.skipdata = True
+    md.skipdata_setup = ('.word', None, None)
+    ins = {i.address: (i.mnemonic, i.op_str)
+           for i in md.disasm(im.d[start:end], start)}
+    out = []
+    for a in sorted(ins):
+        m, o = ins[a]
+        if not (m.startswith('mov') and o.startswith('r0, #')):
+            continue
+        if a + 4 not in ins:
+            continue
+        w = struct.unpack_from('>I', im.d, a + 4)[0]
+        if (w >> 25) & 7 == 5 and not ((w >> 24) & 1) and \
+                ins[a + 4][1] == '#%#x' % tail:
+            out.append((a, int(o.split('#')[1], 0)))
+    return out
+
+
+def selectable(im):
+    """The film indices the chooser can reach: its arms plus the random pool."""
+    return sorted({n for _, n in arms(im)} | set(CHOOSER_POOL))
+
+
+def show_stats(im):
+    print('the stats pages, %#08x -- two columns, `last jump` and `total`\n'
+          % STATS)
+    print('  page 1   (StatsPage1.cel)')
+    for label, at, fmt, args in PAGE1:
+        src = ' '.join('%s+%#04x' % (w, o) for w, o in args)
+        print('    %-16s %-20s %s' % (label, src, fmt or ''))
+    print('    %-16s %-20s %s' % ('Ammo Algorithms', 'ammo+id-1',
+                                  '14 icons, colour when the count is not 0'))
+    print('    %-16s %-20s %s' % ('', 'statsJump+0x04',
+                                  'the X: the weapon lost this jump'))
+    print('\n  page 2   (StatsPage2.cel)')
+    for label, off, note in PAGE2 + [CLOCK]:
+        src = '--' if off is None else 'stats+%#04x' % off
+        print('    %-16s %-14s %s' % (label, src, note))
+    print('\n  Effectiveness = clamp(0, 100,'
+          ' 100 * (given - taken) / (4 * used))')
+    print('  computed at %#08x and %#08x through Operamath slot -20,'
+          ' and again' % (0x1c20, 0x1c70))
+    print('  at %#08x for the interlude chooser.' % 0x1560)
+    print('  format strings: %#08x %#08x %#08x %#08x'
+          % (0x1f54, 0x1f68, 0x1f98, 0x2000))
+
+
+def show_interludes(im):
+    films = im.table(FILMS, FILM_COUNT)
+    have = on_disc(FILM_DIR)
+    sel = selectable(im)
+    why = {n: w for _, n, w in CHOOSER_ARMS}
+    pool = 'one of the random pool %d-%d, least shown first' % (
+        CHOOSER_POOL[0], CHOOSER_POOL[-1])
+    print('the interlude chooser, %#08x.  It returns a film index or 0xff and'
+          % CHOOSER)
+    print('the caller writes it straight into the film slot at [base+0x34].')
+    print('The ledger is one byte per index at save game +%#04x: how many'
+          % LEDGER)
+    print('times that interlude has played.\n')
+    for i, f in enumerate(films):
+        if i in sel:
+            mark = why.get(i, pool)
+        elif f.lower() not in have:
+            mark = 'CUT -- not on the disc, and never selected'
+        else:
+            mark = 'played by explicit index, not by the chooser'
+        led = '+%#04x' % (LEDGER + i) if i <= 0x25 else '  --  '
+        print('  %2d  %-14s %s  %s' % (i, f, led, mark))
+
+
+def show_weapons(im):
+    print('the twelve ammo algorithms, by weapon id\n')
+    print('  id  name        ammo count   icon')
+    for i, w in enumerate(WEAPONS, 1):
+        print('  %2d  %-11s +%#04x        AllWeaponIcons.%03d'
+              % (i, w, 0x8f + i, i))
+    print('\n   0  DEFAULT     --           AllWeaponIcons.000, always drawn')
+    print('  13  --          --           AllWeaponIcons.013, always drawn')
 
 
 def verify(im):
@@ -147,6 +310,51 @@ def verify(im):
               for p in OTHERS),
           'the music player is linked into all three')
 
+    print('\nthe stats pages (0x166c)')
+    fmts = [im.cstr(a) for a in (0x1f54, 0x1f68, 0x1f98, 0x2000)]
+    check('four format strings, and the big one is eight rows',
+          fmts[0] == '%3d          %3d' and
+          fmts[1].count('\n') == 2 and fmts[2].count('\n') == 7 and
+          fmts[3] == '%02d:%02d  %2d:%02d:%02d',
+          '%d + %d + %d + 1 rows' % (1, fmts[1].count('\n') + 1,
+                                     fmts[2].count('\n') + 1))
+    check('page 2 is eight rows and sixteen numbers, two columns of eight',
+          len(PAGE2) == fmts[2].count('\n') + 1 == 8 and
+          fmts[2].count('%') == 16)
+    check('six of the eight rows are stored, at six distinct offsets',
+          sorted(r[1] for r in PAGE2 if r[1] is not None) ==
+          [0x08, 0x0c, 0x10, 0x14, 0x18, 0x1a])
+    check('the seventh counter is the clock, and page 1 draws the eighth',
+          CLOCK[1] == 0x00 and PAGE1[0][3] == [('total', 0x04)],
+          'ticks at stats+0x00, jumps at statsTotal+0x04')
+    check('page 1 draws three signed deltas against three totals',
+          fmts[1].count('%+3d') == 3 and fmts[1].count('%') == 6)
+
+    print('\nthe interlude chooser (0x12a0)')
+    found = arms(im)
+    check('%d arms, each a mov r0,#n into the tail at 0x1654' % len(found),
+          len(found) == len(CHOOSER_ARMS))
+    check('and they are the indices this tool claims',
+          found == [(a, n) for a, n, _ in CHOOSER_ARMS],
+          ' '.join(str(n) for _, n in found))
+    sel = selectable(im)
+    check('27 of the 40 films are reachable from it', len(sel) == 27)
+    check('every reachable one is on the disc',
+          all(films[i].lower() in on_disc(FILM_DIR) for i in sel))
+    never = [i for i in range(FILM_COUNT) if i not in sel]
+    absent = [i for i in never if films[i].lower() not in on_disc(FILM_DIR)]
+    check('the nine films that are missing are exactly the nine it never picks',
+          absent == list(range(16, 25)) and
+          sorted(i for i in range(FILM_COUNT)
+                 if films[i].lower() not in on_disc(FILM_DIR)) == absent,
+          'indices %d-%d' % (absent[0], absent[-1]) if absent else '')
+    check('the four it never picks that *are* there are the story films',
+          [films[i] for i in never if films[i].lower() in on_disc(FILM_DIR)] ==
+          ['RavensPlea.strm', 'Opening.strm', 'GameWin.strm',
+           'DeathScene.strm'])
+    check('the ledger is one byte per index and stops where the pool does',
+          max(sel) == 0x25 and LEDGER + 0x25 == 0x81,
+          'save game +0x5c .. +0x81, 38 bytes')
     print('\n%d checks, %d failed' % (ok[0] + ok[1], ok[1]))
     return ok[1]
 
@@ -157,6 +365,9 @@ def main():
     ap.add_argument('--films', action='store_true')
     ap.add_argument('--music', action='store_true')
     ap.add_argument('--map', action='store_true')
+    ap.add_argument('--stats', action='store_true')
+    ap.add_argument('--interludes', action='store_true')
+    ap.add_argument('--weapons', action='store_true')
     ap.add_argument('--verify', action='store_true')
     a = ap.parse_args()
     im = Aif(a.image)
@@ -174,6 +385,12 @@ def main():
     elif a.map:
         for addr, what, why in MAP:
             print('  %#08x  %-46s %r' % (addr, what, why))
+    elif a.stats:
+        show_stats(im)
+    elif a.interludes:
+        show_interludes(im)
+    elif a.weapons:
+        show_weapons(im)
     else:
         return 1 if verify(im) else 0
     return 0

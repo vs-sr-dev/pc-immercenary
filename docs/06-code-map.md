@@ -99,6 +99,7 @@ every reference beyond 255 bytes.
 | `0x00aee4` | **AllocRank(rank)** — the first rank below `rank` that is in neither the crashed nor the in-use bitmap; marks it in use and returns it | see [18](18-the-save-game.md) |
 | `0x00b278` | **MarkRankInUse(rank)** — picks the tier by threshold, sets the bit | five arms, one per tier |
 | `0x00b3a8` | **ClearRankInUse(rank)** — the same routine with `bic` for `orr` | |
+| `0x00211c` | **CreditCrash(victim)** — compares the victim's rank with yours and takes one of two branches: below you pays 1/64 of a unit into each of `Dmax`/`Omax`/`Amax` and bumps **Lower Crashes**, at or above you bumps **Higher Crashes** and calls `AllocRank` to take its rank | see [18](18-the-save-game.md) |
 | `0x00cb58` | **Huffman(kill)** — collects a crash: D/O/A reward from the 16 x 3 table at `0x00cf54`, tier count down, dead rank into the crashed map | *"MENU: …"* |
 | `0x01c45c` | **EnterPerfect** — copies the earned D/O/A over the current, clears the per-jump bitmap | reads the mode at `0x057e2c` |
 | `0x01c5b0` | **NewGame** — writes every field of the 512-byte block | `0x12345678` into `+0x1f4` |

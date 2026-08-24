@@ -22,6 +22,9 @@ python tools/frontend.py --verify
 python tools/frontend.py --map
 python tools/frontend.py --films
 python tools/frontend.py --music
+python tools/frontend.py --stats
+python tools/frontend.py --interludes
+python tools/frontend.py --weapons
 ```
 
 ## The launch chain
@@ -113,6 +116,176 @@ The menu's own strings are `New Jump`, `Resume`, `Save...`, `Load...`,
 `Practice`, and it formats mission entries as `Mission %d %s`. The NVRAM code
 is a full 3DO device conversation — block size, IO request, create, write —
 with its own error strings, and its save slots are named `Immerce  %d (%d)`.
+
+## The stats pages, and what the counters are called
+
+`0x00166c` draws them, and it is the cheapest read on the disc: the *labels*
+are not strings in the image, they are pixels in `StatsPage1.cel` and
+`StatsPage2.cel`, and decoding those two cels names every counter in the save
+game at once.
+
+```sh
+python tools/cel.py extracted/Perfect/Film/StatsPage1.cel -o out/stats
+python tools/frontend.py --stats
+```
+
+Page 1 is *Total Jumps* and *Rank* across the top, three **Vital Signs** rows,
+and the ammo icons. Page 2 is **Combat Stats**: eight rows and a clock. Both
+pages have two columns, headed `last jump` and `total`, which are the two
+28-byte statistics blocks of the save game at `+0x24` and `+0x40`.
+
+| row | the number it prints |
+|---|---|
+| Total Jumps | `statsTotal+0x04` |
+| Rank | the top byte of state word `+0x8c` |
+| Defense / Offense / Agility | `+0x0c`…`+0x14`, and `%+3d` the change since `jumpBase` |
+| Effectiveness | derived, see below |
+| Offense Used | `stats+0x08` |
+| Damage Given | `stats+0x0c` |
+| Damage Taken | `stats+0x10` |
+| Lower Crashes | `stats+0x14` |
+| Higher Crashes | `stats+0x18`, 16-bit |
+| Total Crashes | the two rows above, added |
+| Huffmans | `stats+0x1a`, 16-bit |
+| Time in Combat | `stats+0x00`, ticks at 60 Hz |
+
+That closes [18](18-the-save-game.md)'s statistics block: **the two counters
+that had no reading are `Higher Crashes` and `Huffmans`**, and the one before
+them is `Lower Crashes`. The player's own vocabulary is in the guide — *"9999
+crashes, 9999 huffmans"* — where a **crash** is the kill and a **huffman** is
+collecting the static it leaves behind, which is why the two are counted
+separately and `Huffmans` can never exceed `Total Crashes`.
+
+The argument order is not a guess. It is one `sprintf` with sixteen
+arguments, four pushes and two registers, and the sums line up:
+
+```
+0001dc0  push {r2, r3}          ; args  3, 4   Offense Used
+0001dac  push {r0,r1,r2,r3}     ; args  5-8    Damage Given, Damage Taken
+0001d88  push {r0,r1,r2,r3}     ; args  9-12   Lower Crashes, Higher Crashes
+0001d74  push {r0,r1,r2,r3}     ; args 13-16   their sums, then Huffmans
+0001dc4  ldr  r2, [sp, #0xc4]   ; args  1, 2   the two Effectiveness figures
+0001dd4  add  r1, pc, ..        ; "%4d*     %4d*", eight rows of it
+```
+
+Row 7 is literally `r0 = jump+0x14 + jump+0x18` computed at `0x1d70`, which is
+why `Total Crashes` has no field of its own.
+
+**Effectiveness** is computed at `0x1c20` and `0x1c70`, and again at `0x1560`
+for the interlude chooser:
+
+```
+eff = clamp(0, 100, 100 * (Damage Given - Damage Taken) / (4 * Offense Used))
+```
+
+The divide is **Operamath slot −20**, which is what pins that slot: `0xb720`
+is a three-instruction folio thunk, the numerator is in `r0`, and the quotient
+is 16.16 because the result is multiplied by 100 and shifted down by 16.
+
+### The X that never appears
+
+The ammo row draws fourteen icons out of `AllWeaponIcons`, seven to a line,
+and substitutes the matching cel from `AllBWWeaponIcons` when the ammo count
+at `+0x8f + id` is zero. Icons 1 to 12 are the twelve ammo algorithms, and
+`p`'s own name table at `0x42d9c` lists them in the same order — three of the
+icons carry their initial, which is the check:
+
+```
+ 1 BOOMERANG   2 HEX        3 NUKE       4 STUNYA   5 PUSHYA
+ 6 ICE  (an I) 7 OFA        8 SWITCHYA   9 ANNABALLS
+10 ASHFLAY (an A)          11 CHAFF (a C)          12 PEMS
+```
+
+Icon 0 is `DEFAULT`, icon 13 is a dark unlabelled disc, and both are drawn
+unconditionally.
+
+The page-1 legend says **`X=lost`**, and `0x1938`/`0x19ec` place
+`LostWeapon.cel` over icon number `statsJump+0x04`. **Nothing writes
+`statsJump+0x04`** — not `p`, not `p1e`, not the shell, which increments the
+*carried* copy instead because there the field means the number of jumps. So
+the X is drawn over icon 0 or not at all, and the legend on the shipped disc
+explains a marker the shipped game never places. `savegame.py --verify`
+checks it.
+
+## The interlude chooser, and the nine cut films again
+
+`0x12a0` is 244 instructions and it is the story logic of the whole game. It
+takes no arguments, reads the 512-byte save game, and returns a **film index**
+— which `main` writes straight into `[base + 0x34]`, the slot `argv[1]` fills
+for a direct play. Selector 2 means *"pick the next interlude yourself."*
+
+```sh
+python tools/frontend.py --interludes
+```
+
+It keeps its state in the save game. `+0x5c + index` is one byte per film,
+**how many times that interlude has played**, and the common tail at `0x1654`
+is the only thing that writes it:
+
+```
+001654  ldr  r1, [r7, #4]!
+001658  add  r1, r1, r0            ; r0 = the index it settled on
+00165c  ldrb r2, [r1, #0x5c]!
+001660  add  r2, r2, #1
+001664  strb r2, [r1]
+```
+
+The chain is eighteen arms plus a random pool, in this order:
+
+| index | film | when |
+|---|---|---|
+| 28 | `I23` | the first lieutenant is dead |
+| 2, 3 | `I01`, `I02` | the first and second interlude ever |
+| 15 | `I21` | earned Defense still under 3.0 |
+| 25, 26, 27 | `I14`, `I15`, `I16` | all three of D/O/A past 32.0, 64.0, 96.0 |
+| 29 | `I27` | two minutes played, or a 1-in-10 chance before that |
+| 30 | `I28` | five minutes played and not one huffman collected |
+| 31 | `I29` | the first huffman |
+| 32 | `I30` | more than 20 huffmans, or ten minutes and at least one |
+| 35, 33, 34 | `I35`, `I32`, `I33` | more than six, at least one, more than four lieutenants dead |
+| 36, 37 | `I36`, `I37` | one lieutenant left; all nine dead |
+| 13, 14 | `I25`, `I26` | *only if the jump ended with Defense at zero*: you earned more than 3.0 of Defense, or beat your running Effectiveness by 15 |
+| 4-12 | nine films | `rand(9) + 4`, retried until it lands on one shown no more often than the least-shown of the pool |
+
+Every arm but the last two is guarded by *"and this one has never played"*.
+The last two are guarded by *"and it has played no more often than the
+least-shown"*, so they can repeat without crowding the pool out.
+
+"Lieutenants dead" is `0x126c`, which counts the **clear** bits 3-11 of the
+world flags word `+0x9c` — the nine lieutenants a new game sets.
+
+### The nine cut films are cut from the code too
+
+The film table still names `I05`–`I13` at indices 16 to 24, and they are not
+on the disc. The chooser closes the question:
+
+- it can reach **27 of the 40 films**, and **every one of the 27 is on the disc**;
+- the thirteen it never picks are indices 0, 1, 38, 39 — `RavensPlea`,
+  `Opening`, `GameWin`, `DeathScene`, the four story films played by explicit
+  index — **and 16 to 24, which are exactly the nine that are missing**;
+- and the ledger stops at index 37, `+0x81`, so the array is sized to the
+  interlude range and not to the table.
+
+Nine interludes were cut, the table was left whole so the indices after them
+did not have to move, and the selector lost its nine arms with them.
+`--verify` checks all four of those statements.
+
+### One byte of the ledger is read by the game
+
+`p` reads `+0x7f` at `0x00d754` — interlude 35, `I35.strm`, the *"more than
+six lieutenants dead"* film. If it is exactly 1 the DOA conversation is forced
+to character 15 and the byte is bumped to 2, so it happens once:
+
+```
+00d838  ldrb r1, [r0, #0x7f]
+00d840  teq  r1, #1
+00d844  moveq r1, #0xf
+00d848  streq r1, [r7, #0x5c]     ; "Video Character is %d"
+00d84c  strbeq r6, [r0, #0x7f]    ; r6 = 2
+```
+
+[18](18-the-save-game.md) had that byte down as a `doasys` one-shot flag with
+no owner. It is the front end's, and this is the one place the game reads it.
 
 ## Nine films the code still asks for are not on the disc
 
