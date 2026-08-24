@@ -15,7 +15,8 @@ only shipping build is the 3DO ARM6 executable on the retail CD.
 
 | Path | Contents |
 |---|---|
-| `tools/` | Opera (3DO) filesystem reader, CEL/anim decoder, CEL bank reader, B3D world parser, ground tile map reader, OBJ exporter, textured software renderer, font decoder, DataStream demuxer with Cinepak and SDX2 decoders, HUD radar map decoder, ARM cross-referencer and call-graph reader, symbol-file builder, OS-surface scanner, DSP instrument reader, library-versus-game classifier, the hand-written ARM math module reimplemented and self-checking, the 512-byte game state read out of the code, a function-level pairing of the two game executables, a reachability pass over the call graph |
+| `native/` | A walkable viewer of the overworld: SDL2, a software span rasteriser, 117 fps at 960x600, and pixel-identical to the Python reference renderer |
+| `tools/` | Opera (3DO) filesystem reader, CEL/anim decoder, CEL bank reader, B3D world parser, ground tile map reader, OBJ exporter, textured software renderer, font decoder, DataStream demuxer with Cinepak and SDX2 decoders, HUD radar map decoder, ARM cross-referencer and call-graph reader, symbol-file builder, OS-surface scanner, DSP instrument reader, library-versus-game classifier, the hand-written ARM math module reimplemented and self-checking, the 512-byte game state read out of the code, a function-level pairing of the two game executables, a reachability pass over the call graph, a scene packer for the native viewer and a frame differ |
 | `docs/` | Findings: disc layout, file formats, executables, roadmap, B3D format, code map, CEL banks, the ground, the OS surface, the second B3D family, the fonts, the DataStream, the HUD maps, the DSP instruments, library versus game code, the DOA system and its lip sync, the front end, the save game, the DOAsys spire, the final encounter, the call graph |
 
 ## Quick start
@@ -167,6 +168,14 @@ Early, but moving. Nothing is playable yet.
   hand-written assembler module — `MulSF16`, `Sin`, `Cos`, `MapCel`, the point
   projector — that the rest of the executable calls 265 times, and that the
   cross-referencer had never looked at.
+- **The overworld is walkable, natively, at 117 fps.** `native/view.c` is
+  800 lines of C over SDL2 -- a software span rasteriser, a near-plane
+  clipper and a circle-versus-segment collider over the 7,229 wall segments --
+  and it draws **exactly** what the Python reference renderer draws: 400,000
+  of 400,000 pixels identical, which is the whole point of having kept a
+  reference. The data side never left Python: `tools/scenepack.py` freezes the
+  walked world, the 876 decoded wall cels, the 30 ground cels and the tile map
+  into one 3.7 MB file, so no C in this repository parses a game format.
 - **The call graph is closed, and there is no dispatch mechanism to find.**
   Every function in `p` is reached by a `bl`, by a tail-call `b`, or by
   having its address handed to `CreateThread` or to a subscriber registrar —

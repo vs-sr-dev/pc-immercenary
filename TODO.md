@@ -35,6 +35,26 @@ open-ended research.
   *"Wrote %s weapon coords file…"*, `0x03083c` is a superseded Loki loader,
   and `0x012060` **`SetHUDPixel`** *makes* the near-radar maps the shipping
   game only reads.
+- **The viewer left Python, and it is walkable.** `native/view.c` — SDL2, a
+  software span rasteriser, MinGW-w64 from MSYS2 — draws the overworld at
+  **117 fps in 960x600** where `tools/b3dview.py` took about 1.3 seconds a
+  frame, and it draws **the same frame**: 400,000 of 400,000 pixels identical,
+  `tools/packdiff.py` says so. The data side never moved. `tools/scenepack.py`
+  freezes the walked world, the 876 decoded wall cels, the 30 ground cels and
+  the tile map into one 3.7 MB file, so nothing in C parses a game format and
+  a wrong picture can only be the rasteriser's fault.
+- **Collision is a circle sliding along 7,229 segments.** In plan view a wall
+  quad *is* a segment — corners 0 and 3 share an (x, y), and so do 1 and 2,
+  for 8,108 of the 8,463 quads exactly. `--walktest 20000` wanders the city
+  and checks every step against every segment by brute force, not through the
+  grid that placed it: 6 steps of 20,000 end inside a wall, and each of the 6
+  has four to eight walls within a body width. A squeeze, not a tunnel.
+- **The angle on a wall face is signed.** −128..127, and 4,035 of the 8,463
+  quads have a negative one, so `-1` cannot double as *no angle*. Using it as
+  a sentinel dropped the shading on half the city and made the native frame
+  brighter than the reference — which is exactly the kind of thing the
+  pixel-for-pixel check exists to catch, and did, in one run.
+
 - **`p` has 1,308 functions, not 1,477; `p1e` has 1,066, not 1,192.**
   `armxref.py` now requires an unconditional `push`/`stmfd` on `sp` with `lr`
   inside the brace list, and it collects tail-call edges alongside `bl`
@@ -634,10 +654,23 @@ open-ended research.
   `out/fmodpng` and `out/medusa` were not, and did not need to be: those are
   cels decoded by `celbatch.py`, not video.
 
-## 1. The interactive viewer  *(closest to a real artefact)*
+## 1. The interactive viewer  *(the one real artefact)*
 
-`tools/b3dview.py` draws the textured world and its ground from an arbitrary
-camera in about 1.5 seconds a frame. What is missing:
+**It exists and it walks.** `native/view.c` at 117 fps, pixel-identical to
+`tools/b3dview.py`, collision included. Build and run:
+
+```sh
+python tools/scenepack.py out/world.pack
+make -C native
+native/view.exe out/world.pack
+```
+
+`--shot FILE.bmp` renders one frame headless, `--bench N` times N of them, and
+`--walktest N` wanders the city checking the walker never ends up inside a
+wall. `tools/packdiff.py out/ref.png out/native.bmp` is the check that the two
+renderers still agree; run it after touching either.
+
+What is still missing:
 
 - **Object sprites.** `sub = 1` / `3` / `6` place `.anim` props by object id;
   the assets are already decoded to PNG. Billboard them at the recorded
@@ -653,8 +686,15 @@ camera in about 1.5 seconds a frame. What is missing:
   transform and the rotation the CCB applies. A viewer can draw the real HUD
   map with no further reversing. `tools/armmath.py` now gives the exact
   `Sin`/`Cos`/`MulSF16` the game rotates it with, half-pixel slip included.
-- Real-time interaction means leaving Python for the inner loop, or accepting
-  a frame or two a second. Either is fine; the data side is done.
+- **Walking is geometric, and the `.Maps` are the better authority.** The
+  circle-versus-segment solver knows nothing about the near radar maps, where
+  value 1 is open ground at two units a pixel and
+  [13](docs/13-hud-maps.md) has them agreeing with the geometry to within a
+  pixel. Adding them to the pack would settle the disagreements the game
+  itself settles that way — and `STEP_OVER`, the height below which a quad is
+  scenery rather than a wall, is a guess of 16 units until they do.
+- The eye height is a guess too: 40 world units, which is `b3dview.py`'s
+  default and not read off anything.
 
 ## 2. Small unread call sites
 

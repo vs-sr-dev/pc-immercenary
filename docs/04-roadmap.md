@@ -59,7 +59,7 @@ CPU — it is the CEL engine, and all three approaches need it.
 | 1 — Asset decoders | ✅ done — CEL, `.anim`, `.img`, the CEL banks, the fonts, the whole DataStream (Cinepak + SDX2), the HUD `.Maps` and the 64 DSP instruments all decode, and the films decode in the console's own dithered RGB555 |
 | 2 — B3D world format | ✅ done, see [05-b3d-format.md](05-b3d-format.md) — geometry and textures both |
 | 3 — Code map | 🟡 the world loader, the record parser, the CEL bank loader, the whole ground pipeline, the font blitter, the HUD radar, the hand-written math module, the DOA conversation system and its lip sync, the front end -- menu, stats pages, interlude chooser, music thread -- and the 512-byte save game and the shell's message loop are all read; the OS surface is **closed** in both images and the library/game split is settled as far as the disc allows. `tools/symbols.py` covers 295 of `p`'s 1,308 function starts — 128 named, 167 hinted — and `tools/twin.py` carries 85 of those names into `p1e`, pairing 938 of its 1,066 functions with `p`'s ([20](20-p1e-the-final-encounter.md)). The call graph is **closed**: every function is reached by a `bl`, a tail-call `b` or a thread/callback registration, there is no dispatch table anywhere, and 15% of `p` is dead code ([21](21-the-call-graph.md)) |
-| 4 — Runtime | ⬜ not started |
+| 4 — Runtime | 🟡 started: `native/view.c` walks the overworld at 117 fps in 960x600, textured, ground and all, from a scene pack `tools/scenepack.py` writes with the verified Python decoders. It renders **pixel for pixel** what `tools/b3dview.py` renders — 400,000 of 400,000, checked by `tools/packdiff.py`. No interpreter and no CEL engine yet |
 | 5 — Native systems | ⬜ not started |
 | 6 — Beyond parity | ⬜ not started |
 
@@ -154,11 +154,13 @@ save states, and ports to other platforms.
 
 See [../TODO.md](../TODO.md) for the addressed version. In short:
 
-1. Billboard the `.anim` props the `sub = 1` / `3` / `6` records place, add
-   collision against the section C quads, and make `tools/b3dview.py`
-   walkable. The data side of the viewer is finished; what is left is the
-   inner loop, and that means leaving Python or accepting two frames a
-   second.
+1. ~~Make the viewer walkable.~~ Done: `native/view.c`. The inner loop left
+   Python, and the split is the point — `tools/scenepack.py` freezes the
+   walked world, the decoded cels and the tile map into one file, so no C
+   here parses a game format and a wrong picture can only be the
+   rasteriser's. Still to add: billboarding the `.anim` props the
+   `sub = 1` / `3` / `6` records place, the HUD radar, and the near `.Maps`
+   as a second opinion on where you may walk.
 2. Name the remaining 104 folio vector slots. The Graphics folio's 22 are
    the CEL engine and are the single largest piece of work in any port.
 3. Read the DSP instruction set — 1,950 sixteen-bit instructions across the

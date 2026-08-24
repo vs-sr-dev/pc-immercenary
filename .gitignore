@@ -20,5 +20,11 @@ png/
 sheets/
 *.png
 
+# ---- Native viewer ----
+native/*.exe
+native/.tmp/
+*.pack
+*.bmp
+
 # ---- Session scratch ----
 out/
