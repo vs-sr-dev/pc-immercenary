@@ -79,6 +79,10 @@ every reference beyond 255 bytes.
 | `0x03a8ec` | ParseWorldRecord tail — registers `sub 0`/`sub 2` quads | |
 | `0x011180` | far radar probe — returns 3 for a clear bit, 0 for a set one | reads `0x057f04` |
 | `0x012060` | **SetHUDPixel(worldX, worldY, value)** — plots into the near radar map | *"Unexpected bit position ( %d )"* |
+| `0x012190` | **CameraHeight** — chooses the eye height and rebuilds both horizon tables: `mvn r0, #5` for **−6** normally, `mvn r0, #1` for **−2** in the lake | the two `BuildHorizonTable` calls |
+| `0x00f9b0` | **InLake** — the camera's (x, y) through the floor lookup, true when the tile is 9 | tile 9 is `AnimateLakePalette`'s |
+| `0x0219f0` | **UnstickCamera** — walks the camera back along its own facing, two units a step, until the far-radar probe answers 3 | `0x11094`, the probe |
+| `0x021cd0` | **WrapCamera** — the world is a torus; x and y wrap against `0x58434`…`0x58448` | four limits, two widths |
 | `0x01e118` | **DrawHUDMap** — rotates and places the two radar CCBs | four `MulSF16` a layer |
 | `0x01e908` | **LoadHUDMaps(cellX, cellY)** — the radar's two tiles | *"Couldn't load HUD map!!"* |
 | `0x01ec44` | **HUDMapIsEncounter(cellX, cellY)** — the eight territories | render flag bits 3-10 |
@@ -161,7 +165,7 @@ every reference beyond 255 bytes.
 | `0x045738` | **FrameService** — input and events, the first `bl` of every frame loop; a path under it runs a *whole overworld frame* for the pause screen, so a call-graph walk has to cut it or every driver reaches every frame loop | 11 callers, all frame loops |
 | `0x04e144` | **CreateThread(name, pri, entry, stack)** — allocates the stack from a `MemList` and builds the tag list; twelve sites, nine of them the encounters' asset loaders | `bic r1, r0, #0xf`, `and r7, r1, #0xff` |
 | `0x03f0d4` | **RunSpeechSubroutine** — LoadProgram, ExecuteAsSubroutine, DeleteProgram | *"Couldn't load SpeechSubroutine."* |
-| `0x01fd2c` | **ControlFrame** — one frame of the controller; returns an action word | the ten button masks at `0x5804c` |
+| `0x01fd2c` | **ControlFrame** — one frame of the controller; returns an action word, and carries the player's whole movement model | the ten button masks at `0x5804c` |
 
 `LoadEncounterB3D` starts its cursor at **24**, skipping the six header words it
 does not need: every encounter shares the same bounding box and cell size, so it
@@ -482,6 +486,72 @@ format:
   34 traffic cones, 27 `FMOegg`, 24 `DOASys`, and so on.
 - One texture id is swapped at load time: `0x476` becomes `0x47d` when a bit in
   the render flags word is clear (`0x3a2a0`).
+
+## How the player moves
+
+`ControlFrame` keeps the player's speed in **one persistent 16.16 word at
+`0x5803c`** and either adds to it or lets it run down. Holding Up does not
+*set* a speed, it accumulates one, which is the "like a train" the game is
+remembered for. Three limits come off the current **Agility** at
+`[0x89d40 + 8]` in the function's first six instructions:
+
+```
+0001fd44  ldr r0, [r0, #8]           ; A, current Agility
+0001fd4c  add r6, r1, r0, asr #3     ; r6 =  16.0 + A/8      forward clamp
+0001fd58  sub r8, r1, r0, asr #3     ; r8 =  -4.0 - A/8      reverse clamp
+0001fd60  add sb, r1, r0, asr #10    ; sb = 0.125 + A/1024   acceleration
+```
+
+While Up is held (`0x1ff5c`), `speed += sb * dt + (heldTicks << 8)`, where
+`heldTicks` is how long the button has been down, clamped to 120 at `0x1ff48`
+— so the longer you hold, the harder it pushes, up to two seconds' worth.
+Down is the same arithmetic with the signs reversed.
+
+Release both, and `0x20058` runs it down in three bands:
+
+| speed | what happens a frame |
+|---|---|
+| above **8.0** | sheds `2184 * dt`, and **stops at 8.0** |
+| 1.0 to 8.0 | sheds `0xc8` — about 0.003 |
+| −1.0 to 1.0 | snaps to zero |
+| below −1.0 | nothing: reverse never decays |
+
+The floor at 8.0 is the interesting one. Let go at a run and you drop to 8.0
+quickly, and then coast there for about seventy seconds before the crawl
+takes you under 1.0. `dt` is `[0x58bac]`, the frame's length in 60 Hz ticks —
+`GameTick` adds it to the combat timer [18](18-the-save-game.md) has ticking
+at 60 Hz.
+
+Agility pays for all of it: `GameTick` drains it by `|[0x5803c]| >> 9` every
+frame, so the faster you move the faster you tire, and a high Agility both
+raises the top speed and lasts longer at it.
+
+**Not read yet:** the scale that turns that 16.16 speed into world units, and
+the turn rate. The camera position at `0x6bed0` is written by ten functions
+and every one of them is a *placement* — `SetCamera`, `UnstickCamera`,
+`WrapCamera`, the encounter entries — so the per-frame advance reaches it some
+other way.
+
+## The camera's eye is six units off the ground
+
+`0x012190` runs every frame from the world frame and hands one of two heights
+to `BuildHorizonTable` and `BuildHorizonTable8_8`, which store it at
+`[0x58a18]`:
+
+```
+000121cc  mvn r0, #5      ; -6, the normal eye height
+000121f8  mvn r0, #1      ; -2, and 0xf9b0 decides
+```
+
+Negative because the projection wants a point's height *relative to the
+camera*: `ProjectPoint` adds `[0x58a18]` to the point's own height, so ground
+level becomes −6 and lands below the horizon. Six world units is the whole of
+the player's height, against buildings of 30 to 60 — he is a sixth of what he
+stands next to.
+
+`0xf9b0` reads the camera's (x, y), asks the floor for the tile under it, and
+returns 1 when that tile is **9** — the one `AnimateLakePalette` cycles, the
+lake. Wade in and your eye drops to two units.
 
 ## The ground is not in the world file
 

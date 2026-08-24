@@ -35,6 +35,30 @@ open-ended research.
   *"Wrote %s weapon coords file…"*, `0x03083c` is a superseded Loki loader,
   and `0x012060` **`SetHUDPixel`** *makes* the near-radar maps the shipping
   game only reads.
+- **The player is six units tall, and he moves like a train.** Both were
+  guesses in the viewer and both are read now, in
+  [docs/06](docs/06-code-map.md). `0x012190` hands the eye height to the two
+  horizon builders every frame: `mvn r0, #5` — **−6** — normally, and
+  `mvn r0, #1` — **−2** — when `0xf9b0` finds floor **tile 9** under the
+  camera, the lake `AnimateLakePalette` cycles. Against buildings of 30 to 60
+  units he is a sixth of what he stands next to; the viewer had him at forty,
+  taller than the city.
+- **`ControlFrame` is the movement model, and it is an accumulator.** One
+  persistent 16.16 word at `0x5803c`, clamped to `16.0 + A/8` forward and
+  `-4.0 - A/8` back, accelerated by `0.125 + A/1024` a tick *plus* a bonus
+  that grows with how long the button has been held (capped at 120 ticks).
+  `A` is the current Agility at `[0x89d40 + 8]`, which `GameTick` drains by
+  `|speed| >> 9` — so speed costs stamina and Agility buys both a higher top
+  speed and longer at it. Let go and it sheds `2184 * dt` a frame **down to
+  8.0 and no further**, then 0.003 a frame: about seventy seconds of coasting.
+  Reverse never decays at all.
+- **What the movement model still lacks** is the scale from that 16.16 speed
+  to world units, and the turn rate. All ten functions that write the camera
+  position at `0x6bed0` are *placements* — `SetCamera`, `UnstickCamera`,
+  `WrapCamera`, the encounter entries — so the per-frame advance reaches it
+  by some other route. `native/view.c`'s `UNITS_PER_SPEED` is calibrated
+  against the ground fade's 72-unit reach, and says so.
+
 - **The viewer left Python, and it is walkable.** `native/view.c` — SDL2, a
   software span rasteriser, MinGW-w64 from MSYS2 — draws the overworld at
   **117 fps in 960x600** where `tools/b3dview.py` took about 1.3 seconds a

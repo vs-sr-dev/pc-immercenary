@@ -577,7 +577,115 @@ static int walk_test(const Walls *W, double x, double y, int steps)
 
 /* ---------------------------------------------------------------------- main */
 
-#define EYE_HEIGHT 40.0f
+/* ------------------------------------------------------- how the game moves
+ *
+ * Both of these were guesses until they were read out of `p`.
+ *
+ * **Eye height.** `0x012190` picks one of two camera heights every frame and
+ * hands it to `BuildHorizonTable` and `BuildHorizonTable8_8`, which store it
+ * at `[0x58a18]`: `mvn r0, #5` -- **-6** -- normally, and `mvn r0, #1` --
+ * **-2** -- when `0xf9b0` says so.  Negative because the projection wants the
+ * point's height *relative to the camera*: a ground point at 0 becomes -6 and
+ * lands below the horizon.  So the player's eye is **six world units** off the
+ * ground, not the forty this viewer had, and the buildings -- 30 to 60 units
+ * -- stand five to ten times his height.
+ *
+ * And `0xf9b0` is worth the detour: it reads the camera's (x, y), asks the
+ * floor for the tile under it, and returns 1 if that tile is **9** -- the one
+ * `AnimateLakePalette` cycles, the lake.  Wade in and your eye drops to two.
+ *
+ * **The speed.** `ControlFrame` at `0x01fd2c` keeps the player's speed in one
+ * persistent 16.16 word at `[0x5803c]`, and every frame either adds to it or
+ * lets it run down.  Holding Up does not set a speed, it *accumulates* one --
+ * which is the "like a train" the game is remembered for.  From the top of
+ * the function, with `A` the current Agility at `[0x89d40 + 8]`:
+ *
+ *     r6 = 16.0 + A/8      the forward clamp
+ *     r8 = -4.0 - A/8      the reverse clamp
+ *     sb = 0.125 + A/1024  the per-tick acceleration
+ *
+ * then, while Up is held, `speed += sb * dt + (heldTicks << 8)`, where
+ * `heldTicks` is how long the button has been down, clamped to 120 -- so the
+ * longer you hold, the harder it pushes.  Release, and `0x20058` runs it
+ * down: above 8.0 it sheds `2184 * dt` a frame until it *floors at 8.0*, and
+ * below that it sheds 200 -- 0.003 -- a frame, which takes about seventy
+ * seconds to reach the 1.0 where it snaps to nothing.  You coast for a long
+ * time.  Reverse never decays at all.
+ *
+ * `dt` is `[0x58bac]`, the frame's length in 60 Hz ticks: `GameTick` adds it
+ * to the combat timer that docs/18 has ticking at 60 Hz.
+ *
+ * What is *not* read yet is the scale that turns that 16.16 speed into world
+ * units, and the turn rate.  UNITS_PER_SPEED below is calibrated, not
+ * derived -- see the note on it.
+ */
+
+#define EYE_HEIGHT      6.0     /* 0x012190: mvn r0, #5 */
+#define EYE_HEIGHT_LAKE 2.0     /* 0x012190: mvn r0, #1, when the tile is 9 */
+#define LAKE_TILE       9
+
+#define SPD_MAX_FWD     16.0    /* + Agility/8   */
+#define SPD_MAX_REV    (-4.0)   /* - Agility/8   */
+#define SPD_ACCEL       0.125   /* + Agility/1024, per 60 Hz tick */
+#define SPD_HOLD_CAP    120.0   /* ticks; the held bonus stops growing here */
+#define SPD_HOLD_GAIN  (256.0 / 65536.0)   /* the `held << 8` term, a frame */
+#define SPD_COAST      (2184.0 / 65536.0)  /* shed a tick above the floor */
+#define SPD_FLOOR       8.0     /* and the coast stops here, not at zero */
+#define SPD_CRAWL      (200.0 / 65536.0)   /* shed a frame below the floor */
+#define SPD_SNAP        1.0     /* under this, straight to nothing */
+#define AGILITY         0.0     /* a fresh player; 0 .. 128.0 */
+
+/* The one number here that is calibrated rather than read.  The game's speed
+ * is 16.16 and its maximum is 16.0, but nothing found so far says how many
+ * world units that is a second.  The ground's fade gives the scale: it steps
+ * down every six units and is spent by seventy-two (docs/08), so the lit
+ * ground around you is about 72 units across, and crossing it should take a
+ * few seconds at a run.  1.25 units a second per unit of speed puts the top
+ * at 20 units a second -- three and a half seconds.  Replace this the day the
+ * position update is found. */
+#define UNITS_PER_SPEED 1.25
+
+typedef struct {
+    double speed;       /* the game's 16.16 accumulator, as a double */
+    double held_fwd;    /* ticks the accelerator has been down */
+    double held_rev;
+} Walker;
+
+/* One frame of ControlFrame's speed arithmetic. */
+static void walker_step(Walker *w, int fwd, int rev, double ticks)
+{
+    double max_f = SPD_MAX_FWD + AGILITY / 8.0;
+    double max_r = SPD_MAX_REV - AGILITY / 8.0;
+    double accel = SPD_ACCEL + AGILITY / 1024.0;
+
+    if (fwd) {
+        w->held_fwd += ticks;
+        if (w->held_fwd > SPD_HOLD_CAP) w->held_fwd = SPD_HOLD_CAP;
+        w->speed += accel * ticks + w->held_fwd * SPD_HOLD_GAIN;
+    } else {
+        w->held_fwd = 0;
+    }
+    if (rev) {
+        w->held_rev += ticks;
+        if (w->held_rev > SPD_HOLD_CAP) w->held_rev = SPD_HOLD_CAP;
+        w->speed -= accel * ticks + w->held_rev * SPD_HOLD_GAIN;
+    } else {
+        w->held_rev = 0;
+    }
+    if (!fwd && !rev) {
+        if (w->speed > SPD_FLOOR) {
+            w->speed -= SPD_COAST * ticks;
+            if (w->speed < SPD_FLOOR) w->speed = SPD_FLOOR;
+        } else if (w->speed > SPD_SNAP) {
+            w->speed -= SPD_CRAWL;
+        } else if (w->speed > -SPD_SNAP) {
+            w->speed = 0;
+        }
+        /* and reverse is left alone: 0x20098 falls straight through */
+    }
+    if (w->speed > max_f) w->speed = max_f;
+    if (w->speed < max_r) w->speed = max_r;
+}
 
 static void write_bmp(const char *path, const Raster *r)
 {
@@ -608,8 +716,9 @@ static void write_bmp(const char *path, const Raster *r)
 int main(int argc, char **argv)
 {
     const char *packpath = NULL, *shot = NULL;
-    int W = 960, H = 600, fly = 0, bench = 0, noclip = 0, walk = 0;
-    Cam c = { -279.0f, 640.0f, EYE_HEIGHT, 90.0f, 0.0f, 70.0f, 6000.0f, 0,0,0,0,0 };
+    int W = 960, H = 600, fly = 0, bench = 0, noclip = 0, walktest = 0;
+    Cam c = { -279.0, 640.0, EYE_HEIGHT, 90.0, 0.0, 70.0, 6000.0, 0,0,0,0,0 };
+    Walker walk = { 0, 0, 0 };
     Opts o = { 1, 1, 1, 40 };
 
     for (int i = 1; i < argc; i++) {
@@ -633,7 +742,7 @@ int main(int argc, char **argv)
         } else if (!strcmp(argv[i], "--bench") && i + 1 < argc) {
             bench = atoi(argv[++i]);
         } else if (!strcmp(argv[i], "--walktest") && i + 1 < argc) {
-            walk = atoi(argv[++i]);
+            walktest = atoi(argv[++i]);
         } else if (argv[i][0] != '-') {
             packpath = argv[i];
         } else {
@@ -660,7 +769,7 @@ int main(int argc, char **argv)
     r.col = (uint32_t *)malloc((size_t)W * H * 4);
     r.z = (double *)malloc((size_t)W * H * sizeof(double));
 
-    if (walk) return walk_test(&walls, c.ex, c.ey, walk);
+    if (walktest) return walk_test(&walls, c.ex, c.ey, walktest);
 
     if (bench) {                               /* n frames, no window */
         cam_update(&c, W);
@@ -740,33 +849,56 @@ int main(int argc, char **argv)
         if (dt > 0.1f) dt = 0.1f;
 
         const Uint8 *k = SDL_GetKeyboardState(NULL);
-        double speed = (k[SDL_SCANCODE_LSHIFT] ? 900.0 : 260.0) * dt;
         double ry = c.yaw * M_PI / 180.0;
         double fx = cos(ry), fy = sin(ry);
-        double mx = 0, my = 0;
-        if (k[SDL_SCANCODE_W]) { mx += fx; my += fy; }
-        if (k[SDL_SCANCODE_S]) { mx -= fx; my -= fy; }
-        if (k[SDL_SCANCODE_A]) { mx -= fy; my += fx; }
-        if (k[SDL_SCANCODE_D]) { mx += fy; my -= fx; }
-        double ml = sqrt(mx * mx + my * my);
-        if (ml > 0) {
-            /* Step in slices no longer than the body, or a sprint at 900 units
-             * a second steps clean through a wall between two frames. */
-            double dist = speed, sx = mx / ml, sy = my / ml;
+        double mx = 0, my = 0, dist = 0;
+
+        if (fly) {
+            /* free flight: direct, and nothing to do with the game */
+            double v = (k[SDL_SCANCODE_LSHIFT] ? 900.0 : 260.0) * dt;
+            if (k[SDL_SCANCODE_W]) { mx += fx; my += fy; }
+            if (k[SDL_SCANCODE_S]) { mx -= fx; my -= fy; }
+            if (k[SDL_SCANCODE_A]) { mx -= fy; my += fx; }
+            if (k[SDL_SCANCODE_D]) { mx += fy; my -= fx; }
+            double ml = sqrt(mx * mx + my * my);
+            if (ml > 0) { mx /= ml; my /= ml; dist = v; }
+            if (k[SDL_SCANCODE_SPACE]) c.ez += v;
+            if (k[SDL_SCANCODE_C])     c.ez -= v;
+        } else {
+            /* walking: ControlFrame's accumulator, W and S being Up and Down */
+            walker_step(&walk, k[SDL_SCANCODE_W], k[SDL_SCANCODE_S], dt * 60.0);
+            double v = walk.speed * UNITS_PER_SPEED * dt;
+            mx = fx; my = fy;
+            if (v < 0) { mx = -fx; my = -fy; v = -v; }
+            dist = v;
+            /* strafing is the viewer's, not the game's: the original turns */
+            if (k[SDL_SCANCODE_A] || k[SDL_SCANCODE_D]) {
+                double s = 60.0 * dt * (k[SDL_SCANCODE_D] ? 1 : -1);
+                c.ex += fy * s;
+                c.ey -= fx * s;
+                if (!noclip) walls_resolve(&walls, &c.ex, &c.ey, BODY_RADIUS);
+            }
+            int tile = tile_at_world(&p, c.ex, c.ey);
+            c.ez = tile == LAKE_TILE ? EYE_HEIGHT_LAKE : EYE_HEIGHT;
+        }
+
+        if (dist > 0) {
+            /* Step in slices no longer than the body, or a fast move steps
+             * clean through a wall between two frames. */
             while (dist > 0) {
                 double step = dist > BODY_RADIUS ? BODY_RADIUS : dist;
-                c.ex += sx * step;
-                c.ey += sy * step;
-                if (!fly && !noclip)
+                c.ex += mx * step;
+                c.ey += my * step;
+                if (!fly && !noclip) {
+                    double bx = c.ex, by = c.ey;
                     walls_resolve(&walls, &c.ex, &c.ey, BODY_RADIUS);
+                    /* run into a wall head on and the speed should go, or you
+                     * stand there grinding at sixteen units a second */
+                    if (fabs(c.ex - bx) + fabs(c.ey - by) > step * 0.9)
+                        walk.speed *= 0.5;
+                }
                 dist -= step;
             }
-        }
-        if (fly) {
-            if (k[SDL_SCANCODE_SPACE]) c.ez += speed;
-            if (k[SDL_SCANCODE_C])     c.ez -= speed;
-        } else {
-            c.ez = EYE_HEIGHT;
         }
 
         cam_update(&c, W);
@@ -782,9 +914,9 @@ int main(int argc, char **argv)
             char title[160];
             snprintf(title, sizeof title,
                      "Immercenary  %.1f fps  (%.0f, %.0f, %.0f) yaw %.0f  "
-                     "%d quads  %d tiles  [%s]",
+                     "%d quads  %d tiles  [%s %.1f]",
                      frames * 1000.0f / (now - fps_t + 1), c.ex, c.ey, c.ez,
-                     c.yaw, nq, nt, fly ? "fly" : "walk");
+                     c.yaw, nq, nt, fly ? "fly" : "walk", walk.speed);
             SDL_SetWindowTitle(win, title);
             frames = 0; fps_t = now;
         }
