@@ -33,17 +33,19 @@ which words in the image are absolute addresses rather than data.
 
 ## Inventory
 
-| File | Total | Code+RO | RW | BSS | Instructions | Relocs | Est. functions |
+| File | Total | Code+RO | RW | BSS | Instructions | Relocs | Functions |
 |---|---|---|---|---|---|---|---|
-| `p` | 390,276 | 0x565EC | 0x707C | 0x32834 (206 KiB) | 87,815 | 1,880 | ~1,100–1,300 |
-| `p1e` | 276,200 | 0x3B690 | 0x6E08 | 0x32644 | 60,379 | 1,125 | ~850–950 |
-| `launchme` | 12,236 | 0x2BD8 | 0x1CC | 0x44C | 2,755 | 91 | ~60 |
-| `Film/CinepakSubroutine` | 86,844 | 0x1427C | 0xC54 | 0x44C | 20,414 | 236 | ~400 |
-| `DOASys/SpeechSubroutine` | 45,964 | 0x904C | 0x14D0 | 0x3D0 | 9,081 | 877 | 230 |
+| `p` | 390,276 | 0x565EC | 0x707C | 0x32834 (206 KiB) | 87,815 | 1,880 | 1,308 |
+| `p1e` | 276,200 | 0x3B690 | 0x6E08 | 0x32644 | 60,379 | 1,125 | 1,066 |
+| `launchme` | 12,236 | 0x2BD8 | 0x1CC | 0x44C | 2,755 | 91 | 84 |
+| `Film/CinepakSubroutine` | 86,844 | 0x1427C | 0xC54 | 0x44C | 20,414 | 236 | 484 |
+| `DOASys/SpeechSubroutine` | 45,964 | 0x904C | 0x14D0 | 0x3D0 | 9,081 | 877 | 188 |
 
-Measured with [`tools/armscan.py`](../tools/armscan.py). Function estimates come
-from `push {…, lr}` prologues plus distinct `BL` targets; treat them as an
-order-of-magnitude figure.
+Measured with [`tools/armscan.py`](../tools/armscan.py). The function counts are
+`armxref.py`'s: an APCS prologue — an unconditional `push`/`stmfd` on `sp` that
+saves `lr` — plus every distinct `BL` target. They were estimates until the
+prologue test was tightened; [21](21-the-call-graph.md) says what the loose
+form cost.
 
 **`p` is the whole game in ~88,000 ARM instructions.** For a 1995 3D action
 title that is small, and it is the single most encouraging fact about this
@@ -67,14 +69,14 @@ project.
   conversation menu and the *lip sync*: an English letter-to-sound ruleset,
   323 rules, that turns each word of dialogue into phonemes and each phoneme
   into a mouth shape. Read end to end in
-  [16-speech-and-doa.md](16-speech-and-doa.md). 230 functions exactly, not an
+  [16-speech-and-doa.md](16-speech-and-doa.md). 188 functions exactly, not an
   estimate — the count there comes from `armxref.py`'s call graph.
 - **`p1e`** — the Perfect One final encounter, shipped as a separate
   executable. It re-links a large part of the same engine (identical strings,
   identical loaders) around a different world file (`P1EncWorld.B3D`) and
-  stream (`P1EncStream`). Read in [20](20-p1e-the-final-encounter.md): 1,054
-  of its 1,192 functions pair mechanically with `p`'s, it drops the whole
-  rithm ecology, and the 138 that are its own carry the fight, the ending, and
+  stream (`P1EncStream`). Read in [20](20-p1e-the-final-encounter.md): 938
+  of its 1,066 functions pair mechanically with `p`'s, it drops the whole
+  rithm ecology, and the 128 that are its own carry the fight, the ending, and
   a developer front end that the shipping build cannot reach.
 
 `p1e` is a gift: the same engine compiled into a second image gives two

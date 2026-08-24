@@ -3,6 +3,48 @@
 Everything below has a concrete starting address or file. Nothing here is
 open-ended research.
 
+## Done in session 13
+
+- **The call graph is closed, and there was no dispatch mechanism to find.**
+  [`tools/dispatch.py`](tools/dispatch.py) asks, of every function with no
+  caller, which of three things reaches it. The whole read is
+  [docs/21](docs/21-the-call-graph.md). Of the 356:
+  **169 were never functions** — the prologue test accepted any `push` whose
+  operand *text* mentioned `lr`, and `stmdbvs lr!, {r0, r2, r5, sp}` is what
+  the bytes of *"Failure in %s"* decode to; every one of the 169 lies inside a
+  string literal. **31 are tail-called** by a plain `b`, `Huffman`,
+  `FireShot`, `PickUpWeapon`, `RunEncounter` and `DOAsysVisit` among them.
+  **30 have their address stored**, and every one of the 30 sites is
+  `CreateThread`, the DataStream library's own thread creator, or a subscriber
+  registrar — named in the doc, one table row per registrar.
+- **There is not one function-pointer table in either executable.** Read every
+  aligned word of both files, keep the ones whose value is a function entry,
+  and ask for runs: *zero* runs of two. No vtable, no jump table, no
+  id-to-routine map. Every non-return write to `pc` is a folio vector call
+  that leaves the image ([09](docs/09-os-surface.md)), a compiler `switch`
+  whose arms are labels inside its own function, or one of ten subscriber
+  callbacks. **A static reading of who calls what is complete**, which is what
+  the second half of approach C needs and what approach A cannot be built
+  without.
+- **15% of `p` never runs.** Walking from `main` at `0x18c58` over all three
+  edge kinds reaches 1,051 of 1,308 functions, 85.1% of the code. The other
+  53,308 bytes are unused SDK modules (both executables carry the same
+  unreachable bodies), the uncalled half of the hand-written math module —
+  `MapCelFixed`, `TripleProduct`, `UnprojectFace`, `BuildMatrix3`,
+  `TransformFootprints` — and Immercenary's own leftovers: `0x044274` writes
+  *"Wrote %s weapon coords file…"*, `0x03083c` is a superseded Loki loader,
+  and `0x012060` **`SetHUDPixel`** *makes* the near-radar maps the shipping
+  game only reads.
+- **`p` has 1,308 functions, not 1,477; `p1e` has 1,066, not 1,192.**
+  `armxref.py` now requires an unconditional `push`/`stmfd` on `sp` with `lr`
+  inside the brace list, and it collects tail-call edges alongside `bl`
+  (`-c ADDR` lists them under `<b-`). Every count in `docs/03`, `06`, `15`,
+  `20`, the roadmap and the README is refreshed; `tools/p.sym` and
+  `tools/p1e.sym` are regenerated; `twin.py --verify` and `libscan.py --check`
+  still pass every check. The only hand-written names lost are
+  `ParseSub0`…`ParseSub3`, `ParseSub15` and `ParseWorldRecord_tail`, which
+  were always branch labels inside `ParseWorldRecord` rather than functions.
+
 ## Done in session 12
 
 - **`p1e`'s body is walked, and most of it did not have to be read.**
@@ -662,10 +704,11 @@ camera in about 1.5 seconds a frame. What is missing:
   utility layer. `SpeechSubroutine` is read now
   ([docs/16](docs/16-speech-and-doa.md)), so those 26 shared shapes can be
   looked at with their callers in view rather than blind.
-- **356 functions still have no direct caller.** Some are entry points and some
-  are called through tables; a pass over them would find the dispatch
-  mechanism, which is the last blind spot in the call graph. `SetHUDPixel` at
-  `0x012060` and the far-radar probe at `0x011180` are two concrete examples.
+- ~~**356 functions still have no direct caller.**~~ Answered in
+  [docs/21](docs/21-the-call-graph.md): there is no dispatch mechanism, and
+  126 of them are dead code. What is left of the item is small and optional —
+  the 41 `p`-only dead functions are a list of what the developers cut, and
+  two of them are named tools. Nothing in it blocks a port.
 - Feed named functions back into `docs/06-code-map.md`, not into the symbol
   file: `tools/symbols.py` reads the doc, so the doc stays the authority. Put
   the **name first** in the description column, or the harvester takes the
@@ -698,6 +741,15 @@ camera in about 1.5 seconds a frame. What is missing:
   consumes it.
 
 ## Notes to self
+
+- **A tool's noise looks exactly like a discovery.** "356 functions nothing
+  calls" survived eleven sessions as the last open question about the call
+  graph, and half of it was a substring test: `'lr' in ops` accepts
+  `stmdbvs lr!, {…}`, where `lr` is the base register, and the bytes of a
+  printf format string decode to exactly that. The tell was there the whole
+  time — the mystery functions clustered inside string literals, and their
+  auto-generated names in `p.sym` were the strings they sat in. Before
+  reading a surprising list, check the test that built it.
 
 - **A shared string is a hint, not a pair.**
   `$Perfect/PerfectOne/Male/pmale.stand.anim` is referenced by exactly one

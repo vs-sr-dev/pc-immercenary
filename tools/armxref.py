@@ -47,22 +47,33 @@ class Image:
         # and the world loader among them.  Step back over the `mov`.
         self.funcs = set()
         self.calls = collections.defaultdict(list)     # target -> [call sites]
+        self.branches = collections.defaultdict(list)  # target -> [b sites]
         self.litrefs = collections.defaultdict(list)   # value -> [insn addr]
         for a in self.order:
             i = self.insns[a]
             m, ops = i.mnemonic, i.op_str
+            w = int.from_bytes(i.bytes, 'big') if len(i.bytes) == 4 else 0
             if (m.startswith('push') or m.startswith('stmdb') or
-                m.startswith('stmfd')) and 'lr' in ops:
+                    m.startswith('stmfd')) and is_prologue(w, ops):
                 prev = self.insns.get(a - 4)
                 if prev is not None and prev.mnemonic == 'mov' and \
                         prev.op_str == 'ip, sp':
                     self.funcs.add(a - 4)
                 else:
                     self.funcs.add(a)
+            # A plain `b` to somewhere else is a tail call, if the target
+            # turns out to be a function entry.  Collect them all now and
+            # filter once the entry set is complete.
+            if (w >> 25) & 7 == 5 and not (w >> 24) & 1 and (w >> 28) & 0xf != 0xf:
+                try:
+                    t = int(ops.lstrip('#'), 0)
+                except ValueError:
+                    t = None
+                if t is not None and self.code_start <= t < self.code_end:
+                    self.branches[t].append(a)
             # BL, any condition.  Capstone spells conditional BL `bleq`,
             # `bllt` and so on, which the mnemonic alone cannot tell from the
             # plain branch `blt`, so read the encoding: bits 27-24 are 0b1011.
-            w = int.from_bytes(i.bytes, 'big') if len(i.bytes) == 4 else 0
             if (w >> 24) & 0x0f == 0x0b:
                 try:
                     t = int(ops.lstrip('#'), 0)
@@ -88,6 +99,19 @@ class Image:
             if t is not None:
                 self.litrefs[t].append(a)
         self.fstarts = sorted(self.funcs)
+        # Tail calls: a `b` whose target is a function entry and whose
+        # source lies in a *different* function.  A `b` back to one's own
+        # entry is a loop, and a `b` to a label is not an entry at all.
+        # A string literal can also decode as a branch: the bytes of
+        # *"Unrecognized anim ID %d!"* hold one, aimed at a real function.
+        self.tails = collections.defaultdict(list)     # target -> [b sites]
+        spans = self.string_spans()
+        for t, sites in self.branches.items():
+            if t not in self.funcs:
+                continue
+            for site in sites:
+                if site not in spans and self.func_of(site) != t:
+                    self.tails[t].append(site)
 
     def tail_end(self, zeros=8):
         """Where the code past `image_ro_size` stops.
@@ -134,6 +158,32 @@ class Image:
             for k in range(off, off + len(s) + 1):     # + the NUL
                 spans[k] = (off, s)
         return spans
+
+
+BRACE = re.compile(r"\{([^}]*)\}")
+
+
+def is_prologue(word, ops):
+    """Is this `push`/`stmfd` an APCS function prologue?
+
+    Three tests, and each one matters.  `lr` must be *inside* the register
+    list: the bytes of *"Failure in %s"* decode to
+    `stmdbvs lr!, {r0, r2, r5, sp}`, where `lr` is the base register, and a
+    substring test on the operands accepts it.  The store must be
+    unconditional, and its base must be `sp`.  The loose form invents 169
+    functions in `p`, every one of them inside a string literal, and they
+    arrive already callerless -- they were half of the "356 functions
+    nothing calls".
+    """
+    if (word >> 28) & 0xf != 0xe:
+        return False
+    m = BRACE.search(ops)
+    if not m:
+        return False
+    if 'lr' not in [r.strip() for r in m.group(1).split(',')]:
+        return False
+    head = ops.split('{')[0].strip()
+    return head == '' or head.rstrip('!,').strip() == 'sp'
 
 
 def pcrel_target(addr, mnem, ops):
@@ -211,6 +261,18 @@ def main():
             print(f"{want:#08x} is inside {f:#08x}"
                   f"{'  ' + SYM[f] if f in SYM else ''}")
             want = f
+        tails = sorted(im.tails.get(want, []))
+        if tails:
+            byf = collections.defaultdict(list)
+            for t in tails:
+                byf[im.func_of(t)].append(t)
+            print(f"{want:#08x}: tail-called (`b`) from {len(tails)} site(s)")
+            for g in sorted(byf, key=lambda x: (x is None, x)):
+                gs = f"{g:#08x}" if g is not None else "  (none)"
+                if g in SYM:
+                    gs = f"{gs} {SYM[g]}"
+                print(f"  <b- {gs}   {len(byf[g]):>3}x   "
+                      + ' '.join(f"{t:#x}" for t in byf[g]))
         sites = sorted(im.calls.get(want, []))
         nm = f"  {SYM[want]}" if want in SYM else ""
         print(f"{want:#08x}{nm}: called from {len(sites)} site(s)")

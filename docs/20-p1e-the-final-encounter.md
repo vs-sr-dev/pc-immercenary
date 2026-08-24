@@ -1,6 +1,6 @@
 # 20. `p1e`: the final encounter, and how the game decides which ending you get
 
-`p1e` is the second executable on the disc — 276,200 bytes, 1,192 functions,
+`p1e` is the second executable on the disc — 276,200 bytes, 1,066 functions,
 launched by the shell as `$boot/p1E g` — and after nineteen chapters it was
 still the one image nobody had walked. [04](04-roadmap.md) kept putting it off
 for a good reason: it is *the same engine linked a second time*, so most of a
@@ -46,19 +46,19 @@ Five passes, each refusing anything that contradicts a pair already made:
 
 | Pass | What it needs | Pairs |
 |---|---|---|
-| `shape` | a shape occurring exactly once in each image | 619 |
-| `call` | the k-th `bl` of two functions with identical bodies | 215 |
-| `gap` | a shape unique *between two pairs the layout order agrees with* | 96 |
-| `align` | a monotone best-similarity matching inside one such gap, floor 0.75 | 84 |
-| `string` | a text unique to one function in each image, plus a body that still resembles it | 40 |
+| `shape` | a shape occurring exactly once in each image | 532 |
+| `call` | the k-th `bl` of two functions with identical bodies | 211 |
+| `gap` | a shape unique *between two pairs the layout order agrees with* | 79 |
+| `align` | a monotone best-similarity matching inside one such gap, floor 0.75 | 72 |
+| `string` | a text unique to one function in each image, plus a body that still resembles it | 44 |
 
-**1,054 of `p1e`'s 1,192 functions pair**, and **85 of the 128 functions
+**938 of `p1e`'s 1,066 functions pair**, and **85 of the 128 functions
 [06](06-code-map.md) names carry straight over**. The `call` pass is the one
 that does the real work: two functions with identical shapes have identical
 call sites in the same order, so a single anchor walks the graph below it.
 
-The order of the two images agrees with the pairing almost everywhere — 975 of
-the 1,054 pairs lie on one increasing run — which is what makes the `gap` and
+The order of the two images agrees with the pairing almost everywhere — 871 of
+the 938 pairs lie on one increasing run — which is what makes the `gap` and
 `align` passes safe: a stray 0.8 similarity cannot jump across a gap to a
 function the layout says is somewhere else.
 
@@ -68,7 +68,7 @@ Two paired functions with identical bodies materialise addresses at the same
 instruction indices. At index *k*, `p` loads `0x089d40` and `p1e` loads
 `0x06ea04` — and that is the game-state block that
 [18](18-the-save-game.md) had already found in `p1e` by hand, recovered here
-by twenty-two independent aligned sites without being told. 348 data addresses
+by twenty-two independent aligned sites without being told. 313 data addresses
 map across, none of them ambiguously.
 
 ### `--verify`
@@ -78,16 +78,16 @@ Eight checks, all passing:
 ```
   no pair contradicts another                                ok  0
   one p1e function per p function                            ok
-  every data address maps to one p1e address                 ok  0 of 348 ambiguous
+  every data address maps to one p1e address                 ok  0 of 313 ambiguous
   0x089d40 -> 0x06ea04, the game state docs/18 found on its own ok  22 aligned sites
-  the layout order agrees with the pairing                   ok  975 of 1054 pairs on one increasing run
-  pairs the string pass did not make still share their strings ok  98 agree, 2 differ
-  no pair outside the call graph is two unlike functions     ok  0 of 1054 below 0.4
+  the layout order agrees with the pairing                   ok  871 of 938 pairs on one increasing run
+  pairs the string pass did not make still share their strings ok  71 agree, 2 differ
+  no pair outside the call graph is two unlike functions     ok  0 of 938 below 0.4
   every named function lands on a p1e function start         ok
 ```
 
 The string check is the interesting one, because strings are evidence the
-other four passes never look at. Of the pairs made without them, 98 share a
+other four passes never look at. Of the pairs made without them, 71 share a
 string constant and 2 do not — and both exceptions are the same function with
 its message rewritten: `p`'s *"Exiting main game task."* is `p1e`'s *"Exiting
 PerfectOne game task."*
@@ -102,7 +102,7 @@ shares 9% of its instructions with it.
 
 ## 2. What `p1e` does not have
 
-423 of `p`'s functions have no counterpart. Named, the list reads as a
+370 of `p`'s functions have no counterpart. Named, the list reads as a
 statement of what the final encounter is not:
 
 ```
@@ -131,15 +131,15 @@ kept. `--rewritten` lists them.
 
 ## 3. What only `p1e` has
 
-138 functions, 43,400 bytes; 88 of them, 31,944 bytes, resemble nothing in
+128 functions, 46,908 bytes; 78 of them, 32,664 bytes, resemble nothing in
 `p` at all. They fall into five bands:
 
 | Band | Size | What it is |
 |---|---|---|
-| `0x003d98`–`0x007464` | 34 funcs, 13.0 KB | the loaders: `CharacterList`, `P1EncWorld.B3D`, `P1EncStream`, `P1EncSpire.anim`, and the Perfect One's three form sets |
-| `0x0146dc`–`0x0161d0` | 14 funcs, 5.6 KB | a menu, a slideshow, a cast viewer — **unreachable**, §8 |
-| `0x01603c`–`0x018bdc` | 41 funcs, 7.2 KB | the driver, the loading thread, the P1E HUD maps |
-| `0x018c94`–`0x01c48c` | 21 funcs, 13.2 KB | the Perfect One's own behaviour |
+| `0x003d98`–`0x007464` | 28 funcs, 12.6 KB | the loaders: `CharacterList`, `P1EncWorld.B3D`, `P1EncStream`, `P1EncSpire.anim`, and the Perfect One's three form sets |
+| `0x0146dc`–`0x0161d0` | 12 funcs, 5.6 KB | a menu, a slideshow, a cast viewer — **unreachable**, §8 |
+| `0x01603c`–`0x018bdc` | 37 funcs, 7.3 KB | the driver, the loading thread, the P1E HUD maps |
+| `0x018c94`–`0x01c48c` | 21 funcs, 14.1 KB | the Perfect One's own behaviour |
 | `0x028c78`–`0x02953c` | 12 funcs, 2.2 KB | display setup; *"Error - unable to allocate VDL memory"* |
 
 ## 4. `main`, in full

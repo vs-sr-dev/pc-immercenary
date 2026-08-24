@@ -30,9 +30,20 @@ Two mechanisms reach data in this image, and a cross-referencer needs both:
    so taking the `push` as the function start puts every caller one
    instruction outside it. That single off-by-four made 1,111 of 2,164
    functions look unreachable, `TraverseCells` and the world loader among
-   them. Stepping back over the `mov` leaves 343 of 1,503, which is a
-   believable number for entry points and indirect targets.
+   them. Stepping back over the `mov` leaves 187 of 1,308.
    `armxref.py -c ADDR` prints callers and callees.
+
+   A third trap costs more than either: `lr` must be inside the register
+   list, not merely somewhere in the operand text. `stmdbvs lr!, {r0, r2,
+   r5, sp}` — which is what the bytes of *"Failure in %s"* decode to — has
+   `lr` as the *base*, and accepting it invents 169 functions in `p`, every
+   one inside a string literal. See [21](21-the-call-graph.md).
+
+4. **Tail calls** — a plain `b` into another function's entry, which is a
+   call that never returns and which a `bl`-only cross-referencer cannot
+   see. There are 225 in `p`, and for 31 functions — `Huffman`, `FireShot`,
+   `PickUpWeapon`, `RunEncounter`, `DOAsysVisit` — it is the only way in.
+   `armxref.py -c ADDR` lists them under `<b-`.
 
 The second one has a trap: ARM encodes an immediate as an 8-bit value plus a
 rotation, and Capstone prints that as two operands, `add r0, pc, #44, #30`. The

@@ -2,7 +2,7 @@
 
 A port reimplements Immercenary. It does not reimplement the 3DO Portfolio's
 C runtime or its folio glue — that is the platform, replaced wholesale rather
-than translated. So it is worth knowing which of `p`'s 1,477 functions are
+than translated. So it is worth knowing which of `p`'s 1,308 functions are
 which, if only to stop reading the ones that do not matter.
 
 [04-roadmap](04-roadmap.md) and this repository's own notes have suggested
@@ -37,14 +37,14 @@ decode. What is left is the opcode, condition and register shape.
 
 | | functions | bytes | |
 |---|---|---|---|
-| proved library — an exact shape match in a binary with no Immercenary code | 61 | 6,792 | 1.9% |
+| proved library — an exact shape match in a binary with no Immercenary code | 60 | 6,792 | 1.9% |
 | reachable only through library code — every caller already library | 10 | 880 | 0.2% |
 | shared with both subroutine modules — suggestive, not proof | 24 | 4,100 | 1.1% |
-| everything else | 1,382 | 347,112 | 96.7% |
+| everything else | 1,214 | 347,112 | 96.7% |
 
 `--check` argues with the answer rather than asserting it:
 
-- 53 functions reference a string only Immercenary could have written
+- 44 functions reference a string only Immercenary could have written
   (`$Perfect/…`, `Argggg`). **None** of them lands on the library side, not
   even in the weakest tier.
 - The AIF startup, the signed divide, `RandomBelow` and the storage client all
@@ -73,7 +73,7 @@ p 0x038c00                     organus 0x000c3c
   ...                            ...
 ```
 
-Eleven of the 61 proved matches sit below `0x4a000`, the lowest at `0x00014c`.
+Eleven of the 60 proved matches sit below `0x4a000`, the lowest at `0x00014c`.
 **No address rule separates library from game.** The idea in the old roadmap
 that the SDK occupies `0x4ae5c`–`0x562f4` is a description of where *most* of
 it is, not a boundary.
@@ -81,7 +81,7 @@ it is, not a boundary.
 ## What this cannot do, and why
 
 The corpus links the C runtime, the kernel and file folio glue, and the
-storage-manager client. That is what the 61 are. It does **not** link the
+storage-manager client. That is what the 60 are. It does **not** link the
 audio library, the Graphics library, the DataStream reader or the Cinepak
 decoder — and those are exactly the large library chunks inside `p`.
 
@@ -92,7 +92,7 @@ session should not spend hours trying to push it further with the material
 that is here. What it would take is a second 3DO title's executable, which
 this repository has no business carrying.
 
-The three tiers are still worth having: 71 functions that need no reading at
+The three tiers are still worth having: 70 functions that need no reading at
 all, and a specificity test that says the boundary is not leaking.
 
 ## What fell out of doing it
@@ -131,16 +131,16 @@ write once:
 
 | | functions with a shape also in `p` | of its measured functions |
 |---|---|---|
-| `p1e` | 634 | 1,006 |
-| `Perfect/Film/CinepakSubroutine` | 317 | 437 |
-| `Perfect/DOASys/SpeechSubroutine` | 76 | 166 |
-| `Perfect/StorageTuner/StorageTuner` | 54 | 166 |
+| `p1e` | 546 | 908 |
+| `Perfect/Film/CinepakSubroutine` | 273 | 392 |
+| `Perfect/DOASys/SpeechSubroutine` | 74 | 147 |
+| `Perfect/StorageTuner/StorageTuner` | 55 | 152 |
 
 The encounter executable is two thirds the main one. The film player is nearly
-three quarters. `StorageTuner`'s 54 are the library, and they are most of the
-61 proved above.
+three quarters. `StorageTuner`'s 55 are the library, and they are most of the
+60 proved above.
 
-`SpeechSubroutine`'s 90 unmatched functions have since been opened, and they
+`SpeechSubroutine`'s 73 unmatched functions have since been opened, and they
 were the game's own after all: the DOA conversation menu and a letter-to-sound
 engine for lip sync. See [16-speech-and-doa.md](16-speech-and-doa.md). `CinepakSubroutine` has since been
 mapped too — it is the game's front end, not a film player — see

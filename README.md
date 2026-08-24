@@ -15,8 +15,8 @@ only shipping build is the 3DO ARM6 executable on the retail CD.
 
 | Path | Contents |
 |---|---|
-| `tools/` | Opera (3DO) filesystem reader, CEL/anim decoder, CEL bank reader, B3D world parser, ground tile map reader, OBJ exporter, textured software renderer, font decoder, DataStream demuxer with Cinepak and SDX2 decoders, HUD radar map decoder, ARM cross-referencer and call-graph reader, symbol-file builder, OS-surface scanner, DSP instrument reader, library-versus-game classifier, the hand-written ARM math module reimplemented and self-checking, the 512-byte game state read out of the code, a function-level pairing of the two game executables |
-| `docs/` | Findings: disc layout, file formats, executables, roadmap, B3D format, code map, CEL banks, the ground, the OS surface, the second B3D family, the fonts, the DataStream, the HUD maps, the DSP instruments, library versus game code, the DOA system and its lip sync, the front end, the save game, the DOAsys spire, the final encounter |
+| `tools/` | Opera (3DO) filesystem reader, CEL/anim decoder, CEL bank reader, B3D world parser, ground tile map reader, OBJ exporter, textured software renderer, font decoder, DataStream demuxer with Cinepak and SDX2 decoders, HUD radar map decoder, ARM cross-referencer and call-graph reader, symbol-file builder, OS-surface scanner, DSP instrument reader, library-versus-game classifier, the hand-written ARM math module reimplemented and self-checking, the 512-byte game state read out of the code, a function-level pairing of the two game executables, a reachability pass over the call graph |
+| `docs/` | Findings: disc layout, file formats, executables, roadmap, B3D format, code map, CEL banks, the ground, the OS surface, the second B3D family, the fonts, the DataStream, the HUD maps, the DSP instruments, library versus game code, the DOA system and its lip sync, the front end, the save game, the DOAsys spire, the final encounter, the call graph |
 
 ## Quick start
 
@@ -159,13 +159,27 @@ Early, but moving. Nothing is playable yet.
   seven of its sub-handlers, the CEL bank loader, the floor renderer, the object
   id table and the world globals are identified. `tools/symbols.py` turns the
   code map plus the image's own strings into a symbol file that
-  `armxref.py -S` reads, which names 313 of the 1,477 functions. The call
-  graph is readable too, after two fixes: an APCS function starts one
-  instruction before its `push`, and the code does not stop where the AIF
-  header's `image_ro_size` says it does. Past that boundary sits a
+  `armxref.py -S` reads, which names 295 of the 1,308 functions. The call
+  graph is readable too, after three fixes: an APCS function starts one
+  instruction before its `push`, a `push` that only *mentions* `lr` is a
+  string literal rather than a function ([21](docs/21-the-call-graph.md)), and
+  the code does not stop where the AIF header's `image_ro_size` says it does. Past that boundary sits a
   hand-written assembler module — `MulSF16`, `Sin`, `Cos`, `MapCel`, the point
   projector — that the rest of the executable calls 265 times, and that the
   cross-referencer had never looked at.
+- **The call graph is closed, and there is no dispatch mechanism to find.**
+  Every function in `p` is reached by a `bl`, by a tail-call `b`, or by
+  having its address handed to `CreateThread` or to a subscriber registrar —
+  and reading every aligned word of both executables turns up **not one run
+  of two consecutive function pointers**, so no vtable and no jump table
+  exists anywhere. The "356 functions nothing calls" that had been the last
+  blind spot were 169 string literals the prologue test mistook for code, 31
+  tail calls, 30 thread entry points, and 126 functions that really are dead.
+  Walking down from `main` reaches 85% of the image; the other 53 KB — unused
+  SDK modules, a superseded Loki loader, the tool that wrote the weapon
+  coordinates file, and `SetHUDPixel`, which *made* the radar maps the game
+  only reads — never runs. A port can trust a static reading of who calls
+  what: [docs/21](docs/21-the-call-graph.md).
 - **The HUD radar is solved**, the last unread asset format on the disc. The
   six `.Maps` files are 256 raw CEL tiles each, one per world grid cell — 2 bpp
   at two world units a pixel up close, 1 bpp at eight further out, both drawn
@@ -282,9 +296,9 @@ Early, but moving. Nothing is playable yet.
 
 - **Which ending you get was decided by how you played the whole game.** `p1e`,
   the final encounter, is the same engine linked a second time, so
-  `tools/twin.py` pairs 1,054 of its 1,192 functions with `p`'s by instruction
+  `tools/twin.py` pairs 938 of its 1,066 functions with `p`'s by instruction
   shape, the call graph and the layout order — and rediscovers the game-state
-  block's second address on the way, with no help. Reading only the 138 that
+  block's second address on the way, with no help. Reading only the 128 that
   are its own closes a chain that runs the length of the disc: `0x0052a4` picks
   the Perfect One's form from whichever of your **earned** D, O and A is
   highest — Offense male, Defense female, Agility robot — the mover carries

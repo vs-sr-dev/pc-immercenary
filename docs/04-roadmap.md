@@ -58,7 +58,7 @@ CPU — it is the CEL engine, and all three approaches need it.
 | 0 — Tooling and inventory | ✅ done |
 | 1 — Asset decoders | ✅ done — CEL, `.anim`, `.img`, the CEL banks, the fonts, the whole DataStream (Cinepak + SDX2), the HUD `.Maps` and the 64 DSP instruments all decode, and the films decode in the console's own dithered RGB555 |
 | 2 — B3D world format | ✅ done, see [05-b3d-format.md](05-b3d-format.md) — geometry and textures both |
-| 3 — Code map | 🟡 the world loader, the record parser, the CEL bank loader, the whole ground pipeline, the font blitter, the HUD radar, the hand-written math module, the DOA conversation system and its lip sync, the front end -- menu, stats pages, interlude chooser, music thread -- and the 512-byte save game and the shell's message loop are all read; the OS surface is **closed** in both images and the library/game split is settled as far as the disc allows. `tools/symbols.py` covers 329 of `p`'s 1,477 function starts — 128 named, 201 hinted — and `tools/twin.py` carries 85 of those names into `p1e`, pairing 1,054 of its 1,192 functions with `p`'s ([20](20-p1e-the-final-encounter.md)) |
+| 3 — Code map | 🟡 the world loader, the record parser, the CEL bank loader, the whole ground pipeline, the font blitter, the HUD radar, the hand-written math module, the DOA conversation system and its lip sync, the front end -- menu, stats pages, interlude chooser, music thread -- and the 512-byte save game and the shell's message loop are all read; the OS surface is **closed** in both images and the library/game split is settled as far as the disc allows. `tools/symbols.py` covers 295 of `p`'s 1,308 function starts — 128 named, 167 hinted — and `tools/twin.py` carries 85 of those names into `p1e`, pairing 938 of its 1,066 functions with `p`'s ([20](20-p1e-the-final-encounter.md)). The call graph is **closed**: every function is reached by a `bl`, a tail-call `b` or a thread/callback registration, there is no dispatch table anywhere, and 15% of `p` is dead code ([21](21-the-call-graph.md)) |
 | 4 — Runtime | ⬜ not started |
 | 5 — Native systems | ⬜ not started |
 | 6 — Beyond parity | ⬜ not started |
@@ -109,7 +109,7 @@ with the game's own wall textures, and `tools/b3dmap.py` draws the city plan.
 Disassemble `p`, identify SDK library code, name functions from the debug
 strings, recover the main structs (player, character, quad, encounter). Use
 `p1e` as a cross-check — `tools/twin.py` now does that mechanically, pairing
-1,054 of `p1e`'s 1,192 functions with `p`'s and carrying the names across.
+938 of `p1e`'s 1,066 functions with `p`'s and carrying the names across.
 
 Deliverable: an annotated disassembly and a header file of reconstructed
 types. The disassembly is readable now — `armxref.py -S tools/p.sym` — and
@@ -165,13 +165,18 @@ See [../TODO.md](../TODO.md) for the addressed version. In short:
    64 files, of which a port needs the 21 named instruments' worth.
    `directout` is eight words; start there.
 4. ~~Walk `p1e`'s body.~~ Done, [20](20-p1e-the-final-encounter.md).
-   `tools/twin.py` pairs 1,054 of its 1,192 functions with `p`'s
-   mechanically, so only the 138 that are its own had to be read: the final
+   `tools/twin.py` pairs 938 of its 1,066 functions with `p`'s
+   mechanically, so only the 128 that are its own had to be read: the final
    encounter, the ending, and a developer front end that never shipped
    switched on. Its cross-check value is real — `p1e`'s copy of `0x004ff8` is
    872 bytes smaller and is what made `p`'s legible.
-5. The 356 functions with no direct caller — a pass over them finds the
-   dispatch mechanism, which is the last blind spot in the call graph.
+5. ~~The 356 functions with no direct caller.~~ Done,
+   [21](21-the-call-graph.md). There is no dispatch mechanism: 169 of them
+   were string bytes the prologue test mistook for functions, 31 are reached
+   by a tail-call `b`, 30 have their address handed to `CreateThread` or a
+   subscriber registrar, and the remaining 126 are dead code. No image on
+   the disc holds a single table of function pointers, so the call graph a
+   port reads is the whole of it.
 6. `main` of `CinepakSubroutine` at `0x9a4` and its Cinepak player at
    `0x2368` — the front end's own control flow, the last unwalked piece of
    it ([17](17-the-front-end.md)).
