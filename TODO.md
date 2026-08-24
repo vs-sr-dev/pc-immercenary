@@ -71,9 +71,36 @@ open-ended research.
   patrol rectangle and lives in `Perfect/Loki`: he never stands in the world,
   so the question never arises for him.
 
+- **What the Silva arm refuses is the crash.** `0x00b4d8` is
+  **`CrashMover(victim, killer)`** — Higher Crashes, `AllocRank`, a quarter
+  point of each earned stat *per rank climbed*, the 128.0 clamp read
+  independently of [18](docs/18-the-save-game.md), the rank swap, and clearing
+  bit `shape - 3` when the victim was a lieutenant. In front of all of it:
+  **you cannot crash a lieutenant in the overworld.** The shot lands, the
+  death is refused, `0x1000` goes into `[victim + 0x58]`. Silva is exempt
+  because the overworld is the only place she exists.
+- **And the hit resolver says it from the other side.** `0x00bff0` dispatches
+  on `shape - 6` through thirteen arms inside an encounter; outside one it
+  dispatches over the six crowd shapes and drops everything above 5 into
+  `0x00c370`, where `teq r0, #9` / **`bne`** sends everyone *but* Silva to the
+  generic arm. Five sites keep her out of the lieutenant path; this is the one
+  she alone is in.
+- **The walkthrough in this repository confirms it from outside the code.** It
+  spells her *Sylva* and gives every other fight a room to enter — under the
+  blacktop, inside the Hive, the mansion, the church, the stadium. Hers is
+  *"Location: Fountain… you're surrounded by water, and you don't have much
+  room to move"*, and the Switchya bounce still works *"if you've defeated
+  Sylva — just fire at the jets of water where the fountain was"*. A fountain
+  that is still there afterwards is world geometry, not an arena.
+- **Bit 0 of `[0x06bed0 + 0x78]` is not "in an encounter".** 44 sites: an
+  `orr` in each driver and wherever else the world should be drawn, a `bic` as
+  the last act of whatever owns a frame loop, a `tst` at the top of all
+  eleven. It is the loop's *keep drawing* flag, and the overworld sets it too.
+  Bit 29 is the encounter, and it is bit 29 the five Silva sites read.
+
 - **Where the verifiers stand after all of it**: `horizon.py --verify` 56, 66
   with `--arenas`; `savegame.py --verify` 61, 67 with `--movers`;
-  `doasys.py --verify` 72, 81 with `--art` and `--movers`;
+  `doasys.py --verify` 78, 87 with `--art` and `--movers`;
   `speech.py --verify` 34, `frontend.py --verify` 19,
   `armmath.py --verify` 14, `dsp.py --verify` and
   `strm.py --verify-dither` clean.
@@ -620,16 +647,13 @@ camera in about 1.5 seconds a frame. What is missing:
   arguments, and the shell treats its result as six coin flips
   ([docs/09](docs/09-os-surface.md)). Everything about it says random source
   and nothing proves it.
-- **What `0x00b4d8` and its three siblings actually do.** The five sites that
-  ask *lieutenant, and not Silva* are read as far as the question; what the
-  arm does with the answer is not. `0x004ff8`, `0x006128`, `0x00b4d8` and
-  `0x00bff0` are four mover routines, one of which writes `0x1000` to
-  `[mover + 0x58]` and returns. Read one and the other three follow.
-- **The rest of the render-flag word.** `[0x06bed0 + 0x78]` now has bits 0
-  (in an encounter, tested by every frame loop), 3-11 (the lieutenants),
-  12-23 (the weapon inventory) and 29 (also *in an encounter*, set by
-  `RunEncounter`). Bits 0 and 29 cannot both mean the same thing; one of the
-  two readings is loose.
+- **`0x004ff8` and `0x006128`, the two mover routines still unread.** Both ask
+  the lieutenant question and both are reached from `0x0062f8`; `0x004ff8`
+  calls `PlayerTier` and `RandomBelow`, so it is another difficulty-shaped
+  thing. `CrashMover` and `ResolveHit`, the other two, are read
+  ([19](docs/19-the-doasys-spire.md)).
+- **`[mover + 0x58]`.** `CrashMover` writes `0x1000` there when it refuses a
+  kill and `ResolveHit` reads it at six sites; nothing yet says what it is.
 
 ## Notes to self
 

@@ -313,18 +313,26 @@ SILVA_ARM = 0x0000b4d8          # the second routine that excludes id 9
 
 
 ENCOUNTER_BIT = 0x20000000      # of [0x6bed0 + 0x78]; RunEncounter sets it
+HIT_RESOLVER  = 0x0000bff0      # a hit lands: dispatch on the victim's shape
+DRAW_WORLD    = 1               # bit 0 of the same word: draw the world
+
+
+SILVA_ONLY_ARM = 0x0000c370      # outside an encounter, the arm only she takes
 
 
 def silva_arms(im):
-    """Every place the image asks *is this a lieutenant* -- and answers
-    "shape above 5, and not 9".
+    """The five places that ask *is this a lieutenant, and not id 9*.
 
-    `#9` is a common immediate, so the compare alone proves nothing.  The
-    pattern is the pair: a lieutenant test, then a branch that sends id 9 the
-    other way.  Four sites read the shape out of a mover record and compare it
-    against 5, the last crowd id; the fifth is the spawner's list builder,
-    where the lieutenant test is a call to `LieutenantGone` instead.  Returns
-    the address of the `teq` in each.
+    `#9` is a common immediate and so is the four-instruction idiom that reads
+    a mover's shape out of its record, so neither on its own is the pattern.
+    The pattern is the **pair**: a lieutenant test, then a branch that sends id
+    9 the other way.  Four sites spell the lieutenant test `cmp shape, #5` /
+    `ble`; the fifth is the shape cache's list builder, where it is a call to
+    `LieutenantGone` three instructions above.
+
+    `0x00c370` is deliberately not one of these and is checked by name: it
+    tests id 9 with the *opposite* polarity, `bne`, so it is the arm only
+    Silva takes rather than the one only she is kept out of.
     """
     out = []
     for a in im.order:
@@ -979,14 +987,17 @@ def verify(im, roster, movers=None, art=None):
     arms = silva_arms(im)
     ck('five routines ask "a lieutenant, and not id 9", not one',
        [im.func_of(a) for a in arms],
-       [0x00004ff8, 0x00006128, SPAWN_KIND, SILVA_ARM, 0x0000bff0])
-    ck('four of the five read the shape from the mover record at +0x14',
-       [shape_field(im, a)[:2] for a in arms if a != 0x00008f3c],
-       [('ip, [r4, #0x14]', 'r0, [r4, #0x15]'),
-        ('ip, [r4, #0x14]', 'r1, [r4, #0x15]'),
-        ('ip, [r0, #0x14]', 'r0, [r0, #0x15]'),
-        ('ip, [r4, #0x14]', 'r1, [r4, #0x15]')])
-    ck('and three of those four go on to test the encounter bit',
+       [0x00004ff8, 0x00006128, SPAWN_KIND, SILVA_ARM, HIT_RESOLVER])
+    ck('and the hit resolver asks it a sixth time with the polarity flipped',
+       (im.insns[SILVA_ONLY_ARM].op_str,
+        im.insns[SILVA_ONLY_ARM + 4].mnemonic,
+        im.func_of(SILVA_ONLY_ARM)),
+       ('r0, #9', 'bne', HIT_RESOLVER))
+    ck('reached only when the shape is above 5 and we are outside an encounter',
+       (im.insns[0x0000c1c8].op_str, im.insns[0x0000c350].op_str,
+        im.insns[0x0000c354].mnemonic, im.insns[0x0000c358].op_str),
+       ('r0, #0x20000000', 'r0, #5', 'addls', '#0xc370'))
+    ck('three of the five go on to test the encounter bit',
        [hex(a) for a in arms
         if any(im.insns[b].op_str.endswith(hex(ENCOUNTER_BIT))
                for b in range(a + 8, a + 0x2c, 4) if b in im.insns)],
@@ -995,6 +1006,22 @@ def verify(im, roster, movers=None, art=None):
        (im.insns[0x0003ca80].mnemonic, im.insns[0x0003cc38].mnemonic,
         im.func_of(0x0003ca80)),
        ('orr', 'bic', 0x0003c9ac))
+    ck('the refusal writes 0x1000 to the mover and returns',
+       (im.insns[0x0000b524].op_str, im.insns[0x0000b528].op_str),
+       ('r0, #0x1000', 'r0, [r6, #0x58]!'))
+    ck('CrashMover is what it refuses: it bumps Higher Crashes',
+       (im.insns[0x0000b66c].op_str, im.insns[0x0000b674].op_str),
+       ('r0, [r1, #0x3d]', 'r0, [r1, #0x3c]'))
+    ck('credits a quarter point of each earned stat per rank climbed',
+       [im.insns[a].op_str for a in (0x0000b6a8, 0x0000b6b4, 0x0000b6c0)],
+       ['r1, r1, #0x4000'] * 3)
+    ck('clamps all three at 128.0, which [18] read off the loader',
+       [im.insns[a].op_str for a in (0x0000b718, 0x0000b724, 0x0000b730)],
+       ['r1, #0x800000'] * 3)
+    ck('and clears bit shape-3 in both the live word and the saved one',
+       (im.insns[0x0000b760].op_str, im.insns[0x0000b778].op_str,
+        im.insns[0x0000b77c].op_str),
+       ('r0, r4, #3', 'r0, [r1, #0x78]!', 'r0, [sb, #0x9c]!'))
 
     for ok, name, got, want in checks:
         print('%s  %s%s' % ('ok  ' if ok else 'FAIL', name,

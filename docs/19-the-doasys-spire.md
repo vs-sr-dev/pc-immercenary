@@ -641,6 +641,114 @@ in `Perfect/Loki`. Raven never stands in the overworld, so the question the
 five sites ask never arises for him. Silva does: cells 7-10 by 8-10
 ([13](13-hud-maps.md)).
 
+### What the arm refuses is the crash itself
+
+`0x00b4d8` is **`CrashMover(victim, killer)`**, and reading it names the rule
+exactly. Past the Silva test it is the whole ceremony of a rithm's death:
+
+```
+0xb640  and r0, #0xff, [victim + 0x18] asr #7   ; the victim's rank
+0xb648  cmp r0, r8                              ; against yours
+0xb64c  bge  skip                               ; a lower rank earns nothing
+0xb654  teq sb, #0x10101010                     ; and only if you did it
+0xb660  [0x89d40 + 0x3c] += 1                   ; Higher Crashes, this jump
+0xb67c  bl  AllocRank
+0xb6a4  [+0x0c] += 0x4000                       ; a quarter point of D,
+0xb6b0  [+0x10] += 0x4000                       ; O
+0xb6bc  [+0x14] += 0x4000                       ; and A -- once per rank climbed
+0xb718  each clamped at 0x800000                ; = 128.0
+0xb740  bl  ClearRankInUse(your old rank)
+0xb750  [+0x8c] top byte = the victim's rank    ; you take its place
+0xb760  if shape > 5: clear bit shape - 3 in [0x6bed0 + 0x78] and [+0x9c]
+```
+
+Three things in that fall out for free. The **128.0 cap** on the earned triple,
+which [18](18-the-save-game.md) read off the loader, is enforced here too, at a
+second site. The rank ladder is a **swap**: your rank is released and the
+victim's becomes yours, so climbing is exactly the "255 rithms, 255 ranks, no
+gaps" invariant in motion. And the last line is where a lieutenant is *marked
+dead* — `bit shape - 3`, in both the live word and the saved one, which is the
+bit `LieutenantGone` reads and the bit the eight territories in
+[13](13-hud-maps.md) are keyed on.
+
+Now put the refusal back in front of it:
+
+```
+0xb508  cmp shape, #5
+0xb50c  ble  crash it                  ; a crowd shape: always
+0xb510  teq shape, #9
+0xb514  beq  crash it                  ; Silva: always
+0xb518  ldr r0, [0x6bed0 + 0x78]
+0xb520  tst r0, #0x20000000            ; are we inside an encounter?
+0xb524  moveq r0, #0x1000
+0xb528  streq r0, [victim + 0x58]      ; no -- put this back and stop
+0xb52c  beq  return
+```
+
+**You cannot crash a lieutenant in the overworld.** The shot lands — the hit
+resolver at `0x00bff0` runs the whole damage path either way — but the death
+is refused and `0x1000` goes into the victim's `+0x58` instead. Eight of the
+nine have somewhere else for you to do it. Silva does not, so she is named.
+
+And the hit resolver says the same thing from the other side. Inside an
+encounter it dispatches on `shape - 6` through a thirteen-arm jump table, one
+per lieutenant and player form. Outside one, at `0x00c340`, it dispatches on
+`shape` over **0 … 5** — the crowd — and everything above 5 falls to
+`0x00c370`:
+
+```
+0xc350  cmp r0, #5
+0xc354  addls pc, pc, r0, lsl #2       ; a crowd shape has its own arm
+0xc358  b    0xc370                    ; a lieutenant does not
+0xc370  teq  r0, #9
+0xc374  bne  0xc55c                    ; everyone but Silva: the generic arm
+0xc378  ...                            ; Silva's own
+```
+
+Same question, opposite polarity. Five sites keep Silva **out** of the
+lieutenant arm; this one is the arm only she is **in**. She is the one
+lieutenant the overworld has a hit response for.
+
+### And a player noticed, thirty years ago
+
+The walkthrough bundled with this repository spells her *Sylva* and describes
+every fight the same way — Balkan *"you'll be underneath the blacktop"*, Fly
+*"go to the Hive. When you get inside"*, Chameleon a mansion, Chance a church,
+Loki the stadium. Every one is a room you enter.
+
+Hers is not:
+
+> **{SYLVA}** Rank: 8 · Location: **Fountain** · Attacks: Runs fast and shoots.
+> Basically, Sylva just runs in circles and shoots at you. The hard part is
+> that **you're surrounded by water, and you don't have much room to move.**
+
+And, under the Switchya item:
+
+> If you fire a Switchya at the fountain, it will bounce off and come back to
+> you… This glitch also works **if you've defeated Sylva. Just fire at the jets
+> of water where the fountain was.**
+
+A fountain that is still there, still bouncing shots, after the fight is over,
+is world geometry — not an arena that was loaded and freed. The one lieutenant
+whose fight the code refuses to treat as an encounter is the one lieutenant the
+player fights in the open.
+
+### Bit 0 and bit 29 are not the same flag
+
+[06](06-code-map.md) had `[0x06bed0 + 0x78]` bit 0 down as *in an encounter*
+because every frame loop opens with `tst r0, #1`. It is not. Forty-four sites
+touch it and they fall into three groups: an **`orr`** in each of the nine
+encounter drivers and in half a dozen other places that want the world drawn
+(`DOAsysFrame` among them), a **`bic`** as the last act of whatever function
+owns a frame loop, and a **`tst`** at the top of all eleven frame loops. It is
+the loop's own *keep drawing* flag, and the overworld sets and clears it too.
+
+Bit 29 is the encounter, at a different scope entirely: `RunEncounter` sets it
+at `0x03ca80` on the way in and clears it at `0x03cc38` on the way out, and it
+spans the whole fight rather than one loop. The five sites above read bit 29,
+never bit 0 — which is the distinction that makes the Silva reading work at
+all.
+
 ### What that thread did answer
 
 `0x008e88` and `0x009138` both call `0x008dc4`, which is short enough to
