@@ -320,13 +320,22 @@ BITMAPS = [(0x0d3, 16), (0x0e3, 8), (0x0eb, 4), (0x0ef, 2), (0x0f1, 1)]
 STATE_BITS = [
     (24, 8, 'rank', '255 at a new game, 127 in practice; this is the number '
                     'the front end spells into the save file name'),
-    (23, 1, '?', 'set and cleared by 0x020140 and 0x020158, tested three '
-                 'times'),
+    (23, 1, 'side', 'which side you shoot from and the HUD draws on. '
+                    '0x029770 and 0x029788 are the same two coordinates '
+                    'mirrored; C with the left shift sets it at 0x020158, '
+                    'C with the right clears it at 0x020140, a new game '
+                    'clears it at 0x01c624'),
+    (22, 1, '-', 'tested once, at 0x029730, where it flips bit 23 and is '
+                 'not cleared; no program on the disc ever sets it'),
     (18, 4, 'slot3', 'weapon id 0-13 in the third HUD slot'),
     (14, 4, 'slot2', 'weapon id 0-13 in the second'),
     (10, 4, 'slot1', 'weapon id 0-13 in the first'),
-    (9, 1, '?', 'tested in five places'),
-    (7, 2, '?', 'a counter 0 to 3, added to and clamped at 0x0254ec'),
+    (9, 1, 'music', 'the pause menu draws MUSIC ON for 1 and MUSIC OFF for '
+                    '0 at 0x024b84; the player checks it before starting a '
+                    'track'),
+    (7, 2, 'messages', 'message verbosity 0-3: GIVE ALL MESSAGES, '
+                       'INFORMATION ONLY, WARNINGS ONLY, GIVE NO MESSAGES, '
+                       'drawn at 0x024b34; cycled and clamped at 0x0254ec'),
 ]
 
 
@@ -462,6 +471,24 @@ def verify(p, p1e, movers=None):
       text(p, 0x025650) == 'and r0, r1, r0, asr #14' and
       text(p, 0x0256d4) == 'and r0, r1, r0, asr #10',
       "three weapon slots at bits 18, 14 and 10")
+    c(text(p, 0x024b28) == 'tst r0, #0x180' and
+      text(p, 0x024b44) == 'and r0, r2, r0, asr #7' and
+      text(p, 0x024b7c) == 'tst r0, #0x200',
+      "the pause menu reads bits 8-7 and bit 9 out of the state word")
+    c(text(p, 0x0254cc) == 'bic ip, r3, #0x180' and
+      text(p, 0x025510) == 'tst r0, #0x200' and
+      text(p, 0x025518) == 'bic r0, r0, #0x200',
+      "and the row handlers cycle the one and toggle the other")
+    c(text(p, 0x020148) == 'bic ip, ip, #0x800000' and
+      text(p, 0x020160) == 'orr ip, ip, #0x800000' and
+      text(p, 0x01c624) == 'bic r0, r0, #0x800000',
+      "bit 23 is set and cleared by the controller and by a new game")
+    c(text(p, 0x029770) == 'add r0, r1, r0' and
+      text(p, 0x029778) == 'ldr r0, [r7, #4]' and
+      text(p, 0x029780) == 'sub r0, r0, r1' and
+      text(p, 0x029788) == 'sub r0, r1, r0' and
+      text(p, 0x029798) == 'add r0, r0, r1',
+      "and its two arms are one pair of coordinates, mirrored")
     c(text(p, 0x01c630) == 'orr r0, r0, #0xff000000',
       "a new game starts at rank 255")
     c(text(p, 0x01c4a4) == 'orr r3, r3, #0x7f000000',

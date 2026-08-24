@@ -58,7 +58,7 @@ CPU — it is the CEL engine, and all three approaches need it.
 | 0 — Tooling and inventory | ✅ done |
 | 1 — Asset decoders | ✅ done — CEL, `.anim`, `.img`, the CEL banks, the fonts, the whole DataStream (Cinepak + SDX2), the HUD `.Maps` and the 64 DSP instruments all decode, and the films decode in the console's own dithered RGB555 |
 | 2 — B3D world format | ✅ done, see [05-b3d-format.md](05-b3d-format.md) — geometry and textures both |
-| 3 — Code map | 🟡 the world loader, the record parser, the CEL bank loader, the whole ground pipeline, the font blitter, the HUD radar, the hand-written math module, the DOA conversation system and its lip sync, the front end -- menu, stats pages, interlude chooser, music thread -- and the 512-byte save game and the shell's message loop are all read; the OS surface is **closed** in both images and the library/game split is settled as far as the disc allows. `tools/symbols.py` covers 299 of `p`'s 1,477 function starts — 92 named, 207 hinted |
+| 3 — Code map | 🟡 the world loader, the record parser, the CEL bank loader, the whole ground pipeline, the font blitter, the HUD radar, the hand-written math module, the DOA conversation system and its lip sync, the front end -- menu, stats pages, interlude chooser, music thread -- and the 512-byte save game and the shell's message loop are all read; the OS surface is **closed** in both images and the library/game split is settled as far as the disc allows. `tools/symbols.py` covers 300 of `p`'s 1,477 function starts — 94 named, 206 hinted |
 | 4 — Runtime | ⬜ not started |
 | 5 — Native systems | ⬜ not started |
 | 6 — Beyond parity | ⬜ not started |
@@ -175,9 +175,10 @@ See [../TODO.md](../TODO.md) for the addressed version. In short:
 - **What the DSP instruction words mean.** The relocation mask says which
   field of an instruction takes an address, which is the way in
   ([14](14-dsp-instruments.md)).
-- **Four bits of the game state.** `+0x8c` bit 23, bit 9 and the two-bit
-  counter at bits 7-8 ([18](18-the-save-game.md)). The seven statistics
-  counters are all named now.
+- **Nothing sets state-word bit 22.** It would make your shots alternate
+  sides, it latches once set, and no program on the disc turns it on
+  ([18](18-the-save-game.md)). The rest of the state word, and all seven
+  statistics counters, are named.
 - **Whether the far horizon table is ever indexed past its end.**
   `ProjectPoint` bounds its depth below and not above; the overworld is 512
   units across, so it is not obviously impossible.
@@ -185,6 +186,11 @@ See [../TODO.md](../TODO.md) for the addressed version. In short:
   fields are populated), and does the port need to care? Almost certainly not.
 
 ### Answered since this list was written
+
+- *What are the last four bits of the game state?* Bit 9 is music on, bits
+  8-7 are message verbosity — both the pause menu's own settings, named by
+  the strings it prints — and bit 23 is which side you shoot from
+  ([18](18-the-save-game.md)).
 
 - *What does a crash cost you?* Six independent coin flips off the earned
   triple — a flat 1.0 or an eighth, per stat — **and** one of your ammo

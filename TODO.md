@@ -41,6 +41,22 @@ open-ended research.
   STUNYA, PUSHYA, ICE, OFA, SWITCHYA, ANNABALLS, ASHFLAY, CHAFF, PEMS, from
   `p`'s table at `0x42d9c`, matched to the icons by three that carry their
   own initial.
+- **The state word `+0x8c` is closed.** Bit 9 is **music on**, bits 8-7 are
+  **message verbosity** 0-3, and the proof is that the pause menu at
+  `0x024adc` reads both and picks between `GIVE ALL MESSAGES`,
+  `INFORMATION ONLY`, `WARNINGS ONLY`, `GIVE NO MESSAGES` and
+  `MUSIC ON` / `MUSIC OFF` — the strings were sitting in `p_strings.txt` all
+  along with no direct reference, because the table is reached by index.
+- **Bit 23 is a side, and its two arms are one pair of coordinates
+  mirrored.** `0x0295fc` — `HaveAmmo`, `Sin`, `Cos`, and the position of a
+  new object — offsets the player by a perpendicular pair and this bit picks
+  the sign of both; the HUD at `0x01f0bc` draws its matching pair from the
+  same bit and `0x0457fc` flips a `<< 3` offset on it. `C` with the left
+  shift sets it, `C` with the right clears it, a new game clears it.
+- **And bit 22 turns up, which was not in the layout at all.** It is tested
+  once, at `0x029730`, where it flips bit 23 — alternate sides — and no
+  program on the disc ever sets it, nor would anything clear it if it were
+  set. Another switch that was built and never wired up.
 - **The main menu is read**, `0x37c0(enabled, selected)`, returning the item
   index. Five items from the table at `0x14c8c`, built as an eight-item
   widget; the title screen asks for `(0x19, 1)` and an in-game menu for
@@ -87,7 +103,7 @@ open-ended research.
   byte. It is `0x89d40` in `p`, it is not a serialisation of anything — the
   static block is what goes out — and `p1e` keeps the same struct at
   `0x06ea04` and sends it the same way. See [docs/18](docs/18-the-save-game.md);
-  `tools/savegame.py --verify` is 51 checks that pass.
+  `tools/savegame.py --verify` is 55 checks that pass.
 - **DOA is Defense, Offense, Agility, and the block holds two of each**:
   current at `+0x00` and earned at `+0x0c`, every raise clamped at `128.0`.
   Re-entering Perfect copies earned over current, which is exactly the
@@ -380,10 +396,6 @@ camera in about 1.5 seconds a frame. What is missing:
 
 ## 4. Loose ends worth an hour each
 
-- **The four unread bits of the state word.** `+0x8c` bit 23 (the controller
-  code sets and clears it and the renderer tests it), bit 9 (tested in five
-  places), and the two-bit counter at bits 7-8 that `0x0254ec` clamps. One
-  context read each.
 - **`p1e`'s body has still never been walked.** Its OS surface is closed now
   and it shares the world format, the `.Maps` format and — proven byte for
   byte — the whole math module, so it stays the cheapest cross-check on
@@ -415,6 +427,14 @@ camera in about 1.5 seconds a frame. What is missing:
   is not obviously impossible.
 
 ## Notes to self
+
+- **A string with no direct reference is still a string somebody prints.**
+  `MESSAGES ON`, `MUSIC ON` and `SELECT AMMO` sat in `p_strings.txt` marked
+  *no direct literal reference* for eight sessions, and the four bits they
+  name went unread the whole time — because the menu reaches them through a
+  pointer table, so the reference is to the table. When `armxref -s` says a
+  string is unreferenced, look for a *second copy* of it: here the copies at
+  `0x24b98` onward are the ones the code points at.
 
 - **"Nothing writes this field" is only ever true of the images you scanned.**
   `statsJump+0x04` was written up twice in one session as a field nobody

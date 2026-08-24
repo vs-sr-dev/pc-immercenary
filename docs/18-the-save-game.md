@@ -23,7 +23,7 @@ python tools/savegame.py --sites 0x8c
 python tools/savegame.py --verify --movers extracted/Perfect/PerfectMovers.B3D
 ```
 
-`--verify` is 47 checks and they pass.
+`--verify` is 55 checks and they pass.
 
 ## The block is a message, and both game programs send it
 
@@ -106,13 +106,59 @@ below.
 
 ```
 bits 31-24  rank        255 at a new game, 127 in practice
-bit     23              set and cleared by the controller code
+bit     23  side        which side you fire from, and the HUD draws on
+bit     22  --          would flip bit 23; nothing on the disc sets it
 bits 21-18  slot3       weapon id 0-13, third HUD slot
 bits 17-14  slot2
 bits 13-10  slot1
-bit      9              tested in five places
-bits   8-7              a small counter, added to and clamped at 0x0254ec
+bit      9  music       music on
+bits   8-7  messages    verbosity, 0 to 3
 ```
+
+**Bits 9 and 8-7 are the pause menu's own settings**, and the menu says so.
+`0x024adc` paints one row per setting and picks the string from the state
+word:
+
+```
+024b28  tst r0, #0x180              ; bits 8-7
+024b2c  bne #0x24b40                ;   0 -> "GIVE ALL MESSAGES"
+024b44  and r0, r2, r0, asr #7      ;   1 -> "INFORMATION ONLY"
+024b60  teq r0, #2                  ;   2 -> "WARNINGS ONLY"
+                                    ;   3 -> "GIVE NO MESSAGES"
+024b7c  tst r0, #0x200              ; bit 9
+024b84  addne r2, pc, ..            ;   1 -> "MUSIC ON"
+024b88  addeq r2, pc, ..            ;   0 -> "MUSIC OFF"
+```
+
+`0x0254cc` cycles the two-bit one and `0x025518` toggles the other — that is
+the "counter clamped at `0x0254ec`" this document used to describe without
+knowing what it counted. Everything in the 0x40000s that tested bit 9 is the
+music player asking whether it is allowed to start.
+
+**Bit 23 is a side, and its two consumers are the same coordinates mirrored.**
+`0x0295fc` — the routine that calls `HaveAmmo`, `Sin` and `Cos` and fills in a
+new object's position — offsets the player's own position by a perpendicular
+pair and the bit chooses the sign of both:
+
+```
+029770  x = base.x + off.x        029788  x = base.x - off.x
+029780  y = base.y - off.y        029798  y = base.y + off.y
+```
+
+The HUD routine at `0x01f0bc` draws its pair of elements from the same bit,
+and `0x0457fc` flips a `± n << 3` offset on it. The controller sets it with
+**C while the left shift is held** (`0x020158`) and clears it with **C while
+the right shift is held** (`0x020140`); a new game clears it at `0x01c624`.
+So it is which of two mirrored muzzle positions your shot leaves from, and
+the HUD follows.
+
+**Bit 22 is read once and written never.** `0x029730` tests it immediately
+before the mirror, and if it is set it *flips* bit 23 — an alternate-sides
+mode. Nothing in `p`, `p1e`, `launchme` or the front end ever sets it, under
+the same scan that closes the rest of this block, and the code does not clear
+it either, so it would latch. One more thing on this disc that was built and
+never switched on.
+
 
 **The top byte is the player's rank, not a mission number.**
 [17](17-the-front-end.md) guessed mission, reasonably, because the front end

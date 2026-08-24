@@ -209,6 +209,12 @@ Early, but moving. Nothing is playable yet.
   explains the `22` in half the track names; and **Practice mode is a cheat
   held during the EA logo** — Right + C + left shift + Start — living inside
   the film-skip callback, which is why nothing appears to call it.
+- **The 512-byte state word is fully named**, down to the last bit: rank, a
+  side flag your shots and your HUD mirror on, three weapon slots, and the
+  pause menu's own music and message-verbosity settings — the last two read
+  off the strings the menu prints rather than out of any comment. One bit,
+  22, would make your shots alternate sides and nothing on the disc ever
+  sets it.
 - **A crash costs six coin flips and, often, a weapon.** The shell takes a
   flat 1.0 or an eighth off each of the three earned stats independently, and
   if you are carrying more than three rounds it picks one of your ammo
