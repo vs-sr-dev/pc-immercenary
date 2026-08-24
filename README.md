@@ -203,6 +203,17 @@ Early, but moving. Nothing is playable yet.
   and *Huffmans* were the three that had no reading; `p` splits the first two
   by comparing the victim's rank with yours, and the third is the game's own
   word for collecting the static a kill leaves behind.
+- **The front end is read end to end.** The main menu is an eight-item widget
+  that doubles as an eight-slot save browser; the music thread is three calls
+  and two tables, the second of which is the streaming buffer size that
+  explains the `22` in half the track names; and **Practice mode is a cheat
+  held during the EA logo** — Right + C + left shift + Start — living inside
+  the film-skip callback, which is why nothing appears to call it.
+- **A crash costs six coin flips and, often, a weapon.** The shell takes a
+  flat 1.0 or an eighth off each of the three earned stats independently, and
+  if you are carrying more than three rounds it picks one of your ammo
+  algorithms at random and takes it — recording which in the field the stats
+  page marks with an X.
 
 See [docs/04-roadmap.md](docs/04-roadmap.md).
 

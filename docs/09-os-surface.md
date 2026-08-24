@@ -162,10 +162,27 @@ which is the other half of what names them:
 | `0x10015` | 1:21 | 36 | **AllocSignal(0)** — called with `r0 = 0`, results stored and later OR'd |
 | `0x10001` | 1:1 | 64 | **WaitSignal(mask)** — takes the OR of the previously allocated signals |
 | `0x10016` | 1:22 | 32 | **FreeSignal** — called on each stored mask in the teardown paths |
+| `0x10012` | 1:18 | 34 | **ReplyMsg(msg, result, data, size)** — `launchme` answers every message it takes off `ShellMsgPort` with `(msg, 0, 0, 0)`; `p` walks a list of pending messages at `0x046d8c` and replies to each with a four-byte payload |
 | `0x50009` | 5:9 | 4 | **matrix × many vectors** — `(dst, src, mat, count)`, used by `DrawFloor` at `0xfee4` |
 
-The remaining 36 entry points are enumerated by `swiscan.py --sites` with their
+The remaining 35 entry points are enumerated by `swiscan.py --sites` with their
 call sites but are not yet named.
+
+**`1:17` is the interesting one still open.** It takes no arguments and
+returns a value. `p` calls it once, at the tail of `BuildReciprocalTable`
+right after `AllocSignal(0)`; the front end calls it once, as the first
+instruction of `main`; both throw the result away. `launchme` calls it at the
+moment you crash and uses the low six bits as six independent coin flips to
+decide what a crash costs you ([18](18-the-save-game.md)). Three call sites
+in three programs, no arguments, and one consumer that wants fresh bits — but
+that is an argument for a random source, not a proof, and `1:5` is the
+standing reminder of what naming a SWI by the company it keeps costs.
+
+One field of `KernelBase` falls out of the same reading: **`+0x98` is the
+current task**. `p` reaches `KernelBase->[0x98]->[0x18]` at `0x0143e4`, the
+front end's music thread reads `->[0x34]` and `launchme` reads a byte at
+`->[0xa]` to build `$boot/p p`'s argument, all three through the same two
+loads.
 
 ## Every vector slot is attributed now
 

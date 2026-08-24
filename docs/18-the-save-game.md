@@ -291,26 +291,93 @@ two of padding at `+0xf2`.
 
 ## The shell owns the seams between jumps
 
-`launchme` is 12 KiB and its message loop at `0x0007f4` is where the two
-verbs land. It keeps its own 512-byte copy and does the bookkeeping neither
-game program does:
+`launchme` is 12 KiB and its message loop at `0x0007f4` is where the verbs
+land. Its own 512-byte copy is at `0x2da4`, and that copy is not private: the
+shell passes it as `argv[2]` when it launches the front end, so all three
+programs work on the same block. It does the bookkeeping neither game program
+does:
 
 **`0x10`, end of a jump** — `0x000a68`. Copy the incoming block, then fold
 the jump's seven counters into the carried seven: five plain adds, the two
 16-bit pairs added byte by byte, and `+0x44` — the totals word with no
 per-jump meaning — incremented by one. **That word is the number of jumps.**
-Then, if Defense has reached zero, a kernel call returns a mask and each bit
-subtracts `1.0` from one of `Dmax`, `Omax`, `Amax`: **crashing costs you a
-point of DOA**, and which point is not the game's choice.
+Then, if Defense has reached zero, a kernel call returns a mask that costs
+you DOA and may cost you a weapon as well — below.
 
 **`0x11`, start of a jump** — `0x000cd0`. Zero the jump block, and copy the
 earned `Dmax`/`Omax`/`Amax` into `+0x18`…`+0x20` before replying with the
 512 bytes. So the third triple is the **baseline** for the jump, and the
 front end's stats page has three `%+3d` rows against three `%3d` — a signed
-delta and an absolute — which is what a baseline is for. That last step is a
-reading, not a proof: the front end reaches its numbers through an argument
-and not through the pointer it saves with, so which of its rows is which is
-still unread.
+delta and an absolute — which is what a baseline is for. Those rows are read
+now, and they are Defense, Offense and Agility in that order; see
+[17](17-the-front-end.md).
+
+### What a crash actually costs
+
+The kernel call at `0x000b70` is SWI `1:17`, it takes no arguments, and the
+shell uses its result as **six independent bits**, not three:
+
+```
+000b70  svc #0x10011
+000b78  ldr r1, [r4]        ; current Defense
+000b7c  cmp r1, #0
+000b80  bgt #0xcbc          ; still standing -> no penalty at all
+        bit 0 / 1 / 2   Dmax / Omax / Amax  -= 1.0
+        bit 3 / 4 / 5   Dmax / Omax / Amax  -= itself >> 3
+```
+
+so a crash can take a flat 1.0 off an earned stat, or an eighth of it, or
+both, or nothing, and each of the six is decided separately. That SWI is
+called exactly once more in each of the other two programs — at the end of
+`p`'s `BuildReciprocalTable` and as the first instruction of the front end's
+`main`, in both cases with the result thrown away, which is what a source of
+fresh numbers looks like. It is **not named here**: `1:5` was named from the
+company it kept and it was wrong.
+
+Then, still inside verb `0x10`:
+
+```
+000be4  sum the twelve ammo counts at +0x90
+000c04  three or fewer in total  ->  you lose nothing
+000c10  try up to 2 x that total times:
+000c18    rand(100) < 75, else try again
+000c28    pick an index 0-11 -- weapon id 1-12
+000c30    an id of 1-5 only counts if it is in HUD slot 3 (bits 21-18)
+          or slot 1 (bits 13-10) of the state word
+000c58    it must have ammo left
+000c74    take one away, and
+000c7c    str r0, [r4, #0x28]        ; statsJump + 0x04 = the id
+```
+
+**That is the X on the front end's stats page.** `statsJump+0x04` had no
+meaning in either game program because neither writes it; the shell does,
+and the field says *which ammo algorithm this crash cost you*. The fold
+clears it at `0x000adc` at the top of every jump, so "no weapon lost" is 0.
+
+Two details worth a port's attention: the id-1-to-5 test looks at slots 3 and
+1 and **not** slot 2 at bits 17-14, and the retry budget is `2 x` the number
+of rounds you are carrying, so someone loaded with ammo is far more likely to
+be robbed than someone carrying four.
+
+Afterwards, `0x000cbc` compares `Dmax` with `1.0`: at or below it the shell
+picks front-end mode 6 instead of 2.
+
+### The other two verbs, and the shell's own reset
+
+- **`0xff`** — `ReplyMsg(msg, 0, 0, 0)` and nothing else. It drops out of the
+  message loop into the state machine at `0x000958` that decides what runs
+  next.
+- **`1`** — a one-shot handshake. `[shell + 0x10]` is set to 1 at startup; the
+  first verb-1 message releases the graphics context through `0x00030c` and
+  clears the flag, and every one after that does nothing.
+- Anything else prints *"Shell: %s"* with the message text and replies.
+
+And `0x0004f4` is the shell's reset: `Dmax = 0` and the world flags word
+`+0x9c = 0xff8`, the nine lieutenants. It runs at startup, when the front end
+asks for state 3, and after a film. Startup then writes `0xff` over that same
+word at `0x0008f8` — nine bits' worth of value replaced by eight — which
+nothing later depends on, because `p`'s new-game path writes the block from
+scratch and every jump after that copies `p`'s block in whole.
 
 ## For a port
 
@@ -324,12 +391,13 @@ still unread.
 - **Pickups are world state, not inventory.** Sixty-four positions with a
   bias, saved and restored, which is why a dropped weapon is still there
   when you jump back in.
-- **Four programs write this block**, not one: `p` and `p1e` while you play,
-  the shell between jumps, which is where the totals and the DOA baseline
-  come from, and the front end, which owns the interlude ledger at `+0x5c`.
-  A port that folds the stats inside the game will get a different number of
-  jumps than the disc does, and one that treats `+0x5c`…`+0x81` as padding
-  will replay the story films from the top on every load.
+- **Four programs write this block**, not one, and there is only ever one
+  copy of it: `p` and `p1e` while you play, the shell between jumps, and the
+  front end, which the shell hands the very same pointer. A port that folds
+  the stats inside the game will get a different number of jumps than the
+  disc does; one that treats `+0x5c`…`+0x81` as padding will replay the story
+  films from the top on every load; and one that gives the front end a copy
+  instead of the block will lose both.
 - **Ten of the 512 bytes are touched by nothing at all**, `+0x82` to
   `+0x8b`, plus two of padding.
 

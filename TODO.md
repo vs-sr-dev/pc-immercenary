@@ -41,6 +41,42 @@ open-ended research.
   STUNYA, PUSHYA, ICE, OFA, SWITCHYA, ANNABALLS, ASHFLAY, CHAFF, PEMS, from
   `p`'s table at `0x42d9c`, matched to the icons by three that carry their
   own initial.
+- **The main menu is read**, `0x37c0(enabled, selected)`, returning the item
+  index. Five items from the table at `0x14c8c`, built as an eight-item
+  widget; the title screen asks for `(0x19, 1)` and an in-game menu for
+  `(0x1f, 2)`; `Load...` is enabled by a scan of NVRAM slots 1-8 whatever the
+  caller said. Choosing Save or Load turns the same widget into an eight-slot
+  browser — `Mission %d %s` or `empty`, and the `%s` is the *rank* in
+  parentheses, not a mission. Positions and the three text colours are in
+  [docs/17](docs/17-the-front-end.md).
+- **Practice mode is a cheat and it is pressed during the EA logo.**
+  `0x0008c0` is never called — it is *passed* to the Cinepak player as the
+  per-frame skip callback, and it unlocks the fifth menu item when the button
+  word is exactly `0x23400000` or `0x22c00000`: Right + C + left shift +
+  Start, or the same with X. The shell hands the front end a zero for that
+  flag and never writes it, so the cheat is the only way in.
+- **The music thread is three entry points and two tables.** `0x2d38`
+  `PlayMusic(track, loop)`, `0x2c88` `StopMusic`, and a second per-track
+  table at `0x14c64` that turns out to be the **`OpenSoundFile` buffer
+  size** — 128 KiB for the four full-rate tracks, 32 KiB for the four `22`
+  variants and `GonGoner.aiff`. The spooler is a wrapper round the SDK's own
+  music library and names it in its error strings.
+- **The front end is handed the shell's own block, not a copy.** The shell
+  builds `argv = {graphics ctx, selector, 0x2da4, practice}` at `0x0006c4`,
+  and `0x2da4` is its 512-byte copy. All three programs work on one block,
+  which is how the interlude ledger survives a game.
+- **A crash costs more than a point of DOA.** The mask from the kernel call
+  at `0x000b70` is **six** bits, not three: bits 0-2 take `1.0` off
+  `Dmax`/`Omax`/`Amax` and bits 3-5 take an eighth off each, independently.
+- **And a crash can take a weapon** — which is where the stats page's X comes
+  from. If you carry more than three rounds in total the shell tries up to
+  twice that many times to pick one at random, takes a round away, and writes
+  the id into `statsJump+0x04`. **That corrects this session's own earlier
+  reading**, which said nothing wrote the field and the X never appeared.
+- **The shell's last two verbs are read.** `0xff` is a bare `ReplyMsg`, `1` is
+  a one-shot that releases the graphics context the first time and does
+  nothing after. Which also names **SWI 1:18 = `ReplyMsg`**, four arguments,
+  in both `p` and the shell.
 - **`armxref.py --dis` now resolves `add rD, pc, #imm` to the string it
   materialises and prints inline literals as text** instead of pages of
   nonsense instructions. That change is what made the front end readable.
@@ -51,7 +87,7 @@ open-ended research.
   byte. It is `0x89d40` in `p`, it is not a serialisation of anything — the
   static block is what goes out — and `p1e` keeps the same struct at
   `0x06ea04` and sends it the same way. See [docs/18](docs/18-the-save-game.md);
-  `tools/savegame.py --verify` is 47 checks that pass.
+  `tools/savegame.py --verify` is 51 checks that pass.
 - **DOA is Defense, Offense, Agility, and the block holds two of each**:
   current at `+0x00` and earned at `+0x0c`, every raise clamped at `128.0`.
   Re-entering Perfect copies earned over current, which is exactly the
@@ -348,24 +384,19 @@ camera in about 1.5 seconds a frame. What is missing:
   code sets and clears it and the renderer tests it), bit 9 (tested in five
   places), and the two-bit counter at bits 7-8 that `0x0254ec` clamps. One
   context read each.
-- **The rest of `launchme`'s message loop.** Verbs `0x10` and `0x11` are
-  read ([18](docs/18-the-save-game.md)); `1` and `0xff` are not, and neither
-  is the kernel call at `0x000b70` whose returned mask decides which of the
-  three stats a crash costs you. Half a page each.
 - **`p1e`'s body has still never been walked.** Its OS surface is closed now
   and it shares the world format, the `.Maps` format and — proven byte for
   byte — the whole math module, so it stays the cheapest cross-check on
   anything uncertain in `p`.
-- **The rest of `CinepakSubroutine`.** The stats pages at `0x166c` and the
-  interlude chooser at `0x12a0` are read now
-  ([docs/17](docs/17-the-front-end.md)); what is left, in order:
-  - **The main menu at `0x37c0`** — what a port has to draw before the game
-    starts. `argv[3]` chooses four items or five at `0x37dc`, and the strings
-    are `New Jump`, `Resume`, `Save...`, `Load...`, `Practice`.
-  - **The music thread at `0x2c88`** and the spooler at `0x3260`. The same
-    object is linked into `p` and `p1e`, so it cross-checks three ways.
-  - **`0x0008c0`, practice-mode availability**, *"Practice Available: %d"* —
-    small, and it is the last unread entry of the subsystem map.
+- **`CinepakSubroutine`'s subsystem map is closed** — every entry in it is
+  read ([docs/17](docs/17-the-front-end.md)). What is left there is `main`
+  itself at `0x9a4`, the state machine that sequences logo, title, date
+  stamps, menu, stats and films, and the Cinepak player at `0x2368`. Neither
+  is a format; both are a port's control flow.
+- **Name Kernel SWI `1:17`.** Three call sites in three programs, no
+  arguments, and the shell treats its result as six coin flips
+  ([docs/09](docs/09-os-surface.md)). Everything about it says random source
+  and nothing proves it.
 - **What the DOA conversation looks like from the game's side.** `0x00d754`
   in `p` builds the "Video Character" and prints it, and it is the routine
   that reads the interlude ledger. It is the join between
@@ -384,6 +415,20 @@ camera in about 1.5 seconds a frame. What is missing:
   is not obviously impossible.
 
 ## Notes to self
+
+- **"Nothing writes this field" is only ever true of the images you scanned.**
+  `statsJump+0x04` was written up twice in one session as a field nobody
+  writes and an X the game never draws — and the writer was `launchme`, the
+  one image the save-game scanner does not scan. Before calling a field dead,
+  list the programs that can see it. Four of them touch this block.
+- **A function with no `bl` to it is not dead.** `0x0008c0` looked
+  unreachable; `main` loads its *address* into a register and hands it to the
+  film player as a callback. `armxref -c` counts branches only, and `-a` on
+  the same address is the check that catches it.
+- **Read the second table beside the one you already understand.** The ten
+  music names at `0x14c38` had been read a session earlier; the ten words at
+  `0x14c64` had not, and they are the streaming buffer size, which is what
+  proves the `22` in those file names is the sample rate.
 
 - **Capstone prints `pop {r3}` for `ldr r3, [sp], #-4` as well as for
   `ldr r3, [sp], #4`** — it drops the U bit, and the two move the stack

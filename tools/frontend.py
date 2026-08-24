@@ -41,16 +41,19 @@ PREFIX = '$Perfect/film/'
 # The subsystems, by the first function that names one of their strings.
 # Nothing here is a guess: each address is `func_of` a string reference.
 MAP = [
-    (0x0008c0, 'practice mode availability', 'Practice Available: %d'),
+    (0x0008c0, 'the intro-film skip, and the practice cheat',
+     'Practice Available: %d'),
     (0x0009a4, 'main: EA logo, title, date stamps, film playback',
      '$Perfect/film/TitleScreen.3cel'),
     (0x0012a0, 'picks the interlude to play next', '(no string: 0x1654)'),
     (0x00166c, 'the stats pages and weapon icons',
      '$Perfect/film/StatsPage1.cel'),
     (0x002368, 'the Cinepak player proper', 'CPAK: Entering Player.'),
-    (0x002c88, 'the music thread', 'MUSIC: sending Kill signal'),
+    (0x002c88, 'StopMusic', 'MUSIC: sending Kill signal'),
+    (0x002d38, 'PlayMusic(track, loop)', '(no string: table 0x14c38)'),
     (0x003260, 'the sound-file spooler', 'OpenSoundFile'),
-    (0x0037c0, 'the main menu', '$Perfect/AllMenuCels'),
+    (0x0037c0, 'the main menu and the save-slot browser',
+     '$Perfect/AllMenuCels'),
     (0x004008, 'save and load', 'MENU: Game Loaded'),
     (0x005a00, 'the NVRAM device', '/NVRAM'),
     (0x005c10, 'the save-slot name', 'Immerce  %d (%d)'),

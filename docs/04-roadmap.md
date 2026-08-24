@@ -58,7 +58,7 @@ CPU — it is the CEL engine, and all three approaches need it.
 | 0 — Tooling and inventory | ✅ done |
 | 1 — Asset decoders | ✅ done — CEL, `.anim`, `.img`, the CEL banks, the fonts, the whole DataStream (Cinepak + SDX2), the HUD `.Maps` and the 64 DSP instruments all decode, and the films decode in the console's own dithered RGB555 |
 | 2 — B3D world format | ✅ done, see [05-b3d-format.md](05-b3d-format.md) — geometry and textures both |
-| 3 — Code map | 🟡 the world loader, the record parser, the CEL bank loader, the whole ground pipeline, the font blitter, the HUD radar, the hand-written math module, the DOA conversation system and its lip sync, the front end, its stats pages and interlude chooser, and the 512-byte save game are all read; the OS surface is **closed** in both images and the library/game split is settled as far as the disc allows. `tools/symbols.py` covers 299 of `p`'s 1,477 function starts — 92 named, 207 hinted |
+| 3 — Code map | 🟡 the world loader, the record parser, the CEL bank loader, the whole ground pipeline, the font blitter, the HUD radar, the hand-written math module, the DOA conversation system and its lip sync, the front end -- menu, stats pages, interlude chooser, music thread -- and the 512-byte save game and the shell's message loop are all read; the OS surface is **closed** in both images and the library/game split is settled as far as the disc allows. `tools/symbols.py` covers 299 of `p`'s 1,477 function starts — 92 named, 207 hinted |
 | 4 — Runtime | ⬜ not started |
 | 5 — Native systems | ⬜ not started |
 | 6 — Beyond parity | ⬜ not started |
@@ -185,6 +185,14 @@ See [../TODO.md](../TODO.md) for the addressed version. In short:
   fields are populated), and does the port need to care? Almost certainly not.
 
 ### Answered since this list was written
+
+- *What does a crash cost you?* Six independent coin flips off the earned
+  triple — a flat 1.0 or an eighth, per stat — **and** one of your ammo
+  algorithms if you are carrying more than three rounds. The shell does all
+  of it ([18](18-the-save-game.md)).
+- *How does a player get Practice mode?* By holding Right + C + left shift +
+  Start during the EA logo. It is a cheat in the film-skip callback, not a
+  menu option ([17](17-the-front-end.md)).
 
 - *What are the last two statistics counters?* **Higher Crashes** and
   **Huffmans**, and the one before them is **Lower Crashes**. The names are

@@ -13,8 +13,8 @@ load, and a music thread — all of it lives here, not in `p`.
 and the folio glue**: 72 KiB of the game's own code, three times what
 `SpeechSubroutine` had.
 
-This document is a map, the launch chain, the save format and two findings
-about what is missing — not a full read of 72 KiB. Produced with
+This document is the launch chain, the menu, the stats pages, the interlude
+logic, the save format and what is missing — not a full read of 72 KiB. Produced with
 [`tools/frontend.py`](../tools/frontend.py).
 
 ```sh
@@ -69,8 +69,13 @@ and `g`.
 0009c8  ldr r0, [r5]      ; argv[0] -> [base + 0]      a context handle
 0009d4  ldr r1, [r5, #4]  ; argv[1] -> [base + 0x34]   the film index
 0009dc  ldr r1, [r5, #8]  ; argv[2] -> [base + 4]      the 512-byte game state
-0009e4  ldr r1, [r5, #0xc]; argv[3] -> [base + 0xd8]   4-item menu or 5
+0009e4  ldr r1, [r5, #0xc]; argv[3] -> [base + 0xd8]   practice unlocked
 ```
+
+The shell builds that argv at `0x0006c4`, and `argv[2]` is **the shell's own
+copy** of the 512 bytes, at `launchme + 0x2da4`. So the front end does not get
+a snapshot: it reads and writes the block the shell carries between jumps,
+which is how the interlude ledger below survives a game.
 
 The selector in `argv[1]` is the same convention as
 [16](16-speech-and-doa.md), but the rest is not: **this program has no
@@ -80,7 +85,8 @@ it fails: *"InitCPakPlayerFromStreamHeader() - unknown subscriber in stream
 header: '%.4s'"*.
 
 `argv[3]` is read in exactly one place, the top of the menu at `0x37dc`, and
-it chooses between **four menu items and five**.
+it chooses between **four menu items and five**. The fifth is `Practice`, and
+the only thing that ever sets it is the cheat below.
 
 `[base + 0x34]` picks a film straight out of a 40-entry table, and the path
 is built by hand:
@@ -101,19 +107,21 @@ beside it — mechanical, not guessed.
 
 | | | |
 |---|---|---|
-| `0x0008c0` | practice mode availability | *"Practice Available: %d"* |
+| `0x0008c0` | the intro-film skip, and the practice cheat | *"Practice Available: %d"* |
 | `0x0009a4` | `main`: logo, title, date stamps, film playback | *"$Perfect/film/TitleScreen.3cel"* |
+| `0x0012a0` | picks the interlude to play next | (no string) |
 | `0x00166c` | the stats pages and weapon icons | *"$Perfect/film/StatsPage1.cel"* |
 | `0x002368` | the Cinepak player proper | *"CPAK: Entering Player."* |
-| `0x002c88` | the music thread | *"MUSIC: sending Kill signal"* |
+| `0x002c88` | `StopMusic` | *"MUSIC: sending Kill signal"* |
+| `0x002d38` | `PlayMusic(track, loop)` | (no string) |
 | `0x003260` | the sound-file spooler | *"OpenSoundFile"* |
-| `0x0037c0` | the main menu | *"$Perfect/AllMenuCels"* |
+| `0x0037c0` | the main menu and the save-slot browser | *"$Perfect/AllMenuCels"* |
 | `0x004008` | save and load | *"MENU: Game Loaded"* |
 | `0x005a00` | the NVRAM device | *"/NVRAM"* |
 | `0x005c10` | the save-slot name | *"Immerce  %d (%d)"* |
 
 The menu's own strings are `New Jump`, `Resume`, `Save...`, `Load...`,
-`Practice`, and it formats mission entries as `Mission %d %s`. The NVRAM code
+`Practice`, and it formats save slots as `Mission %d %s`. The NVRAM code
 is a full 3DO device conversation — block size, IO request, create, write —
 with its own error strings, and its save slots are named `Immerce  %d (%d)`.
 
@@ -182,7 +190,7 @@ The divide is **Operamath slot −20**, which is what pins that slot: `0xb720`
 is a three-instruction folio thunk, the numerator is in `r0`, and the quotient
 is 16.16 because the result is multiplied by 100 and shifted down by 16.
 
-### The X that never appears
+### The X, and who puts it there
 
 The ammo row draws fourteen icons out of `AllWeaponIcons`, seven to a line,
 and substitutes the matching cel from `AllBWWeaponIcons` when the ammo count
@@ -200,12 +208,134 @@ Icon 0 is `DEFAULT`, icon 13 is a dark unlabelled disc, and both are drawn
 unconditionally.
 
 The page-1 legend says **`X=lost`**, and `0x1938`/`0x19ec` place
-`LostWeapon.cel` over icon number `statsJump+0x04`. **Nothing writes
-`statsJump+0x04`** — not `p`, not `p1e`, not the shell, which increments the
-*carried* copy instead because there the field means the number of jumps. So
-the X is drawn over icon 0 or not at all, and the legend on the shipped disc
-explains a marker the shipped game never places. `savegame.py --verify`
-checks it.
+`LostWeapon.cel` over icon number `statsJump+0x04`. Neither game program ever
+writes that field — **the shell does**, at `0x000c7c`, when a crash takes an
+ammo algorithm away from you. See [18](18-the-save-game.md); it is the same
+field that means Total Jumps in the carried copy, which is why the shell
+increments that one instead of adding the jump's.
+
+## The main menu
+
+`0x37c0` takes two bit masks and returns the item you chose:
+
+```
+menu(enabled, selected) -> 0..4, one bit per item in each mask
+```
+
+The item strings are a table of `char*` at `0x14c8c`, and the same table's
+slot 9 (`0x14cb0`) holds the `$Perfect/Menu.font` handle:
+
+```
+0 New Jump   1 Resume   2 Save...   3 Load...   4 Practice
+```
+
+It is built as an **eight**-item widget and only the first four or five are
+drawn — `[base + 0xd8]`, the fourth argument the shell passes, chooses which,
+and items 5 to 7 are the placeholder string `sg`. The cels come from
+`$Perfect/AllMenuCels`: index 0 is the normal bullet, index 1 the highlighted
+one, and the loop copies 0x44 bytes of CCB per item.
+
+Layout, straight out of the code, in screen pixels:
+
+| | |
+|---|---|
+| row *i* | bullet at y = 17*i* + 58, text at y = 17*i* + 59 |
+| enabled | x = 167 |
+| disabled | x = 191 |
+| text | bullet x + 16 |
+| the cursor cel | y = 17 × selected + 65 |
+
+and three text colours, RGB555: **`0x6739`** for the item under the cursor,
+**`0x1b28`** enabled, **`0x1946`** disabled.
+
+Both call sites are in `main`:
+
+```
+001150  bl 0x37c0(0x19, 1)     ; the title menu: New Jump, Load, Practice
+0011b8  bl 0x37c0(0x1f, 2)     ; in game, after the stats page: all five
+```
+
+so at the title screen you cannot Resume or Save, and in a game you can do
+anything — and the initial cursor is on `New Jump` at the title and on
+`Resume` in a game. `Load...` is the exception: whatever the caller asked
+for, `0x3860` walks NVRAM slots 1 to 8 through the prefix lookup at `0x5a00`
+and enables the item only if it finds a file. The whole mask is restored from
+the caller's argument at `0x40fc` when a submenu backs out, which is what
+fixes the sense of the mask beyond doubt.
+
+Choosing `Save...` or `Load...` turns the same widget into an eight-slot list
+without leaving the function: each row is either
+
+```
+Mission %d %s     the slot number, and the tail of the file name
+empty
+```
+
+The `%s` is a pointer ten bytes into the name the lookup returned, so what a
+player reads as *"Mission 2 (198)"* is slot 2 and **rank** 198 — the label
+says mission and the number does not. Picking a slot writes it to `0x14cb8`
+and calls the save; if that fails the code puts up `$Perfect/NVRAMFull.cel`.
+`X` backs out.
+
+## Practice mode is a cheat, and it lives in the logo
+
+`0x0008c0` is not called by anything. It is *passed* — `main` loads its
+address into `r5` at `0xa54` and hands it to the Cinepak player as the
+per-frame callback for the EA logo and two other intro films. Returning
+non-zero stops the film, so it is the **skip handler**:
+
+```
+0008d8  bl 0x5d0            ; read the pad
+0008dc  tst r0, #0x1000000  ; Start?
+0008f0  teq r0, #0x23400000 ;   exactly Right + C + LeftShift + Start
+000940  tst r0, #0x800000   ; X?
+00094c  teq r0, #0x22c00000 ;   exactly Right + C + LeftShift + X
+0008f8  strne r2, [r1, #0xd8]!   ; practice = 0
+0008fc  streq r3, [r1, #0xd8]!   ; practice = 1
+000968  mov r0, #1          ; and either way, skip the film
+```
+
+Press Start or X during the intro and it skips. Hold **Right + C +
+left shift + Start** (or X) *and nothing else* — the test is `teq`, not
+`tst` — and the same press unlocks the fifth menu item. The debug print
+beside it, *"Practice Available: %d"* / *"Practice Unavailable: %d"*, prints
+the button word so you can see what you actually held.
+
+`[base + 0xd8]` is the flag the menu reads, and it arrives as `argv[3]`. The
+shell reads it from a global it never writes, so it is zero on entry: the
+cheat is the only way to turn it on.
+
+## The music thread
+
+Three entry points around one context at `0x14bd8`:
+
+| | |
+|---|---|
+| `0x2d38` | **PlayMusic(track, loop)** — kill whatever is playing, build the path, signal the spooler |
+| `0x2da8` | the same without the kill, for a track that follows another |
+| `0x2c88` | **StopMusic** — signal, wait, delete the spooler thread |
+
+The path is built from the ten-name table at `0x14c38` into a buffer at
+`0x14c10`, and there is a **second table beside it at `0x14c64`**, ten more
+words, one per track, that goes into the context at `+0x88` and from there
+into the spooler's open call:
+
+```
+00338c  ldr r2, [r5, #0x88]
+003390  ldr r0, = 0x14c10        ; the path
+003394  mov r1, #2               ; two buffers
+003398  bl 0x13994               ; OpenSoundFile(name, nBufs, bufSize)
+```
+
+so it is the **streaming buffer size**, and it splits the table exactly by
+name: `0x20000` — 128 KiB — for `Intro`, `Menu`, `Runtime` and `Ending`, and
+`0x8000` for the four `22` variants and `GonGoner.aiff`. A 4:1 ratio, which
+is what the `22` in those names is telling you.
+
+The spooler at `0x3260` is a wrapper round the SDK's own music library and
+names it in its error strings — `OpenSoundFile`, `ServiceSoundFile`,
+`StopSoundFile`, *"Failure in %s"* — so there is nothing of Immercenary's to
+reverse here, only a thread to reproduce.
 
 ## The interlude chooser, and the nine cut films again
 
@@ -335,10 +465,13 @@ The same ten-name table is linked into `p` and `p1e` as well as here, in the
 same order, so the music player is one object in all three — which is why the
 cut shows up three times.
 
-## The save game is 512 bytes, and the front end never looks inside it
+## The save game is 512 bytes, and the NVRAM code treats it as opaque
 
-`argv[2]` is a pointer to `p`'s game state, and the whole NVRAM subsystem
-treats it as an opaque block of **0x200 bytes**.
+`argv[2]` is a pointer to the shell's copy of the game state, and the whole
+NVRAM subsystem treats it as an opaque block of **0x200 bytes**. The rest of
+this program is not so incurious — the stats pages read fourteen of its
+fields and the interlude chooser owns thirty-eight bytes of it — but the save
+and load paths themselves read exactly one byte, and only to spell a name.
 
 **Loading**, `0x5b14`:
 
@@ -386,7 +519,7 @@ step: open `/NVRAM` with SWI `3:0`, `CreateItem(0x10e, {tag 11, device})` for
 an IO request — *"Couldn't get an IO Request."* — then block size, create,
 write. *"Device error: There's probably not enough free NVRAM."*
 
-**What the 512 bytes mean is `p`'s business, not this program's.** Only one
+**What the 512 bytes mean is `p`'s business, not this subsystem's.** Only one
 field is read here, and only to spell the file name.
 
 ## Where the front end sits in a port
@@ -399,6 +532,12 @@ field is read here, and only to spell the file name.
 - **The NVRAM code is the only place on the disc that writes anything.** It
   is read now, and it is thin: a 512-byte blob and a name. The layout of
   those 512 bytes is in `p`, and is [18](18-the-save-game.md).
+- **The menu, the stats pages and the interludes are all here**, and all
+  three read the save game. A port has to draw two stats pages, an eight-item
+  menu widget that doubles as an eight-slot save browser, and a chooser that
+  decides which of 27 films to play next — before any of `p` runs.
+- **Practice mode is a cheat pressed during the EA logo**, not a menu option
+  a player can find, and the shell always hands the front end a zero for it.
 - **The film index is the game's mission order.** The table's order is not
   the numbering order — `I40` sits at index 4, between `I02` and `I03` — so
   the table *is* the script running order, and it is 40 entries a port can

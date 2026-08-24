@@ -507,12 +507,24 @@ def verify(p, p1e, movers=None):
       "and nothing at all touches +0x82 to +0x8b")
     c(0x28 not in {x.off for x in scan(p)} and
       0x28 not in {x.off for x in scan(p1e, 0x6ea04)},
-      "neither program writes statsJump+0x04, so the X never appears")
+      "neither game program writes statsJump+0x04 -- the shell does")
     c(not [x for x in scan(p) if x.off in (0x18, 0x1c, 0x20) and not x.store],
       "and neither game program reads the jump baseline")
 
     print("the shell does the bookkeeping between jumps")
     sh = Image('extracted/launchme')
+    c(text(sh, 0x000bec) == 'add r0, r4, r5' and
+      text(sh, 0x000bf0) == 'ldrb r0, [r0, #0x90]' and
+      text(sh, 0x000c04) == 'cmp r8, #3',
+      "a crash can cost a weapon, but only if you carry more than three")
+    c(text(sh, 0x000c7c) == 'str r0, [r4, #0x28]',
+      "and the id of the one it took goes in statsJump+0x04")
+    c(text(sh, 0x000adc) == 'str r0, [r4, #0x28]',
+      "which the fold clears at the top of every jump")
+    c(text(sh, 0x000b70) == 'svc #0x10011' and
+      text(sh, 0x000bb8) == 'ldrne r1, [r4, #0xc]' and
+      text(sh, 0x000bbc) == 'subne r1, r1, r1, asr #3',
+      "the crash mask is six bits: 1.0 off each, then an eighth off each")
     c(text(sh, 0x000a68) == 'teq r1, #0x10' and text(sh, 0x000cd0) == 'teq r1, #0x11',
       "launchme dispatches the two verbs p sends")
     c(text(sh, 0x000aa0) == 'mov r2, #0x200',
