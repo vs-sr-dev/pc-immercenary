@@ -554,13 +554,14 @@ camera in about 1.5 seconds a frame. What is missing:
   the answer follows. Silva (`0x03c550`) and Fly (`0x010574`) are the same
   shape; Fly's arena is 395 units, inside the table, and Silva has no arena
   file at all.
-- **The 8.8 horizon tables are the *same* routine's other unbounded end.**
-  `0x056848`, the `height == 0` arm that both `ProjectPoint` and
-  `ProjectPointFlat` branch to, takes screen Y straight out of `0x08b8ec`
-  below depth 36.0 and `0x08bb2c` above, and the coarse one stops at 437.0.
-  So one routine has two table ends; 401.75 is the tighter, which is why it
-  breaks first. Nothing more to read here — it is checked — but a port needs
-  both numbers.
+- **The rithm spawner.** `0x009138` opens on the five live populations at
+  `[0x89d40 + 0xa0]` and asks `0x008e88` for a kind — the living bosses
+  except **Silva, by name**, plus the three player forms always. Both are
+  read only as far as their opening, and both consult `PlayerTier`
+  (`0x008dc4`), which *is* read. The Silva exclusion is a fact with no
+  explanation: she is the one character with a patrol rectangle and no arena
+  file, but she does have an encounter driver (`0x03c550`), and Raven has
+  neither and stays in the list. See [docs/19](docs/19-the-doasys-spire.md).
 
 ## Notes to self
 
