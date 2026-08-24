@@ -148,6 +148,14 @@ code reconciles them by hand, twice:
 Which means **row 12 — boss id 6, Medusa — is the one row no caller can
 select. It is also the only empty one.**
 
+That was read here from the *speech* side, out of the two hand-written
+reconciliations above. The game side says the same thing outright: the
+proximity probe at `0x00f33c` builds `1 << id` and then does `bic r1, r1,
+#0x40` before believing it, so id 6 is dropped by name before a conversation
+can start. See [19](19-the-doasys-spire.md), which also answers where the id
+comes from in the first place — it is a mover's **rank**, and only ranks 13,
+14 and 15 map to one.
+
 The other nine boss rows are not orphans, though: they are answered with
 **film**, not speech. `main` splits on the id before anything else:
 

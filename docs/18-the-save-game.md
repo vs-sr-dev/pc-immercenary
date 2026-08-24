@@ -147,10 +147,18 @@ pair and the bit chooses the sign of both:
 
 The HUD routine at `0x01f0bc` draws its pair of elements from the same bit,
 and `0x0457fc` flips a `± n << 3` offset on it. The controller sets it with
-**C while the left shift is held** (`0x020158`) and clears it with **C while
-the right shift is held** (`0x020140`); a new game clears it at `0x01c624`.
-So it is which of two mirrored muzzle positions your shot leaves from, and
-the HUD follows.
+**the left shift held** and clears it with **the right shift held**; a new
+game clears it at `0x01c624`. So it is which of two mirrored muzzle positions
+your shot leaves from, and the HUD follows.
+
+It is not C's alone. `ControlFrame` has **three** copies of that block, one
+per fire button — `0x020128` for C, `0x020188` for A, `0x0201d4` for B — and
+each of the three carries the same right-shift `bic` and left-shift `orr`
+before ORing its own bit into the action word it returns. Any fire button
+moves the side. `--verify` checks all six instructions; the earlier reading
+was the first of the three blocks, read correctly and generalised too far.
+See [19](19-the-doasys-spire.md), where the action word turns up again as the
+thing that starts a DOA conversation.
 
 **Bit 22 is read once and written never.** `0x029730` tests it immediately
 before the mirror, and if it is set it *flips* bit 23 — an alternate-sides
@@ -328,7 +336,8 @@ what to show next and bumps one byte at `0x1654`; see
 
 That answers the one byte in the range this document had down as a `doasys`
 one-shot flag with no owner. `+0x7f` is entry **35**, the film `I35.strm`,
-and `p` reads it at `0x00d754`: if the front end has played that interlude
+and `p` reads it in `LoadDOAsys` at `0x00d754`
+([19](19-the-doasys-spire.md)): if the front end has played that interlude
 exactly once, the next DOA conversation is forced to character 15 and the
 byte goes to 2, so it happens once. It is the only byte of the ledger either
 game program looks at.

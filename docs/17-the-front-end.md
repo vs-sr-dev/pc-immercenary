@@ -424,6 +424,11 @@ to character 15 and the byte is bumped to 2, so it happens once:
 [18](18-the-save-game.md) had that byte down as a `doasys` one-shot flag with
 no owner. It is the front end's, and this is the one place the game reads it.
 
+Character 15 is **Raven**, and `0x00d754` turns out to be the whole DOAsys
+spire builder — read in [19](19-the-doasys-spire.md), which also says why the
+override was needed: the spire's own chooser draws only from ids 7-14, so
+without this byte Raven could never be the one you plug into.
+
 ## Nine films the code still asks for are not on the disc
 
 The table at `0x14b30` is 40 names. Thirty-one of them are files in

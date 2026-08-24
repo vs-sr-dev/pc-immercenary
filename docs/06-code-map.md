@@ -117,6 +117,14 @@ every reference beyond 255 bytes.
 | `0x043840` | **FindPickupSlot(object)** — matches an object's position against the 64 slots | |
 | `0x0438c8` | **TakePickup(object)** — clears bit 0 of the slot and compacts the object list | *"Couldn't find a matching weapon"* |
 | `0x04f6c4` | **CinepakFrame** — walks the strips and dispatches chunks `0x30`–`0x32` | calls the three block renderers |
+| `0x00d040` | **DOAsysVisit** — the whole DOAsys spire, as one blocking call | heals D/O/A a quarter of a point a frame |
+| `0x00d754` | **LoadDOAsys** — builds the spire and picks the three speakers | *"Video Character is %d"* |
+| `0x00f1f8` | **DOAsysFrame** — one frame of the visit; launches the conversation | the two arms that call `0x03f0d4` |
+| `0x00f33c` | **FindTalker** — is a rank-13/14/15 mover in reach, and who | sets `[0x57d0c + 4]`, the id `argv[1]` carries |
+| `0x00f42c` | **RankToCharacter** — rank 13, 14 or 15 to a character id, else `0xff` | nine instructions, three arms |
+| `0x03e7b0` | **LieutenantGone(id)** — 1 when bit `id - 3` of the render flags word is clear | ids 6-15 only; `0x8f30` uses it too |
+| `0x03f0d4` | **RunSpeechSubroutine** — LoadProgram, ExecuteAsSubroutine, DeleteProgram | *"Couldn't load SpeechSubroutine."* |
+| `0x01fd2c` | **ControlFrame** — one frame of the controller; returns an action word | the ten button masks at `0x5804c` |
 
 `LoadEncounterB3D` starts its cursor at **24**, skipping the six header words it
 does not need: every encounter shares the same bounding box and cell size, so it
@@ -327,6 +335,9 @@ that the released game does in C instead.
 | `0x0584e0`, `0x0584e4` | world width, height, as 16.16 |
 | `0x07b6e0` | animation pointer table, indexed by object id |
 | `0x07b758` | object records, 44 bytes each, indexed by object id |
+| `0x069474`, `0x069478` | the live sprite count and the sprite list it counts, 44-byte records; reached as `0x60cdc + 0x8798` and `+ 0x879c`, and compacted per frame at `0x038f38` |
+| `0x0862b8` | the DOAsys cel table: the pedestal, the two spires and the three `.far.scel` props |
+| `0x057d0c` | the DOAsys record: `+0` the mover you are talking to, `+4` the character id `argv[1]` carries, `+0x58` a mask, `+0x5c`/`+0x60`/`+0x64` the three speakers' ids, `+0x68` four 44-byte pedestals |
 | `0x08988c` | the 257-word spatial grid |
 | `0x05fa68` | 15 floor tile pairs, `[i*8]` far 16x16 and `[i*8+4]` near 32x32 |
 | `0x058bd4` | the 256x256 4bpp floor tile map cel |

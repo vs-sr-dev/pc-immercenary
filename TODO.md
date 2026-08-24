@@ -3,6 +3,68 @@
 Everything below has a concrete starting address or file. Nothing here is
 open-ended research.
 
+## Done in session 10
+
+- **The join between [16](docs/16-speech-and-doa.md) and
+  [17](docs/17-the-front-end.md) is walked, and it is bigger than a join.**
+  `0x00d754` is **LoadDOAsys**, and with the four functions around it — the
+  visit at `0x00d040`, the frame at `0x00f1f8`, the probe at `0x00f33c`, the
+  map at `0x00f42c` — it is the whole DOAsys spire. See
+  [docs/19](docs/19-the-doasys-spire.md); `tools/doasys.py --verify` is 52
+  checks that pass.
+- **The game addresses DOA characters by rank.** `RankToCharacter` is nine
+  instructions: rank 13 is the *video character*, 14 and 15 the two crowd
+  heads, everything else `0xff`. Nothing gives a rithm a name — the world
+  file gives it a rank, and three ranks are reserved.
+- **The video character is a living lieutenant, drawn at random.** Ids 7-14,
+  filtered by bit `id - 3` of the render flags word, which is the same word
+  [18](docs/18-the-save-game.md) reads as *bits 3-11 the lieutenants*. With
+  none of the eight left the slot falls back to the Goner. Crowd A and crowd
+  B are two distinct ids from 0-5, sorted, and the lower-numbered one always
+  gets the bigger crowd — `2 + RandomBelow(12 - id)`.
+- **Which explains the interlude-35 override.** The chooser can never reach
+  id 15, so without the front end's ledger byte **Raven** could never be the
+  one you plug into. That closes last session's `+0x7f` finding from the
+  other end.
+- **The game side confirms the Medusa exclusion independently.** `0x00f33c`
+  builds `1 << id` and then `bic`s bit 6 before believing it, so id 6 is
+  dropped by name. [16](docs/16-speech-and-doa.md) had reached that from the
+  *speech* side — "row 12 is the one row no caller can select" — off entirely
+  different evidence.
+- **Fly is the widest sprite and the only one lifted off the ground.** Two
+  sixteen-entry 16.16 tables on `LoadDOAsys`'s frame land in the draw record
+  at `+0x18` and `+0x1c`; the maximum of the first column and the one
+  special-cased `+4.0` ground offset are both id 10. Neither column was
+  written down for that purpose.
+- **The DOAsys is where the game heals you**, a quarter of a point of D, O
+  and A a frame, each clamped at what you have earned — three copies of six
+  instructions at `0x00d110`. That is the guide's *"if you return from a spire
+  other than the DOAsys your stats won't be full"*, in code.
+- **A conversation starts two ways.** A fresh press of A, B or C —
+  `tst r4, #0xe000`, and the three bits come from three identical blocks of
+  `ControlFrame` — or, if the video character is **Chameleon**, one frame in
+  ten thousand with nothing held. The second is the only unprompted
+  conversation in the game.
+- **And a correction to session 9.** Bit 23 of the state word, the side you
+  fire from, is not C's alone: `ControlFrame` has three copies of the
+  set/clear block, at `0x020128` (C), `0x020188` (A) and `0x0201d4` (B), and
+  every fire button carries it. `savegame.py --verify` is 56 now and checks
+  all six instructions. The *meaning* of the bit is unchanged; the earlier
+  reading was one block generalised to three.
+- **The sprite list is named.** `0x069478`, 44-byte records, with the live
+  count in the word immediately before it at `0x069474` — reached as
+  `0x60cdc + 0x879c` and `+ 0x8798`, which is why it looked like two
+  unrelated globals. `0x038f38` compacts it per frame.
+- **Eight more functions named** and harvested into `tools/p.sym`, which now
+  covers 306 of 1,477: `DOAsysVisit`, `LoadDOAsys`, `DOAsysFrame`,
+  `FindTalker`, `RankToCharacter`, `LieutenantGone`, `RunSpeechSubroutine`,
+  `ControlFrame`.
+
+- **Where the verifiers stand after all of it**: `savegame.py --verify` 56,
+  60 with `--movers`, `doasys.py --verify` 52, `speech.py --verify` 34, `frontend.py --verify`
+  19, `armmath.py --verify` 14, `dsp.py --verify` and `strm.py
+  --verify-dither` clean.
+
 ## Done in session 9
 
 - **The seven statistics counters are named, and the names are not in any
@@ -53,6 +115,7 @@ open-ended research.
   the sign of both; the HUD at `0x01f0bc` draws its matching pair from the
   same bit and `0x0457fc` flips a `<< 3` offset on it. `C` with the left
   shift sets it, `C` with the right clears it, a new game clears it.
+  *(Session 10: **any** fire button, not C — three identical blocks.)*
 - **And bit 22 turns up, which was not in the layout at all.** It is tested
   once, at `0x029730`, where it flips bit 23 — alternate sides — and no
   program on the disc ever sets it, nor would anything clear it if it were
@@ -414,11 +477,6 @@ camera in about 1.5 seconds a frame. What is missing:
   arguments, and the shell treats its result as six coin flips
   ([docs/09](docs/09-os-surface.md)). Everything about it says random source
   and nothing proves it.
-- **What the DOA conversation looks like from the game's side.** `0x00d754`
-  in `p` builds the "Video Character" and prints it, and it is the routine
-  that reads the interlude ledger. It is the join between
-  [16](docs/16-speech-and-doa.md) and [17](docs/17-the-front-end.md) and
-  neither document has walked it.
 - **The far horizon table overruns the reciprocal table** for depths above
   402.0. Harmless in the ground lattice — but `ProjectPoint` *can* reach it.
   It rejects depth at or below 2.0 and then indexes `0x08c16c` by
@@ -594,3 +652,32 @@ camera in about 1.5 seconds a frame. What is missing:
   whether every call site stays inside that bound. Twice in this module the
   bound turned out to be a design decision — the reciprocal table's floor of
   2.0 is what makes `MulSF16` exact.
+
+- **A hinted symbol names a function, not a string.** `tools/symbols.py`
+  labels a function `s_<its longest string>`, so `0000d754
+  s_DOASys_JuniorSpire_far_scel` means *the routine at `0xd754` mentions that
+  filename* — the string itself is at `0xdc44`. Reading it as a string
+  address wasted the first ten minutes of this session on a tooling bug that
+  was not there. The file's own header says so; read it.
+- **Two columns of one table agreeing is worth more than either.** The
+  DOAsys scale tables have a width column and a height column, and separately
+  the routine lifts exactly one id off the ground. The widest of the sixteen
+  and the lifted one are the same id, and that id is called *Fly*. Neither
+  number was recorded to identify anybody.
+- **"The controller sets it with C" was one block out of three.** The
+  set/clear pair for the side bit is copied verbatim under each fire button.
+  Reading the first one and stopping produced a true sentence about a third
+  of the mechanism. When a block ends by ORing one bit into an accumulator,
+  look for the other bits of that accumulator before believing the block is
+  alone.
+- **A boolean helper can be named backwards.** `0x3e7b0` returns **1 when
+  the lieutenant's bit is clear**, and the caller keeps the ids it answers
+  `0` for. Naming it from the caller's intent — "alive" — inverts it. Check
+  the polarity against a second caller and against a *value* you already
+  know: a new game writes `0xff8`, all nine bits set, when all nine are
+  alive.
+- **Two globals can be one array and its count.** `0x068cdc + 0x798` and
+  `0x060cdc + 0x879c` are adjacent words, and the second is the array the
+  first counts. A literal-pool cross-referencer lists them as unrelated
+  because the base registers differ. When two globals are always touched in
+  the same routine, add their offsets out.

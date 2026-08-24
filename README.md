@@ -16,7 +16,7 @@ only shipping build is the 3DO ARM6 executable on the retail CD.
 | Path | Contents |
 |---|---|
 | `tools/` | Opera (3DO) filesystem reader, CEL/anim decoder, CEL bank reader, B3D world parser, ground tile map reader, OBJ exporter, textured software renderer, font decoder, DataStream demuxer with Cinepak and SDX2 decoders, HUD radar map decoder, ARM cross-referencer and call-graph reader, symbol-file builder, OS-surface scanner, DSP instrument reader, library-versus-game classifier, the hand-written ARM math module reimplemented and self-checking, the 512-byte game state read out of the code |
-| `docs/` | Findings: disc layout, file formats, executables, roadmap, B3D format, code map, CEL banks, the ground, the OS surface, the second B3D family, the fonts, the DataStream, the HUD maps, the DSP instruments, library versus game code, the DOA system and its lip sync, the front end, the save game |
+| `docs/` | Findings: disc layout, file formats, executables, roadmap, B3D format, code map, CEL banks, the ground, the OS surface, the second B3D family, the fonts, the DataStream, the HUD maps, the DSP instruments, library versus game code, the DOA system and its lip sync, the front end, the save game, the DOAsys spire |
 
 ## Quick start
 
@@ -92,6 +92,11 @@ python tools/savegame.py --verify --movers extracted/Perfect/PerfectMovers.B3D
 python tools/frontend.py --stats
 python tools/frontend.py --interludes
 python tools/frontend.py --verify
+
+# The DOAsys spire: who you meet there, and how the game hands them to the
+# speech program
+python tools/doasys.py extracted/p
+python tools/doasys.py extracted/p --verify
 ```
 
 ## Status
@@ -141,7 +146,7 @@ Early, but moving. Nothing is playable yet.
   seven of its sub-handlers, the CEL bank loader, the floor renderer, the object
   id table and the world globals are identified. `tools/symbols.py` turns the
   code map plus the image's own strings into a symbol file that
-  `armxref.py -S` reads, which names 264 of the 1,477 functions. The call
+  `armxref.py -S` reads, which names 306 of the 1,477 functions. The call
   graph is readable too, after two fixes: an APCS function starts one
   instruction before its `push`, and the code does not stop where the AIF
   header's `image_ro_size` says it does. Past that boundary sits a
@@ -191,7 +196,7 @@ Early, but moving. Nothing is playable yet.
 
 - **The 512-byte save game is read field by field, and it closes.** There is
   no serialiser: the live game-state struct at `0x89d40` is what goes out.
-  `savegame.py --verify` is 55 checks. Four programs write it, not one — `p`
+  `savegame.py --verify` is 56 checks. Four programs write it, not one — `p`
   and `p1E` while you play, the shell between jumps, and the front end, which
   owns a 38-byte **interlude ledger** at `+0x5c` counting how many times each
   story film has played. That ledger is what proves the nine missing
@@ -220,6 +225,16 @@ Early, but moving. Nothing is playable yet.
   if you are carrying more than three rounds it picks one of your ammo
   algorithms at random and takes it — recording which in the field the stats
   page marks with an X.
+- **The DOA conversation is joined to the game that starts it.** The spire is
+  five functions: it allocates four pedestals, loads six cels and its own
+  `.B3D`, and picks **three** speakers — a video character drawn at random
+  from the eight lieutenants still flying, and two of the six generic heads
+  with a crowd each. The game addresses them by **rank**: 13, 14 and 15 are
+  the three roles, and `RankToCharacter` is the whole of the mapping. Standing
+  there heals a quarter of a point of D, O and A a frame, clamped at what you
+  have earned, which is the code behind the guide's warning about returning
+  from any other spire. Two things start a conversation: a fire button, or —
+  if the video character is Chameleon — one frame in ten thousand, unprompted.
 
 See [docs/04-roadmap.md](docs/04-roadmap.md).
 

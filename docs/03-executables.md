@@ -56,7 +56,9 @@ project.
   `$Perfect/Film/CinepakSubroutine`, then executes `$boot/p p` and
   `$boot/p1E g` as subtasks. The front end runs *before* the game does.
 - **`p`** — the game: overworld, all nine boss encounters, HUD, inventory,
-  DOASys, streaming, audio.
+  DOASys, streaming, audio. The DOAsys half is five functions and is read in
+  [19-the-doasys-spire.md](19-the-doasys-spire.md); it is also the one place
+  `p` launches `SpeechSubroutine`.
 - **`Film/CinepakSubroutine`** — not just a film player: the game's **front
   end**. EA logo, title screen, main menu, practice mode, stats pages, NVRAM
   save and load, and a music thread. Mapped in

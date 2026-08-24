@@ -322,9 +322,10 @@ STATE_BITS = [
                     'the front end spells into the save file name'),
     (23, 1, 'side', 'which side you shoot from and the HUD draws on. '
                     '0x029770 and 0x029788 are the same two coordinates '
-                    'mirrored; C with the left shift sets it at 0x020158, '
-                    'C with the right clears it at 0x020140, a new game '
-                    'clears it at 0x01c624'),
+                    'mirrored; any fire button with the left shift sets it '
+                    'and with the right clears it -- three identical blocks '
+                    'at 0x020128 (C), 0x020188 (A) and 0x0201d4 (B) -- and '
+                    'a new game clears it at 0x01c624'),
     (22, 1, '-', 'tested once, at 0x029730, where it flips bit 23 and is '
                  'not cleared; no program on the disc ever sets it'),
     (18, 4, 'slot3', 'weapon id 0-13 in the third HUD slot'),
@@ -483,6 +484,17 @@ def verify(p, p1e, movers=None):
       text(p, 0x020160) == 'orr ip, ip, #0x800000' and
       text(p, 0x01c624) == 'bic r0, r0, #0x800000',
       "bit 23 is set and cleared by the controller and by a new game")
+    # and not by C alone: the controller has three of that block, one per
+    # fire button, and each one also contributes a bit to the action word
+    # the DOAsys frame tests.  See [19](../docs/19-the-doasys-spire.md).
+    c(text(p, 0x020128) == 'tst r5, #0x2000000' and
+      text(p, 0x020188) == 'tst r5, #0x8000000' and
+      text(p, 0x0201d4) == 'tst r5, #0x4000000' and
+      text(p, 0x0201a8) == 'bic r2, r2, #0x800000' and
+      text(p, 0x0201c0) == 'orr r2, r2, #0x800000' and
+      text(p, 0x0201f4) == 'bic r0, r0, #0x800000' and
+      text(p, 0x02020c) == 'orr r2, r2, #0x800000',
+      "all three fire buttons carry the side, not C alone")
     c(text(p, 0x029770) == 'add r0, r1, r0' and
       text(p, 0x029778) == 'ldr r0, [r7, #4]' and
       text(p, 0x029780) == 'sub r0, r0, r1' and

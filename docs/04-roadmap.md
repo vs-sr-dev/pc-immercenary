@@ -127,7 +127,9 @@ ARM instruction runs:
 - **the OS surface**, 42 SWIs and 109 folio vector slots in `p`, every one
   attributed ([09](09-os-surface.md)) — that is the exact shim list;
 - **the subroutine interface**, eight commands through one callback
-  ([16](16-speech-and-doa.md)).
+  ([16](16-speech-and-doa.md)), and the call that opens it — one word of
+  `argv`, carrying a character id the game derives from a mover's rank
+  ([19](19-the-doasys-spire.md)).
 
 ### Phase 4 — Runtime
 
@@ -166,6 +168,9 @@ See [../TODO.md](../TODO.md) for the addressed version. In short:
    cheapest cross-check on anything uncertain in `p`.
 5. The 356 functions with no direct caller — a pass over them finds the
    dispatch mechanism, which is the last blind spot in the call graph.
+6. `main` of `CinepakSubroutine` at `0x9a4` and its Cinepak player at
+   `0x2368` — the front end's own control flow, the last unwalked piece of
+   it ([17](17-the-front-end.md)).
 
 ## Open questions
 
@@ -178,7 +183,10 @@ See [../TODO.md](../TODO.md) for the addressed version. In short:
 - **Nothing sets state-word bit 22.** It would make your shots alternate
   sides, it latches once set, and no program on the disc turns it on
   ([18](18-the-save-game.md)). The rest of the state word, and all seven
-  statistics counters, are named.
+  statistics counters, are named. Bit 23, the side itself, turns out to be
+  carried by all three fire buttons and not by C alone
+  ([19](19-the-doasys-spire.md)) — the same claim, read off one block and
+  generalised too far.
 - **Whether the far horizon table is ever indexed past its end.**
   `ProjectPoint` bounds its depth below and not above; the overworld is 512
   units across, so it is not obviously impossible.
@@ -224,6 +232,17 @@ See [../TODO.md](../TODO.md) for the addressed version. In short:
   ([08](08-the-ground.md)).
 - *What is `0x4d660`?* Not a C++ dispatch fetch: `OpenFileFolio`
   ([06](06-code-map.md)).
+
+- *Who decides which character a DOA conversation is with?* The spire does,
+  and it addresses them by **rank**: 13, 14 and 15 are the video character
+  and the two crowd heads, and `RankToCharacter` at `0x00f42c` is the whole
+  of the mapping. The video character is drawn at random from the eight
+  lieutenants still flying, unless the front end's interlude ledger forces
+  Raven ([19](19-the-doasys-spire.md)).
+- *Where does the DOAsys heal you?* In its own frame loop, a quarter of a
+  point of D, O and A a frame, each clamped at what you have earned — three
+  copies of the same six instructions at `0x00d110`
+  ([19](19-the-doasys-spire.md)).
 
 ## Reference material
 
