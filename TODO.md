@@ -3,6 +3,46 @@
 Everything below has a concrete starting address or file. Nothing here is
 open-ended research.
 
+## Done in session 12
+
+- **`p1e`'s body is walked, and most of it did not have to be read.**
+  [`tools/twin.py`](tools/twin.py) pairs `p1e`'s functions with `p`'s by
+  instruction shape, then by the call graph, then inside the gaps the layout
+  order leaves — **1,054 of 1,192**, no contradictions, and it rediscovers
+  `0x089d40 -> 0x06ea04` from twenty-two aligned literal loads without being
+  told. `tools/p1e.sym` now carries `p`'s names at `p1e`'s addresses. The
+  whole read is [docs/20](docs/20-p1e-the-final-encounter.md).
+- **Which ending you get is decided before the fight starts.** `p1e`
+  `0x0052a4` reads your **earned** D/O/A and takes the largest: Offense →
+  `0x10` PerfectMale, Defense → `0x11` PerfectFemale, Agility → `0x12`
+  PerfectRobot, ties by coin flip. Both of `p1e`'s exits write 0/1/2 from
+  that id into the **low seven bits of `+0x8c`** — a field
+  [18](docs/18-the-save-game.md) had as a hole — and `CinepakSubroutine`
+  `0x00000e9c` masks with `0x7f` to pick `P1MaleDeath.strm`,
+  `P1FemaleDeath.strm` or `P1RobotDeath.strm`. The walkthrough noticed the
+  effect thirty years ago: *"Each Perfect 1 has a different boss theme."*
+- **`[mover + 0x58]` is the mover's Defense.** Six words: `+0x58`/`+0x5c`/
+  `+0x60` current D, O, A and `+0x64`/`+0x68`/`+0x6c` the maxima, both filled
+  by `0x00a6b0` from the character block's bytes `+0x1c`-`+0x1e` — the column
+  [10](docs/10-second-b3d-family.md) had written down with no name, and the
+  reason the three Perfect One rows are 128, 128, 128. `ResolveHit` subtracts
+  damage from `+0x58`, crashes the mover at zero, and credits `min(D, damage)`
+  to *Damage Given*; `CrashMover`'s `0x1000` is **putting the life back**.
+- **`0x004ff8` is `MoverDecide`**, and `p1e`'s 872-bytes-smaller copy at
+  `0x018f24` is what made it legible: the same function without `PlayerTier`
+  and without the Loki/Raven arm. It weighs a mover's three DOA fractions
+  against yours through `0x004810` and finishes at `RandomBelow`.
+- **`p1e` ships a developer front end it cannot reach.** A four-item menu —
+  *Play Perfect*, *Lab Scene Slides*, *Cast of Characters*, *Quit* — over a
+  `char *` table at `0x03cf30`, plus the slideshow and the cast viewer that
+  drive `Perfect/Display`'s 43 files. Six functions, no `bl`, no branch, and
+  neither address appears as a word anywhere in the image.
+- **The final encounter has no rithm ecology.** 423 of `p`'s functions have
+  no counterpart, `CrashMover`, `ResolveHit`, `Huffman`, `DOAsysVisit`,
+  `AllocRank` and the four pickup routines among them — and `p1e` keeps the
+  call graph anyway, answering fourteen of them with a constant from one run
+  of stubs at `0x016a1c`.
+
 ## Done in session 11
 
 - **Chance's face builder was never missing. There is a *shared* one, and a
@@ -634,10 +674,6 @@ camera in about 1.5 seconds a frame. What is missing:
 
 ## 4. Loose ends worth an hour each
 
-- **`p1e`'s body has still never been walked.** Its OS surface is closed now
-  and it shares the world format, the `.Maps` format and — proven byte for
-  byte — the whole math module, so it stays the cheapest cross-check on
-  anything uncertain in `p`.
 - **`CinepakSubroutine`'s subsystem map is closed** — every entry in it is
   read ([docs/17](docs/17-the-front-end.md)). What is left there is `main`
   itself at `0x9a4`, the state machine that sequences logo, title, date
@@ -647,15 +683,35 @@ camera in about 1.5 seconds a frame. What is missing:
   arguments, and the shell treats its result as six coin flips
   ([docs/09](docs/09-os-surface.md)). Everything about it says random source
   and nothing proves it.
-- **`0x004ff8` and `0x006128`, the two mover routines still unread.** Both ask
-  the lieutenant question and both are reached from `0x0062f8`; `0x004ff8`
-  calls `PlayerTier` and `RandomBelow`, so it is another difficulty-shaped
-  thing. `CrashMover` and `ResolveHit`, the other two, are read
-  ([19](docs/19-the-doasys-spire.md)).
-- **`[mover + 0x58]`.** `CrashMover` writes `0x1000` there when it refuses a
-  kill and `ResolveHit` reads it at six sites; nothing yet says what it is.
+- **`0x006128`, the last unread mover routine.** `0x004ff8` beside it is read
+  now ([20](docs/20-p1e-the-final-encounter.md)); this one is 464 bytes and
+  `p1e` `0x0198f4` is its 296-byte counterpart at similarity 0.60. Read the
+  small one first — that is what worked on `0x004ff8`.
+- **`p1e` `0x01aa40`, 2,876 bytes, one caller**, is now the largest unread
+  function in either image, and `0x01a1a4`, `0x01a4f8` and `0x0194b4` sit
+  beside it in the Perfect One's behaviour band. The two-bit phase at mover
+  `+0x18` bits 24-25 takes three values and `0x01b9d8` moves the mover on each
+  change; what the three phases *are* is the question.
+- **The three per-form constants** `0x88b87`, `0xafc87`, `0xd6d87` and the
+  eight-byte table at `p1e` `0x065b84` beside them. `p` `0x03f658` packs one
+  of them into a request word at `[0x58f74 + 0x50]`; nothing says yet what
+  consumes it.
 
 ## Notes to self
+
+- **A shared string is a hint, not a pair.**
+  `$Perfect/PerfectOne/Male/pmale.stand.anim` is referenced by exactly one
+  function in `p` and exactly one in `p1e`, and they are *different*
+  functions — `LoadDOAsysArt` in one, the Perfect One's own loader in the
+  other. Three such strings agree, so a majority vote does not save you.
+  Requiring the two bodies to still resemble each other does.
+- **The port of a thing is the cheapest way to read the thing.** `p1e`'s copy
+  of `0x004ff8` is 872 bytes smaller because the final encounter has one
+  character in it, so every arm that asks *which lieutenant is this* is gone.
+  Two sessions of staring at the 2,296-byte original had not cracked it; the
+  1,424-byte one read in twenty minutes and then the original was obvious.
+  When a routine resists, check whether the other executable has a simpler
+  copy before reading the hard one.
 
 - **A string with no direct reference is still a string somebody prints.**
   `MESSAGES ON`, `MUSIC ON` and `SELECT AMMO` sat in `p_strings.txt` marked

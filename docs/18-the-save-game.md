@@ -113,7 +113,15 @@ bits 17-14  slot2
 bits 13-10  slot1
 bit      9  music       music on
 bits   8-7  messages    verbosity, 0 to 3
+bits   6-0  ending      which Perfect One you beat: 0 male, 1 female, 2 robot
 ```
+
+**Bits 6-0 are written by `p1e` alone and read by the front end alone.** Both
+of `p1e`'s exits clear them and set 0, 1 or 2 from the character id the
+Perfect One was wearing, and `CinepakSubroutine` at `0x00000e9c` masks the
+word with `0x7f` and picks `P1MaleDeath.strm`, `P1FemaleDeath.strm` or
+`P1RobotDeath.strm` from it. Nothing in `p` touches them, under the scan
+`--sites 0x8c` runs. See [20](20-p1e-the-final-encounter.md) §6.
 
 **Bits 9 and 8-7 are the pause menu's own settings**, and the menu says so.
 `0x024adc` paints one row per setting and picks the string from the state

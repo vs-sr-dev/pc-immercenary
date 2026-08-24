@@ -690,6 +690,15 @@ resolver at `0x00bff0` runs the whole damage path either way — but the death
 is refused and `0x1000` goes into the victim's `+0x58` instead. Eight of the
 nine have somewhere else for you to do it. Silva does not, so she is named.
 
+**`+0x58` is the victim's Defense**, which is why the write is the refusal.
+`ResolveHit` subtracts the shot's damage from it and calls `CrashMover` when
+it reaches zero; `CrashMover` puts 0x1000 back and returns, and the
+lieutenant is left standing. The field is one of six —
+`+0x58`/`+0x5c`/`+0x60` a mover's current D, O and A, `+0x64`/`+0x68`/`+0x6c`
+its maxima, both filled together by `0x00a6b0` from the character block's
+bytes `+0x1c`-`+0x1e`. [20](20-p1e-the-final-encounter.md) §7 has the three
+lines of evidence.
+
 And the hit resolver says the same thing from the other side. Inside an
 encounter it dispatches on `shape - 6` through a thirteen-arm jump table, one
 per lieutenant and player form. Outside one, at `0x00c340`, it dispatches on

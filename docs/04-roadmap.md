@@ -108,7 +108,8 @@ with the game's own wall textures, and `tools/b3dmap.py` draws the city plan.
 
 Disassemble `p`, identify SDK library code, name functions from the debug
 strings, recover the main structs (player, character, quad, encounter). Use
-`p1e` as a cross-check.
+`p1e` as a cross-check — `tools/twin.py` now does that mechanically, pairing
+1,054 of `p1e`'s 1,192 functions with `p`'s and carrying the names across.
 
 Deliverable: an annotated disassembly and a header file of reconstructed
 types. The disassembly is readable now — `armxref.py -S tools/p.sym` — and
@@ -163,9 +164,12 @@ See [../TODO.md](../TODO.md) for the addressed version. In short:
 3. Read the DSP instruction set — 1,950 sixteen-bit instructions across the
    64 files, of which a port needs the 21 named instruments' worth.
    `directout` is eight words; start there.
-4. Walk `p1e`'s body. Its OS surface is closed and it shares the world
-   format, the `.Maps`, the math module and the save struct, so it is the
-   cheapest cross-check on anything uncertain in `p`.
+4. ~~Walk `p1e`'s body.~~ Done, [20](20-p1e-the-final-encounter.md).
+   `tools/twin.py` pairs 1,054 of its 1,192 functions with `p`'s
+   mechanically, so only the 138 that are its own had to be read: the final
+   encounter, the ending, and a developer front end that never shipped
+   switched on. Its cross-check value is real — `p1e`'s copy of `0x004ff8` is
+   872 bytes smaller and is what made `p`'s legible.
 5. The 356 functions with no direct caller — a pass over them finds the
    dispatch mechanism, which is the last blind spot in the call graph.
 6. `main` of `CinepakSubroutine` at `0x9a4` and its Cinepak player at

@@ -72,7 +72,10 @@ project.
 - **`p1e`** — the Perfect One final encounter, shipped as a separate
   executable. It re-links a large part of the same engine (identical strings,
   identical loaders) around a different world file (`P1EncWorld.B3D`) and
-  stream (`P1EncStream`).
+  stream (`P1EncStream`). Read in [20](20-p1e-the-final-encounter.md): 1,054
+  of its 1,192 functions pair mechanically with `p`'s, it drops the whole
+  rithm ecology, and the 138 that are its own carry the fight, the ending, and
+  a developer front end that the shipping build cannot reach.
 
 `p1e` is a gift: the same engine compiled into a second image gives two
 independent layouts of the same functions, which is a strong cross-check when

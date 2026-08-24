@@ -260,9 +260,20 @@ ladder:
 | 17 | pfemale | unused | 300 | 1400 | 0 | 30 | 128, 128, 128 | 1 |
 | 18 | probot | unused | 300 | 1400 | 0 | 30 | 128, 128, 128 | 1 |
 
+**`+0x1c`, `+0x1d` and `+0x1e` are the character's D, O and A**, and that is
+what makes the last three rows read: 128, 128, 128 is the 128.0 cap on the
+player's own earned triple from [18](18-the-save-game.md). `0x00a6b0` copies
+these three bytes, shifted into 16.16 and offset by a rank-derived fraction,
+into *both* halves of every mover it builds — the current DOA at `+0x58` and
+the maxima at `+0x64` — and `ResolveHit` takes damage out of the first of
+them. See [20](20-p1e-the-final-encounter.md) §7.
+
 The last two rows are what the previous note called "two unnamed": `pfemale`
-and `probot`, the female and robot player characters — which is what
-`Film/P1FemaleDeath.strm` and `P1RobotDeath.strm` are for.
+and `probot`. They are not the *player's* forms: they are the Perfect One's,
+and `Film/P1FemaleDeath.strm` and `P1RobotDeath.strm` are the endings that
+play when it dies wearing one — chosen, it turns out, by which of your own
+three stats is highest. [20](20-p1e-the-final-encounter.md) §6 has the
+chain.
 
 Thirteen characters have a rectangle and six do not — Goner, Loki, Raven and
 the three player forms. The disc has eight `*Encounter.B3D` arenas, for

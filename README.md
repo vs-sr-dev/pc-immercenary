@@ -15,8 +15,8 @@ only shipping build is the 3DO ARM6 executable on the retail CD.
 
 | Path | Contents |
 |---|---|
-| `tools/` | Opera (3DO) filesystem reader, CEL/anim decoder, CEL bank reader, B3D world parser, ground tile map reader, OBJ exporter, textured software renderer, font decoder, DataStream demuxer with Cinepak and SDX2 decoders, HUD radar map decoder, ARM cross-referencer and call-graph reader, symbol-file builder, OS-surface scanner, DSP instrument reader, library-versus-game classifier, the hand-written ARM math module reimplemented and self-checking, the 512-byte game state read out of the code |
-| `docs/` | Findings: disc layout, file formats, executables, roadmap, B3D format, code map, CEL banks, the ground, the OS surface, the second B3D family, the fonts, the DataStream, the HUD maps, the DSP instruments, library versus game code, the DOA system and its lip sync, the front end, the save game, the DOAsys spire |
+| `tools/` | Opera (3DO) filesystem reader, CEL/anim decoder, CEL bank reader, B3D world parser, ground tile map reader, OBJ exporter, textured software renderer, font decoder, DataStream demuxer with Cinepak and SDX2 decoders, HUD radar map decoder, ARM cross-referencer and call-graph reader, symbol-file builder, OS-surface scanner, DSP instrument reader, library-versus-game classifier, the hand-written ARM math module reimplemented and self-checking, the 512-byte game state read out of the code, a function-level pairing of the two game executables |
+| `docs/` | Findings: disc layout, file formats, executables, roadmap, B3D format, code map, CEL banks, the ground, the OS surface, the second B3D family, the fonts, the DataStream, the HUD maps, the DSP instruments, library versus game code, the DOA system and its lip sync, the front end, the save game, the DOAsys spire, the final encounter |
 
 ## Quick start
 
@@ -102,6 +102,14 @@ python tools/doasys.py extracted/p --verify     --art extracted/Perfect/DOASys -
 # How far can the game see, and what is past the end of its divide table?
 python tools/horizon.py extracted/p --arenas extracted/Perfect
 python tools/horizon.py extracted/p --verify --arenas extracted/Perfect
+
+# The two game executables are one engine linked twice: pair their functions,
+# carry the names across, and see what only the final encounter has
+python tools/twin.py
+python tools/twin.py --verify
+python tools/twin.py --new
+python tools/twin.py --sym tools/p1e.sym
+python tools/armxref.py extracted/p1e -S tools/p1e.sym -d 162a4
 ```
 
 ## Status
@@ -271,6 +279,21 @@ Early, but moving. Nothing is playable yet.
   point. A port that divides correctly will not match the console there. The
   nine encounter drivers came out of the same read, dispatched on bit
   `id - 3`.
+
+- **Which ending you get was decided by how you played the whole game.** `p1e`,
+  the final encounter, is the same engine linked a second time, so
+  `tools/twin.py` pairs 1,054 of its 1,192 functions with `p`'s by instruction
+  shape, the call graph and the layout order — and rediscovers the game-state
+  block's second address on the way, with no help. Reading only the 138 that
+  are its own closes a chain that runs the length of the disc: `0x0052a4` picks
+  the Perfect One's form from whichever of your **earned** D, O and A is
+  highest — Offense male, Defense female, Agility robot — the mover carries
+  that id all fight, both of `p1e`'s exits write it into the low seven bits of
+  the saved state word, and the front end masks that word with `0x7f` to choose
+  between `P1MaleDeath.strm`, `P1FemaleDeath.strm` and `P1RobotDeath.strm`. The
+  same read names `[mover + 0x58]` — a mover's **Defense**, one of six words
+  that are its DOA and its maxima — and finds a four-item developer menu,
+  slideshow and cast viewer that `p1e` ships with and cannot reach.
 
 See [docs/04-roadmap.md](docs/04-roadmap.md).
 
