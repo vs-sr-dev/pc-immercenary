@@ -191,7 +191,7 @@ Early, but moving. Nothing is playable yet.
 
 - **The 512-byte save game is read field by field, and it closes.** There is
   no serialiser: the live game-state struct at `0x89d40` is what goes out.
-  `savegame.py --verify` is 47 checks. Four programs write it, not one — `p`
+  `savegame.py --verify` is 55 checks. Four programs write it, not one — `p`
   and `p1E` while you play, the shell between jumps, and the front end, which
   owns a 38-byte **interlude ledger** at `+0x5c` counting how many times each
   story film has played. That ledger is what proves the nine missing

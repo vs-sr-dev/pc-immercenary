@@ -97,6 +97,11 @@ open-ended research.
   materialises and prints inline literals as text** instead of pages of
   nonsense instructions. That change is what made the front end readable.
 
+- **Where the verifiers stand after all of it**: `savegame.py --verify` 55,
+  `frontend.py --verify` 19, `speech.py --verify` 34, `armmath.py --verify`
+  14, `dsp.py --verify` and `strm.py --verify-dither` clean. The numbers
+  quoted in the older sections below are what they were at the time.
+
 ## Done in session 8
 
 - **The 512-byte save game is read, field by field**, and it closes to the

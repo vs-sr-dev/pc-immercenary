@@ -297,7 +297,14 @@ non-zero stops the film, so it is the **skip handler**:
 
 Press Start or X during the intro and it skips. Hold **Right + C +
 left shift + Start** (or X) *and nothing else* — the test is `teq`, not
-`tst` — and the same press unlocks the fifth menu item. The debug print
+`tst` — and the same press unlocks the fifth menu item.
+
+That naming is the standard 3DO `ControlPadEventData` bit layout, and this
+disc corroborates it twice over: the stats page exits on `0x800000` or
+`0x1000000` and turns the page on `0xe000000`, and its own artwork prints
+*"A,B,C More"* beside a button glyph for the exit; the menu accepts any of
+`0xf800000`. So `0x08/0x04/0x02000000` are A/B/C, `0x01000000` is Start,
+`0x00800000` is X and `0x00400000`/`0x00200000` are the shifts. The debug print
 beside it, *"Practice Available: %d"* / *"Practice Unavailable: %d"*, prints
 the button word so you can see what you actually held.
 

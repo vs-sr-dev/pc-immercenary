@@ -310,7 +310,8 @@ static, your stats won't increase."*
 adding the jump's, and the reason is that the two copies mean different
 things: in the totals it is **Total Jumps**, and per jump it is the id of
 the weapon you lost, which the stats page marks with an X over that icon.
-Nothing on the disc ever writes the per-jump one, so the X never appears.
+Neither game program writes the per-jump one — the shell does, and only when
+a crash takes an ammo algorithm away from you. See below.
 
 **And neither program ever writes the carried block.** Every store into
 `+0x40`…`+0x5b` in `p` and `p1e` together is the `SetMem` that clears it at
