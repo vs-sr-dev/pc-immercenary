@@ -297,6 +297,139 @@ def ground_offset(im):
     return None, None
 
 
+# ------------------------------------------------------------- the spawner
+
+SPAWN_MGR   = 0x00009138        # the two-slot shape cache
+SPAWN_KIND  = 0x00008e88        # which shape a slot should hold
+SPAWN_LOAD  = 0x000092cc        # "Loading %s and %s", then wake LoadThread
+LIVE_PAIR   = 0x0005862c        # the two shapes the world has art for
+WANT_PAIR   = 0x00058634        # the two it should have
+DIRTY       = 0x0005863c        # set when they differ
+HIGHER_JUMP = 0x3c              # Higher Crashes this jump, inside STATE
+HIGHER_TOT  = 0x58              # and the total: +0x24+0x18 and +0x40+0x18
+
+
+SILVA_ARM = 0x0000b4d8          # the second routine that excludes id 9
+
+
+ENCOUNTER_BIT = 0x20000000      # of [0x6bed0 + 0x78]; RunEncounter sets it
+
+
+def silva_arms(im):
+    """Every place the image asks *is this a lieutenant* -- and answers
+    "shape above 5, and not 9".
+
+    `#9` is a common immediate, so the compare alone proves nothing.  The
+    pattern is the pair: a lieutenant test, then a branch that sends id 9 the
+    other way.  Four sites read the shape out of a mover record and compare it
+    against 5, the last crowd id; the fifth is the spawner's list builder,
+    where the lieutenant test is a call to `LieutenantGone` instead.  Returns
+    the address of the `teq` in each.
+    """
+    out = []
+    for a in im.order:
+        i = im.insns[a]
+        if i.mnemonic != 'teq' or not i.op_str.endswith(', #9'):
+            continue
+        nxt = im.insns.get(a + 4)
+        if nxt is None or nxt.mnemonic != 'beq':
+            continue
+        reg = i.op_str.split(',')[0].strip()
+        p1, p2, p3 = (im.insns.get(a - n) for n in (4, 8, 0xc))
+        if p2 is not None and p2.mnemonic == 'cmp' \
+                and p2.op_str == reg + ', #5' \
+                and p1 is not None and p1.mnemonic == 'ble':
+            out.append(a)
+        elif p3 is not None and is_bl(p3) \
+                and p3.op_str.lstrip('#') == hex(GONE_TEST):
+            out.append(a)
+    return out
+
+
+def shape_field(im, teq_at):
+    """The four instructions that read a mover's shape id, above a Silva arm.
+
+    16-bit big-endian at `+0x14` of the mover record, assembled a byte at a
+    time -- the same shape the whole file reads the Higher Crashes counters
+    with.
+    """
+    return tuple(im.insns[teq_at - n].op_str for n in (0x18, 0x14, 0x10, 0xc))
+
+
+def higher_crash_readers(im):
+    """Every site that adds the two Higher Crashes counters together.
+
+    The base register has to be the game state itself, or the offsets `0x3c`
+    and `0x58` match half the structures in the image.  Two of the three read
+    the field a byte at a time and shift; the third reads the whole word and
+    shifts right 16 -- the same 16-bit big-endian field two different ways,
+    which is what makes the pairing a fact rather than a coincidence of
+    offsets.
+    """
+    def state_reg(site, reg):
+        f = im.func_of(site)
+        for b in range(site - 4, f - 4, -4):
+            j = im.insns.get(b)
+            if j is None or j.op_str.split(',')[0].strip() != reg:
+                continue
+            m = LITPC.match(j.op_str)
+            return bool(m) and word_at(im, b + 8 + int(m.group(2), 0)) == STATE
+        return False
+
+    out = set()
+    for a in im.order:
+        i = im.insns[a]
+        if i.mnemonic not in ('ldr', 'ldrb'):
+            continue
+        m = MEMRI.match(i.op_str)
+        if not m or m.group(3) is None or int(m.group(3), 0) != HIGHER_JUMP:
+            continue
+        if not state_reg(a, m.group(2)):
+            continue
+        for b in range(a + 4, a + 0x40, 4):
+            j = im.insns.get(b)
+            if j is None:
+                continue
+            mm = MEMRI.match(j.op_str)
+            if mm and mm.group(3) and int(mm.group(3), 0) == HIGHER_TOT \
+                    and mm.group(2) == m.group(2):
+                out.add(im.func_of(a))
+                break
+    return sorted(out)
+
+
+def spawn_limits(im):
+    """The Higher Crashes sum's three constants: (floor, clamp hi, clamp lo).
+
+    The floor is the spawner's own `cmp r2, #5`; the other two are the clamp
+    the crowd choice runs the sum through before handing it to `RandomBelow`.
+    """
+    lo, clamp = None, []
+    for i in walk(im, SPAWN_MGR, SPAWN_LOAD):
+        if i.mnemonic == 'cmp' and i.op_str.startswith('r2, #') and lo is None:
+            lo = int(i.op_str.split('#')[1], 0)
+    for i in walk(im, SPAWN_KIND, SPAWN_MGR):
+        if i.mnemonic == 'cmp' and i.op_str.startswith('r4, #'):
+            clamp.append(int(i.op_str.split('#')[1], 0))
+    return (lo,) + tuple(clamp)
+
+
+def spawn_names(im):
+    """The two names `0x0092cc` formats, as (format string, slot regs)."""
+    fmt = None
+    for i in walk(im, SPAWN_LOAD, SPAWN_LOAD + 0x300):
+        a, m, o = i.address, i.mnemonic, i.op_str
+        mm = re.match(r'^(\w+), pc, #(\d+)(?:, #(\d+))?$', o)
+        if m == 'add' and mm:
+            v, rot = int(mm.group(2), 0), int(mm.group(3) or 0)
+            if rot:
+                v = ((v >> rot) | (v << (32 - rot))) & 0xffffffff
+            s = cstr(im, a + 8 + v)
+            if s and '%s' in s:
+                fmt = s
+    return fmt
+
+
 # ------------------------------------------------------------------ the cast
 
 def cast(im):
@@ -821,6 +954,47 @@ def verify(im, roster, movers=None, art=None):
     ck('the unprompted arm needs Chameleon', (want, who(want, roster)),
        (12, 'Chameleon'))
     ck('and one roll in ten thousand', odds, 10000)
+
+    # --- the spawner: a two-slot shape cache, not a spawner
+    ck('the shape chooser has one caller, the shape cache',
+       im.calls.get(SPAWN_KIND), [0x00009218, 0x00009240])
+    ck('which asks it twice, once per slot', len(im.calls[SPAWN_KIND]), 2)
+    ck('and both calls are inside the cache manager',
+       sorted(set(im.func_of(a) for a in im.calls[SPAWN_KIND])), [SPAWN_MGR])
+    ck('the loader formats both names out of the cast table',
+       spawn_names(im), 'Loading %s and %s')
+    ck('and the cast table names id 9, so nothing downstream lacks a name',
+       cstr(im, word_at(im, NAME_TABLE + 9 * 4)), 'Silva')
+    ck('the load itself is handed to a thread, not done inline',
+       [i.op_str for a, i in ((0x000381ec, im.insns[0x000381ec]),)],
+       ['#0x10002'])
+    lim = spawn_limits(im)
+    ck('below five Higher Crashes no slot is promoted to a lieutenant',
+       lim[0], 5)
+    ck('and the crowd choice is RandomBelow(clamp(sum, 2, 5))',
+       lim[-2:], (5, 2))
+    ck('five sites add the two Higher Crashes counters, all off the state',
+       higher_crash_readers(im),
+       [0x000088ac, SPAWN_KIND, SPAWN_MGR, 0x00009544, SILVA_ARM])
+    arms = silva_arms(im)
+    ck('five routines ask "a lieutenant, and not id 9", not one',
+       [im.func_of(a) for a in arms],
+       [0x00004ff8, 0x00006128, SPAWN_KIND, SILVA_ARM, 0x0000bff0])
+    ck('four of the five read the shape from the mover record at +0x14',
+       [shape_field(im, a)[:2] for a in arms if a != 0x00008f3c],
+       [('ip, [r4, #0x14]', 'r0, [r4, #0x15]'),
+        ('ip, [r4, #0x14]', 'r1, [r4, #0x15]'),
+        ('ip, [r0, #0x14]', 'r0, [r0, #0x15]'),
+        ('ip, [r4, #0x14]', 'r1, [r4, #0x15]')])
+    ck('and three of those four go on to test the encounter bit',
+       [hex(a) for a in arms
+        if any(im.insns[b].op_str.endswith(hex(ENCOUNTER_BIT))
+               for b in range(a + 8, a + 0x2c, 4) if b in im.insns)],
+       ['0x52d0', '0x62a4', '0xb510'])
+    ck('which RunEncounter sets on the way in and clears on the way out',
+       (im.insns[0x0003ca80].mnemonic, im.insns[0x0003cc38].mnemonic,
+        im.func_of(0x0003ca80)),
+       ('orr', 'bic', 0x0003c9ac))
 
     for ok, name, got, want in checks:
         print('%s  %s%s' % ('ok  ' if ok else 'FAIL', name,

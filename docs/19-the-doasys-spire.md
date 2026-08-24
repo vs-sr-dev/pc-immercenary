@@ -491,16 +491,155 @@ at random:
 
 Its one caller, `0x009138`, opens by scanning the five live rithm populations
 at `[0x89d40 + 0xa0]` ([18](18-the-save-game.md)), so this is the **rithm
-spawner**, and `0x008e88` is what it asks for a kind. That the three player
-forms are in the list is consistent with them being the Perfect One's three
-shapes — but this document has not walked what the caller does with the
-answer, and does not claim it.
+spawner**, and `0x008e88` is what it asks for a kind.
 
-Silva's exclusion is a fact, not a guess: it is one `teq`, and it is the only
-place on the disc that singles her out. A tempting explanation is that Silva
-is the one character with a patrol rectangle and **no `*Encounter.B3D`**
-([10](10-second-b3d-family.md)) — except that Raven has no arena either and
-stays in the list. So the exclusion is written down and not explained.
+### It is a two-slot shape cache, and it names its slots out loud
+
+The caller is now read to the end, and the answer is a smaller thing than
+"spawner" suggests. The overworld keeps art for exactly **two** rithm shapes
+at a time, in the pair at `[0x05862c]`, with the pair it *wants* at
+`[0x058634]` and a dirty flag at `[0x05863c]`. `0x009138` decides, now and
+then, to swap one of them:
+
+```
+0x00914c  scan [0x89d40 + 0xa0][0..4]; if every population is empty, return 0
+0x009178  order the pair at [0x05862c] so the lower id is first
+0x00918c  tier = PlayerTier()
+0x009194  promote = Random4Bits() > 12 - tier      ; 4/16 at tier 1, 8/16 at 5
+0x0091d0  higher = i16[+0x3c] + i16[+0x58]         ; Higher Crashes, jump + total
+0x0091f4  if higher < 5: leave slot 0 alone
+0x009218  slot 0 = ChooseSpawnKind(0)
+0x009240  slot 1 = ChooseSpawnKind(1)
+0x00926c  reconcile the wanted pair against the live pair
+0x0092c0  [0x05863c] = 1  ; and return 1
+```
+
+`0x0092cc`, the next function, is what acts on the flag, and its last four
+instructions give the whole design away:
+
+```
+0x0094ec  r0 = 0x058640
+0x0094f0  r3 = [r0 + slot1 * 4]
+0x0094f8  r2 = [r0 + slot0 * 4]
+0x009504  sprintf(buf, "Loading %s and %s", r2, r3)
+0x00950c  bl 0x03c3a8                    ; "GAME: %s"
+0x009510  bl 0x0381dc                    ; SendSignal(LoadThread, [0x058a7c])
+```
+
+`0x058640` is the nineteen-name cast table, and the load itself is handed to
+**`LoadThread`** — the twelve-thread table in [09](09-os-surface.md) — so the
+shape swap is asynchronous and the string is a debug line, not a screen.
+`$Characters/%s.%d.anim` at `0x00a0ef` is the path it builds out of the name.
+
+Two things fall out of the argument to `ChooseSpawnKind`. It is the **slot
+number**, and the first thing the routine does with it is take the *other*
+slot: `r6 = (slot == 0)`, then `[0x058634 + r6 * 4]`. If the other slot holds
+a shape **below 6** it builds the lieutenant list; otherwise it picks from the
+crowd. So the two slots are kept complementary — one crowd shape, one
+lieutenant — and neither ever duplicates the other.
+
+And the crowd ids *are* the difficulty tiers. `0x008eec` compares
+`[0x05862c + other * 4]` directly against `PlayerTier()`'s 1 … 5 and nudges
+the tier down when they collide, which only makes sense if a crowd id and a
+tier are the same number. `PerfectMovers` agrees: Picasso, Tork, Kilroy, Venus
+and David carry strictly increasing stat rows — 50/900, 100/1000, 200/1100,
+250/1200, 300/1300 — and Goner, id 0, is the corpse. Five ordinary rithm
+shapes, one per tier.
+
+### The ramp is keyed on Higher Crashes
+
+The 16-bit field at `+0x3c` is `+0x24 + 0x18` and the one at `+0x58` is
+`+0x40 + 0x18`: **Higher Crashes, this jump and the total**
+([18](18-the-save-game.md)). Three routines read the pair and add them:
+
+| site | what the sum does |
+|---|---|
+| `0x0091f0` | below **5**, the spawner will not promote a slot to a lieutenant at all |
+| `0x009028` | `RandomBelow(clamp(sum, 2, 5))` picks the crowd shape, so the crowd gets more varied as the sum grows |
+| `0x00958c` | `max(1, sum / 2)` — read as a whole word and shifted, the same field a third way |
+
+So the world gets harder the more *higher-ranked* rithms you have crashed, and
+nothing else feeds that ramp. That also settles which half of the two-column
+stats page the game itself reads: both, added.
+
+### Silva, and it was never about the spawner
+
+Last session wrote the exclusion up as *one `teq`, the only place on the disc
+that singles her out*. That was wrong, and finding the others is what explains
+it. There are **five**, and four of them are the same four instructions:
+
+```
+ldrb ip, [rM, #0x14]        ; the mover's shape id, 16-bit big-endian
+ldrb rN, [rM, #0x15]
+lsl  ip, ip, #0x18
+orr  rN, rN, ip, asr #16
+cmp  rN, #5
+ble  ordinary               ; 0-5 is a crowd shape
+teq  rN, #9
+beq  ordinary               ; and so, by name, is Silva
+```
+
+| `teq` | in | what the lieutenant arm does next |
+|---|---|---|
+| `0x0052d0` | `0x004ff8` | `tst [0x06bed0 + 0x78], #0x20000000` |
+| `0x0062a4` | `0x006128` | the same test |
+| `0x008f3c` | `0x008e88` | the spawner's list |
+| `0x00b510` | `0x00b4d8` | the same test, then `[mover + 0x58] = 0x1000` |
+| `0x00c624` | `0x00bff0` | compares the mover's `+0x64` against half of `r0` |
+
+So `cmp #5` / `teq #9` is not a quirk of the spawner. It **is the mover
+layer's definition of "lieutenant"**, written out five times, and Silva is
+outside it everywhere — the spawner is one consequence of the rule, not the
+rule itself.
+
+And bit 29 names the reason. `RunEncounter` at `0x03c9ac` **sets**
+`0x20000000` in `[0x06bed0 + 0x78]` at `0x03ca80` and **clears** it at
+`0x03cc38`: it is the *we are inside an encounter* flag. Three of the four
+mover sites read it immediately after deciding the shape is a lieutenant, so
+what they are asking is:
+
+> is this a lieutenant standing in the overworld, outside its own fight?
+
+For eight of the nine that is a real state with a real answer — the lieutenant
+is out there patrolling and you have not walked into it yet. For Silva it is
+the *only* state she has, because **Silva has no fight to be inside**. Set her
+nine directories side by side:
+
+| lieutenant | `*Encounter.B3D` | wall cels | start/end image |
+|---|---|---|---|
+| Medusa | yes | `MedusaWallCels.Cels` | both |
+| Tesla | yes | `TeslaWallCels.Cels` | `TeslaEnd.img` |
+| Balkan | yes | `BalkanCels.Cels` | both |
+| **Silva** | **no** | **none** | **none** |
+| Fly | yes | `FlyWallCels.Cels` | `FlyEnd.img` |
+| Riberto | yes | `RibertoWallCels.Cels` | both |
+| Chameleon | yes | `ChameleonWallCels.cels` | both |
+| Chance | yes | `ChanceWallCels.Cels` | both |
+| Loki | yes | `LokiWallCels.Cels` | both |
+
+`Perfect/Silva` holds a floor grid, a weapon and her seven animations, and
+**nothing that builds a room**. She has an encounter driver (`0x03c550`) and a
+frame loop (`0x03c8fc`), and that frame loop runs the *shared overworld*
+builder with no arena renderer of its own ([08](08-the-ground.md)). Silva is
+fought in the world, where she stands.
+
+Which closes it from both ends. If Silva took the lieutenant arm she would be
+a lieutenant permanently outside her encounter, since the bit that says
+otherwise is never set for her; excluding her by name makes her an ordinary
+rithm in the overworld, which is the only way she can be reached at all. And
+the spawner's `teq` follows for free: her shape is an ordinary shape, and the
+list it builds is a list of *lieutenants*.
+
+Two other candidate explanations die on the way. `0x058640[9]` is `"Silva"`,
+spelled and present, so nothing downstream lacks a name; and `Perfect/Silva`
+is **607 KB, the smallest of the nine**, against Chance's 1.5 MB, so it is not
+an art budget. The remaining objection from last session — *Raven has no arena
+either and stays in the list* — is answered by `PerfectMovers`: Raven's patrol
+rectangle is `(5000, 5000, 5000, 5000)`, the degenerate "nowhere" rectangle
+that Loki and the three player forms also carry, and every Raven asset lives
+in `Perfect/Loki`. Raven never stands in the overworld, so the question the
+five sites ask never arises for him. Silva does: cells 7-10 by 8-10
+([13](13-hud-maps.md)).
 
 ### What that thread did answer
 

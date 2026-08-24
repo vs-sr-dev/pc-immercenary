@@ -126,12 +126,22 @@ every reference beyond 255 bytes.
 | `0x00f42c` | **RankToCharacter** — rank 13, 14 or 15 to a character id, else `0xff` | nine instructions, three arms |
 | `0x03e7b0` | **LieutenantGone(id)** — 1 when bit `id - 3` of the render flags word is clear | ids 6-15 only; `0x8f30` uses it too |
 | `0x008dc4` | **PlayerTier** — `round((3 * rankTier + statTier) / 4)`, 1 to 5; the stat half is bytes `+0x1c`-`+0x1e` of the five tier records | `add r0, r0, r0, lsl #1` then `asr #2` |
-| `0x009138` | SpawnManager — opens on the five live rithm populations at `[0x89d40 + 0xa0]`; unread past that | |
-| `0x008e88` | ChooseSpawnKind — the living bosses except Silva, plus the three player forms, one at random | `teq r4, #9` |
-| `0x012b64` | **SetDrawDistance(units)** — `[0x058a40]`, plus a fade step into `[0x058bc0]`; twelve call sites, ten at 250, two at 200, one at 600 | `teq r0, #0xfa` / `teq r0, #0x96` |
+| `0x009138` | **RithmShapeCache** — the overworld holds art for exactly two rithm shapes; this decides, on a tier-weighted coin flip, whether to swap one. Returns early if all five populations are empty, and will not promote a slot to a lieutenant below 5 Higher Crashes | `cmp r2, #5` after adding `+0x3c` and `+0x58` |
+| `0x008e88` | **ChooseSpawnKind(slot)** — the *other* slot decides: a crowd shape there means build the lieutenant list (living, except Silva, plus the three player forms), otherwise pick a crowd shape. Crowd ids 0-5 double as the difficulty tiers | `teq r4, #9`; `RandomBelow(clamp(sum, 2, 5))` |
+| `0x0092cc` | **LoadRithmShapes** — reconciles the live pair against the wanted pair, formats *"Loading %s and %s"* out of the name table and wakes `LoadThread` | `0x0094f0` indexes `0x058640` twice |
+| `0x00b4d8` | one of the five sites that ask *is this mover a lieutenant* — shape above 5 and **not 9** — then whether we are outside an encounter | `cmp r0, #5` / `teq r0, #9` / `tst r0, #0x20000000` |
+| `0x012298` | **DepthToShade(depth)** — 15 down to 0 in bands of `[0x058bc0]`, the fade step | `mov r1, #0xf`, `cmp r3, #0xf` |
+| `0x012b64` | **SetDrawDistance(units)** — `[0x058a40]`, plus a fade step into `[0x058bc0]`; **sixteen** branches reach it, four of them a tail `b`: twelve at 250, four at 200, one at 600 | `teq r0, #0xfa` / `teq r0, #0x96` |
 | `0x0387f0` | **BuildCellList** — the 5 x 5 block of 256-unit cells the parser is given, `cx ± 2` by `cy ± 2` | five iterations, `bics ip, #0xf` |
 | `0x03c9ac` | **RunEncounter** — one arm per boss on bit `id - 3`; nine drivers, ids 6-14 | `teq r4, #0x800` -> Loki |
-| `0x021130` | LokiFaces — Loki's face builder, and the only one of the six with no average-depth gate | `GatherCorners` with no `asr #17` |
+| `0x021130` | **LokiFaces** — Loki's replacement for *both* halves of the shared pipeline: three copies of one body over hard-coded index bands 0-19, 20-59 and 60-count, and only the middle band culls, at 100 units | three `GatherCorners`, no `asr #17` gate |
+| `0x01220c` | **CameraTransform** — offsets the vertex table at `0x080ec0` by `-camera` and rotates it through Operamath 5:9; the one call every frame loop makes first, so its caller list *is* the list of frame loops | `svc #0x50009`, count `([0x0582bc]+1)>>1` |
+| `0x012370` | **BuildVisibleFaces** — the shared world face builder: `GatherCorners`, drop the face when both first corners are past `[0x058a40]`, clear bit 0 on all four corners, LOD-band at 50 and 100, append. Calls `GatherCorners` and never `ProjectFace`, which is why a `ProjectFace` scan cannot see it | `lsl r7, r0, #0x10` then `cmp/cmpgt` |
+| `0x012c94` | **ProjectVisibleFaces** — the second half: `ProjectFace` over the list `BuildVisibleFaces` filled, then compact out anything wholly off screen | `cmp ip, #0x14000` four times |
+| `0x022084` | **WorldFrame** — the overworld's frame loop, and the widest user of the shared builder; also latches the seven per-frame maxima | five `cmp`/`strgt` pairs into `0x058a24`.. |
+| `0x00eea8` | **FilmFrame** — the frame loop the intro films run on: floor only, no world faces; reached from every driver and from the stream path | calls `DrawFloor` and no face loop |
+| `0x045738` | **FrameService** — input and events, the first `bl` of every frame loop; a path under it runs a *whole overworld frame* for the pause screen, so a call-graph walk has to cut it or every driver reaches every frame loop | 11 callers, all frame loops |
+| `0x04e144` | **CreateThread(name, pri, entry, stack)** — allocates the stack from a `MemList` and builds the tag list; twelve sites, nine of them the encounters' asset loaders | `bic r1, r0, #0xf`, `and r7, r1, #0xff` |
 | `0x03f0d4` | **RunSpeechSubroutine** — LoadProgram, ExecuteAsSubroutine, DeleteProgram | *"Couldn't load SpeechSubroutine."* |
 | `0x01fd2c` | **ControlFrame** — one frame of the controller; returns an action word | the ten button masks at `0x5804c` |
 
@@ -373,7 +383,8 @@ that the released game does in C instead.
 | `0x057f00`, `0x057f04` | the near and far radar CCBs; `[+8]` is the tile buffer |
 | `0x05844c`, `0x058450` | near radar tile origin, world units |
 | `0x058454`, `0x058458` | far radar tile origin |
-| `0x06bed0` + `0x78` | the render flags word the cull test reads: bits 3-11 the lieutenants, 12-23 the weapon inventory |
+| `0x06bed0` + `0x78` | the render flags word the cull test reads: bits 3-11 the lieutenants, 12-23 the weapon inventory, **bit 29 set by `RunEncounter` on the way in and cleared on the way out** — five mover sites read it right after deciding a shape is a lieutenant |
+| `0x05862c`, `0x058634`, `0x05863c` | the two rithm shapes the overworld has art for, the two it wants, and the flag that says they differ. See [19](19-the-doasys-spire.md) |
 | `0x058fd4` | 12 weapon names, long form; `+0x30` the short form |
 | `0x089d40` | **the 512-byte game state**, the save file byte for byte — D/O/A, rank, ammo, the rank bitmaps, 64 pickup slots at `+0xf4` and the player's position at `+0x1f4`. `p1e` keeps the same struct at `0x06ea04`. See [18](18-the-save-game.md) |
 | `0x058f50` | the shell conversation: reply port, Msg item, `ShellMsgPort` at `+0xc` |

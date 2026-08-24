@@ -259,14 +259,18 @@ Early, but moving. Nothing is playable yet.
   fight.** `ProjectPoint` divides by depth through a 1,600-entry table that
   stops at 401.75 units, indexes it with no upper bound, and *raises* depth
   off-axis. What keeps it in range is not the per-cell cull — the renderer is
-  handed records up to 768 units away — but a three-instruction gate on a
-  face's average depth, present in five of the six face builders at 250, 200
-  or a settable draw distance. The sixth belongs to Loki, has no gate, and
-  Loki's arena is 579 units across with the draw distance deliberately raised
-  to 600. Past the table the code reads the ground lattice template as
-  reciprocals, so a port that divides correctly will not match the console
-  there. The nine encounter drivers came out of the same read, dispatched on
-  bit `id - 3`.
+  handed records up to 768 units away — but a depth gate, in two shapes: an
+  average-depth compare in the five per-encounter face builders, and a
+  compare against the draw distance itself in `BuildVisibleFaces`, the
+  *shared* builder that the overworld and four of the encounters use. Ten of
+  the eleven frame loops are bounded. The eleventh is Loki's, which replaces
+  the shared pipeline with `LokiFaces` — three hard-coded index bands, only
+  the middle one culled — and sets the draw distance to 600. Loki's arena is
+  420 units wide, so the overrun is eighteen units deep and lands in the 200
+  bytes of zeros past the table: the far wall collapses onto the vanishing
+  point. A port that divides correctly will not match the console there. The
+  nine encounter drivers came out of the same read, dispatched on bit
+  `id - 3`.
 
 See [docs/04-roadmap.md](docs/04-roadmap.md).
 

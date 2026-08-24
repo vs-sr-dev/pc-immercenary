@@ -3,6 +3,81 @@
 Everything below has a concrete starting address or file. Nothing here is
 open-ended research.
 
+## Done in session 11
+
+- **Chance's face builder was never missing. There is a *shared* one, and a
+  `ProjectFace` scan cannot see it.** `0x012370` is **`BuildVisibleFaces`**:
+  it calls `GatherCorners`, gates on the draw distance, clears the
+  already-projected bit on all four corners and appends to the visible list —
+  and it never calls `ProjectFace`, because `0x012c94`
+  **`ProjectVisibleFaces`** does that on the next line. Five of the eleven
+  frame loops use the pair: the overworld, Chance, Fly, Silva and Tesla. The
+  three drivers that looked builderless were three of those five.
+- **Every frame loop is a plain `bl` from its driver.** The roadmap's guess
+  that Chance's was entered through a `CreateThread` address was wrong: the
+  nine `CreateThread` entries are the encounters' **asset loaders**. Walking
+  down from a driver needs `0x045738`, the frame service, cut out — it is the
+  first `bl` of every frame loop and a path under it runs a whole *overworld*
+  frame for the pause screen, which makes all eleven look reachable from all
+  nine drivers.
+- **Chance is safe, and the reason is a tail branch.**
+  `PrepareForChanceThread` sets the draw distance to **250**, not 600 — with a
+  `b`, not a `bl`, at `0x02e628`. There are **sixteen** branches to
+  `SetDrawDistance`, four of them tails; the old scan counted twelve. Chance's
+  arena is 490 units wide and its widest face is 23, so the deepest point that
+  can reach `ProjectPoint` during that fight is **273**.
+- **Loki is still the only overrun, and now it is measured.** `LokiFaces`
+  replaces *both* halves of the pipeline with three copies of one body over
+  hard-coded index bands — 0-19, 20-59, 60-count — and only the middle band
+  culls, at 100 units. `LokiEncounter.B3D` is a hub, ten props and **four
+  concentric twenty-segment rings**, and the bands cut across the rings, so
+  what is never culled includes the whole 70-unit outer wall.
+- **The 579 in [08](docs/08-the-ground.md) was the wrong number.** It is the
+  bounding-box diagonal of a *ring*; no two points in the arena are more than
+  **420** apart, and 420 is the true bound, because depth cannot exceed
+  distance and the off-axis widening cannot either. So the overrun is 18 units
+  deep — 73 words, of which the first 50 are the zeros. The Loki fight sends
+  its far wall to the **vanishing point**; only a camera pressed to the wall
+  reaches the lattice.
+- **Two more kernel SWIs, both named from arguments rather than company.**
+  `1:2` is **`SendSignal(task, mask)`** — proved by provenance, matching the
+  globals that receive `CreateThread` returns against those that receive
+  `AllocSignal` returns. `1:9` is **`Yield()`** — proved by the *absence* of
+  an argument at all nineteen sites.
+- **The twelve threads, with names, entries and stacks**
+  ([09](docs/09-os-surface.md)). `KernelBase->[0x98]->[0x18]` is the task's
+  own Item and `->[0xa]` its priority; loaders run at parent + 1, which is why
+  the parent can `SendSignal` a mask the loader has not allocated yet.
+- **The rithm spawner is a two-slot art cache.** `0x009138` decides whether to
+  swap one of the two shapes the overworld has art for; `0x0092cc` formats
+  *"Loading %s and %s"* out of the name table and wakes `LoadThread`.
+  `ChooseSpawnKind`'s argument is the **slot**, and it reads the *other* slot,
+  so the two are kept complementary — one crowd shape, one lieutenant. Crowd
+  ids 0-5 *are* the difficulty tiers.
+- **The difficulty ramp is Higher Crashes.** Five sites add the counter at
+  `+0x3c` to the one at `+0x58` — this jump plus the total. Below 5, no slot
+  is ever promoted to a lieutenant.
+- **Silva is explained, and last session's write-up was wrong about it.** It
+  is not one `teq`, it is **five**, and four of them are the same four
+  instructions: `cmp shape, #5 / ble` then `teq shape, #9 / beq`. That pair
+  *is* the mover layer's definition of "lieutenant". Three of the five go
+  straight on to `tst [0x6bed0 + 0x78], #0x20000000`, the bit `RunEncounter`
+  sets on the way in and clears on the way out — so the question is *is this a
+  lieutenant standing outside its own fight*. Silva has no fight to be inside:
+  hers is the one directory on the disc with no `*Encounter.B3D`, no wall cels
+  and no start or end image. Excluding her by name is what makes her an
+  ordinary rithm in the overworld, which is the only way she can be reached.
+  Raven, the old counter-example, has the degenerate `(5000,5000,5000,5000)`
+  patrol rectangle and lives in `Perfect/Loki`: he never stands in the world,
+  so the question never arises for him.
+
+- **Where the verifiers stand after all of it**: `horizon.py --verify` 56, 66
+  with `--arenas`; `savegame.py --verify` 61, 67 with `--movers`;
+  `doasys.py --verify` 72, 81 with `--art` and `--movers`;
+  `speech.py --verify` 34, `frontend.py --verify` 19,
+  `armmath.py --verify` 14, `dsp.py --verify` and
+  `strm.py --verify-dither` clean.
+
 ## Done in session 10
 
 - **The join between [16](docs/16-speech-and-doa.md) and
@@ -545,23 +620,16 @@ camera in about 1.5 seconds a frame. What is missing:
   arguments, and the shell treats its result as six coin flips
   ([docs/09](docs/09-os-surface.md)). Everything about it says random source
   and nothing proves it.
-- **Where Chance's face builder is.** `ProjectPoint`'s overrun is answered
-  for Loki ([docs/08](docs/08-the-ground.md)) but Chance's arena is **587**
-  units across, larger still, and **no** face builder appears in its driver's
-  call graph — `0x003750`, dispatched on bit `0x400`. Its frame loop is
-  entered through an address handed to `CreateThread`, the way
-  `PrepareForLokiThread` hands out `0x030e40`. Find it and the second half of
-  the answer follows. Silva (`0x03c550`) and Fly (`0x010574`) are the same
-  shape; Fly's arena is 395 units, inside the table, and Silva has no arena
-  file at all.
-- **The rithm spawner.** `0x009138` opens on the five live populations at
-  `[0x89d40 + 0xa0]` and asks `0x008e88` for a kind — the living bosses
-  except **Silva, by name**, plus the three player forms always. Both are
-  read only as far as their opening, and both consult `PlayerTier`
-  (`0x008dc4`), which *is* read. The Silva exclusion is a fact with no
-  explanation: she is the one character with a patrol rectangle and no arena
-  file, but she does have an encounter driver (`0x03c550`), and Raven has
-  neither and stays in the list. See [docs/19](docs/19-the-doasys-spire.md).
+- **What `0x00b4d8` and its three siblings actually do.** The five sites that
+  ask *lieutenant, and not Silva* are read as far as the question; what the
+  arm does with the answer is not. `0x004ff8`, `0x006128`, `0x00b4d8` and
+  `0x00bff0` are four mover routines, one of which writes `0x1000` to
+  `[mover + 0x58]` and returns. Read one and the other three follow.
+- **The rest of the render-flag word.** `[0x06bed0 + 0x78]` now has bits 0
+  (in an encounter, tested by every frame loop), 3-11 (the lieutenants),
+  12-23 (the weapon inventory) and 29 (also *in an encounter*, set by
+  `RunEncounter`). Bits 0 and 29 cannot both mean the same thing; one of the
+  two readings is loose.
 
 ## Notes to self
 

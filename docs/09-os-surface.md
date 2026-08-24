@@ -161,12 +161,20 @@ which is the other half of what names them:
 | `0x1000e` | 1:14 | 68 | **Debug print** — 42 of the 68 sites put a literal string in `r0` first, including *"Starting to load the world..."* |
 | `0x10015` | 1:21 | 36 | **AllocSignal(0)** — called with `r0 = 0`, results stored and later OR'd |
 | `0x10001` | 1:1 | 64 | **WaitSignal(mask)** — takes the OR of the previously allocated signals |
+| `0x10002` | 1:2 | 56 | **SendSignal(task, mask)** — `r1` is a global holding an `AllocSignal` result at 31 of the 56 sites, and they are the *same* globals `1:1` takes in `r0`; `r0` is a global holding a `CreateThread` result at 24 more, or `[0x058a20]`, which `GameEntry` fills with its own Item so a loader thread can signal its parent back |
+| `0x10009` | 1:9 | 19 | **Yield()** — nineteen sites and **not one of them sets up an argument**. Five sit immediately after a `SendSignal`, one after a `WaitSignal`, two directly after `CreateThread`, and the rest inside long loops, one of them 1,200 iterations. `SendSignal(); Yield();` is the idiom for *wake the other thread and let it run now* |
 | `0x10016` | 1:22 | 32 | **FreeSignal** — called on each stored mask in the teardown paths |
 | `0x10012` | 1:18 | 34 | **ReplyMsg(msg, result, data, size)** — `launchme` answers every message it takes off `ShellMsgPort` with `(msg, 0, 0, 0)`; `p` walks a list of pending messages at `0x046d8c` and replies to each with a four-byte payload |
 | `0x50009` | 5:9 | 4 | **matrix × many vectors** — `(dst, src, mat, count)`, used by `DrawFloor` at `0xfee4` |
 
-The remaining 35 entry points are enumerated by `swiscan.py --sites` with their
+The remaining 33 entry points are enumerated by `swiscan.py --sites` with their
 call sites but are not yet named.
+
+Both of the new ones were named the way `1:5` should have been — by reading the
+arguments, not the company. `1:2` was proved by *provenance*: build the set of
+globals that receive a `CreateThread` return and the set that receive an
+`AllocSignal` return, then check which register each site draws from which set.
+`1:9` was proved by the absence of one — no site anywhere writes `r0` for it.
 
 **`1:17` is the interesting one still open.** It takes no arguments and
 returns a value. `p` calls it once, at the tail of `BuildReciprocalTable`
@@ -182,7 +190,66 @@ One field of `KernelBase` falls out of the same reading: **`+0x98` is the
 current task**. `p` reaches `KernelBase->[0x98]->[0x18]` at `0x0143e4`, the
 front end's music thread reads `->[0x34]` and `launchme` reads a byte at
 `->[0xa]` to build `$boot/p p`'s argument, all three through the same two
-loads.
+loads. Two of those offsets are now pinned from the other side as
+well: `->[0x18]` is **the task's own Item** — `GameEntry` stores it in
+`[0x058a20]` at `0x01b9a4` and every loader thread `SendSignal`s to it — and
+`->[0xa]` is **the priority**, because `p`'s `CreateThread` wrapper reads that
+byte and passes `own + 1` (or, in `GameEntry`, `min(own + 50, 250)`) as the new
+thread's.
+
+## The twelve threads
+
+`0x04e144` is `p`'s **`CreateThread(name, pri, entry, stack)`** wrapper: it
+allocates the stack out of a `MemList` through `0x056494`, rounds the size up
+to sixteen, and builds the tag list itself. Twelve sites, and the table is
+worth writing down because a call graph that follows `bl` only makes all twelve
+entry points look like dead code — the address is a register argument, never a
+branch target.
+
+| spawned by | thread name | entry | stack |
+|---|---|---|---|
+| `0x0005d0` | `SoundSpooler` | `0x000c20` | 4,000 |
+| `0x01b970` | `GameEntry` | `0x01ba7c` | 4,096 |
+| `0x02b52c` | `PrepareForBalkanThread` | `0x02c2ac` | 5,000 |
+| `0x02cb44` | `PrepareForChameleonThread` | `0x02db54` | 5,000 |
+| `0x02e520` | `PrepareForChanceThread` | `0x02f0f8` | 5,000 |
+| `0x02fac0` | `PrepareForFlyThread` | `0x02ffe4` | 5,000 |
+| `0x030300` | `PrepareForLokiThread` | `0x030e40` | 5,000 |
+| `0x031744` | `PrepareForMedusaThread` | `0x03258c` | 5,000 |
+| `0x033104` | `PrepareForRibertoThread` | `0x034270` | 5,000 |
+| `0x034834` | `PrepareForSilvaThread` | `0x034ab8` | 5,000 |
+| `0x035010` | `PrepareForTeslaThread` | `0x03590c` | 5,000 |
+| `0x036850` | `LoadThread` | `0x036ca4` | 10,000 |
+
+Every thread carries the name of the function that spawns it, which is why the
+symbol harvester had already labelled nine of the spawners correctly from their
+string references alone.
+
+Nine of the twelve are the encounters' **asset loaders**, one per boss, all on
+a 5,000-byte stack. None of them is a frame loop: every frame loop is reached
+by a plain `bl` from its driver ([08](08-the-ground.md)). The handshake is the
+same nine times over, and Chance's is the whole of it:
+
+```
+0x02e570  CreateThread("PrepareForChanceThread", own+1, 0x02f0f8, 5000)
+0x02e5fc  SendSignal([0x058a60], [0x058a6c])     ; wake the loader
+0x02e608  WaitSignal([0x058a1c])                 ; and block on its progress
+0x02e628  b SetDrawDistance                      ; tail branch: 250 units
+
+0x02f110  OpenAudioFolio()                       ; in the loader
+0x02f124  [0x058a68] = AllocSignal(0)
+0x02f134  [0x058a6c] = AllocSignal(0)            ; the mask the parent sent to
+0x02f4b8  SendSignal([0x058a20], [0x058a1c])     ; ping the parent
+0x02f4c8  bl 0x02e9c8                            ; Chance.run.anim / .run.mask
+```
+
+Which explains the `+1` in the priority. The parent sends to `[0x058a6c]`
+before the loader has allocated it, and that is not a race, because the loader
+is one priority level above the parent: creating it runs it, and it reaches its
+own `WaitSignal` before `CreateThread` returns. `[0x058a1c]`, the progress
+signal the parent blocks on, is allocated once at startup by
+`BuildReciprocalTable`.
+
 
 ## Every vector slot is attributed now
 

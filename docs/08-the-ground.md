@@ -257,23 +257,35 @@ exceeds it:
 000568ec  addgt r4, r4, r8, asr #2   ; depth += (|lat| - depth) / 4
 ```
 
-so the index can only grow. And its `height == 0` arm at `0x056848`, which
-`ProjectPointFlat` branches to as well, takes screen Y straight out of the
-8.8 tables instead of computing it — `0x08b8ec` below depth 36.0, `0x08bb2c`
-above — and is unbounded there too, with the coarse table stopping at 437.0.
-**One routine, two table ends**; 401.75 is the tighter and so the one that
-breaks first.
+so the index can only grow. It cannot grow past the *distance*, though: the
+rule replaces depth `d` with `(3d + L)/4` whenever the lateral offset `L`
+exceeds `d`, and `(3d + L)/4 < hypot(d, L)` for every such pair. So whatever
+bounds how far apart two points in a world can be also bounds the index. That
+is the fact the whole reading below turns on.
 
-The reciprocal table holds 1,600 entries covering depth 2.0 … 401.75 — the builder at `0x014348` is five instructions and every
-number in it is an immediate — and past its end at `0x08da6c` sit 200 bytes
-of zero-initialised space and then the **ground lattice template** at
-`0x08db34`, whose words are coordinates in −128.0 … 112.0. A legitimate
-reciprocal is at most 0.5, which is exactly `MulSF16`'s documented contract
-([06](06-code-map.md)), so past the table the multiply is handed values two
-hundred times outside it.
+And its `height == 0` arm at `0x056848`, which `ProjectPointFlat` branches to
+as well, takes screen Y straight out of the 8.8 tables instead of computing
+it — `0x08b8ec` below depth 36.0, `0x08bb2c` above — and is unbounded there
+too, with the coarse table stopping at 437.0. **One routine, two table ends**;
+401.75 is the tighter and so the one that breaks first.
 
-Produced with [`tools/horizon.py`](../tools/horizon.py); `--verify` is 30
-checks, 33 with `--arenas`.
+The reciprocal table holds 1,600 entries covering depth 2.0 … 401.75 — the
+builder at `0x014348` is five instructions and every number in it is an
+immediate — and past its end at `0x08da6c` sit **200 bytes of zero-initialised
+space** and then the **ground lattice template** at `0x08db34`, whose words are
+coordinates in −128.0 … 112.0. That gives two failure modes, not one:
+
+| depth | what it reads | what you see |
+|---|---|---|
+| 2.00 … 401.75 | the table | correct |
+| 402.00 … 414.25 | 50 words of zero | reciprocal 0, so the corner lands on `0xa000`, the **vanishing point** |
+| past 414.25 | the lattice template | `MulSF16` handed values two hundred times outside its contract |
+
+A legitimate reciprocal is at most 0.5, which is exactly `MulSF16`'s documented
+contract ([06](06-code-map.md)); only the third row breaks it.
+
+Produced with [`tools/horizon.py`](../tools/horizon.py); `--verify` is 66
+checks with `--arenas`.
 
 ### What bounds it is a gate, not the cull
 
@@ -282,7 +294,10 @@ The renderer visits a **5 × 5 block of 256-unit cells** — `0x0387f0` scans
 so the parser can be handed a record 768 units away on each axis. The cull is
 not what protects the table.
 
-What protects it is three instructions, one per face builder:
+There are **two** gates, in two different shapes, and the second is the one
+that matters.
+
+The first is three instructions, one per per-encounter face builder:
 
 ```
 add r0, r0, r1              ; depth of corner 0 + depth of corner 1
@@ -301,58 +316,146 @@ There are exactly five of them in the whole image:
 | `0x023a84` | `0x02390c` | 200 units |
 | `0x0411b8` | `0x0410c4` | 200 units |
 
+The second is in **`BuildVisibleFaces`** at `0x012370` — the *shared* world
+face builder, which the previous reading missed entirely because it never
+calls `ProjectFace`:
+
+```
+0x01239c  r6 = 0x58a40
+0x0123a0  ldr r0, [r6]
+0x0123a4  lsl r7, r0, #16           ; the draw distance, in 16.16
+...
+0x0124ac  bl  GatherCorners
+0x0124b0  ldr r0, [sp]              ; depth of corner 0
+0x0124b4  cmp r0, r7
+0x0124b8  ldrgt r0, [sp, #4]        ; depth of corner 1
+0x0124bc  cmpgt r0, r7
+0x0124c0  bgt  skip                 ; drop only when BOTH are beyond
+```
+
+Two separate compares, the second conditional on the first, so a face is
+dropped only when **both** of its first two corners are past the distance.
+One corner inside keeps the whole face — which is the right way to clip a
+wall, and it means the real bound is *the draw distance plus the widest face
+in the arena*, not the draw distance.
+
 `[0x058a40]` is set by **`SetDrawDistance`** at `0x012b64`, which also derives
-a fade step into `[0x058bc0]`; twelve call sites set it, all of them in the
-encounters' `PrepareFor…Thread` routines. Ten set 250, two set 200 — and
-**one sets 600**.
+a fade step into `[0x058bc0]`. **Sixteen** branches reach it, not twelve:
+four of them are a tail `b` rather than a `bl`, and a call scan that counts
+branch-and-link only misses `PrepareForChanceThread`,
+`PrepareForMedusaThread`, `PrepareForTeslaThread` and Silva's teardown. Every
+`PrepareFor…Thread` sets the arena's distance and every teardown restores 250,
+so 250 is the standing value and Balkan, which sets nothing, inherits it.
 
-### Eight callers, six of which could see a fresh depth
+### Eleven frame loops, and only one is unbounded
 
-Eight functions call `ProjectFace`. Six of them also call `GatherCorners`, so
-they pull fresh corner pairs out of a record and are the first thing to see a
-depth; the other two walk the visible-face list a builder already filled, and
-`ProjectPoint` short-circuits on a corner whose flag bit is set
-(`tst sl, #1`), so a re-projector cannot introduce a depth of its own.
+Every frame loop calls the camera transform at `0x01220c` exactly once, before
+anything is projected, so **that function's caller list is the list of frame
+loops** — eleven of them. (Walking down from a driver instead needs the frame
+service at `0x045738` cut out: it is the first `bl` in every frame loop, and
+buried under it is a path that runs an *overworld* frame for the pause screen,
+which makes all eleven look reachable from all nine drivers.)
 
-**Five of the six builders carry the gate. The sixth, `0x021130`, carries
-none.**
+The pipeline is two halves. `BuildVisibleFaces` gathers corners, applies the
+gate above, clears bit 0 of all four corners' flag words — the bit
+`ProjectPoint` short-circuits on — and appends the survivor to the visible
+list at `[0x06acdc + 0x554]`. `ProjectVisibleFaces` at `0x012c94` then walks
+that list, calls `ProjectFace` on each, and compacts out anything entirely off
+screen. Split that way, the builder calls `GatherCorners` and never
+`ProjectFace`, and the projector calls `ProjectFace` and never
+`GatherCorners`; a classifier keyed on `ProjectFace` sees only the second half
+and concludes there is no builder at all.
 
-### And the sixth is Loki's
+| frame loop | encounter | face loops it calls | bound |
+|---|---|---|---|
+| `0x022084` | the overworld | `BuildVisibleFaces` + `ProjectVisibleFaces` | draw distance |
+| `0x00eea8` | the film frame | none — floor only | — |
+| `0x00140c` | Balkan | `0x0014e0` | 250 |
+| `0x002700` | Chameleon | `0x0027d0`, `0x023674` | draw distance, 200 |
+| `0x003b58` | **Chance** | `BuildVisibleFaces` + `ProjectVisibleFaces` | draw distance |
+| `0x0109bc` | Fly | `BuildVisibleFaces` + `ProjectVisibleFaces` | draw distance |
+| `0x022e68` | Medusa | `0x023674`, `0x02390c` | 200, 200 |
+| `0x03b950` | Riberto | `0x0027d0`, `0x023674` | draw distance, 200 |
+| `0x03c8fc` | Silva | `BuildVisibleFaces` + `ProjectVisibleFaces` | draw distance |
+| `0x040d28` | Tesla | shared pair + `0x0410c4` | draw distance, 200 |
+| `0x021050` | **Loki** | `LokiFaces` | **none** |
 
-The encounter dispatcher at `0x03c9ac` has one arm per character id, keyed on
-bit `id - 3` — the same numbering `LieutenantGone` uses
-([19](19-the-doasys-spire.md)). Nine arms, ids 6 to 14; Raven, id 15, has
-none:
+### And the one is Loki's
 
-| id | boss | driver | gated builder | arena |
-|---|---|---|---|---|
-| 6 | Medusa | `0x022a4c` | `0x023674`, `0x02390c` | second family |
-| 7 | Tesla | `0x04099c` | `0x0410c4` | 318 |
-| 8 | Balkan | `0x00102c` | `0x0014e0` | 301 |
-| 9 | Silva | `0x03c550` | **none** | no arena file |
-| 10 | Fly | `0x010574` | **none** | 395 |
-| 11 | Riberto | `0x03b558` | `0x0027d0`, `0x023674` | second family |
-| 12 | Chameleon | `0x00232c` | `0x0027d0`, `0x023674` | second family |
-| 13 | Chance | `0x003750` | **none** | **587** |
-| 14 | Loki | `0x020cb4` | **none**, and `0x021130` is its builder | **579** |
+`LokiFaces` at `0x021130` replaces *both* halves. It clears the projected bit
+on every corner in the world list, then runs three copies of one body —
+`GatherCorners`, `RejectByBounds`, `SignCount`, `ProjectFace`, an LOD nibble,
+append — over three hard-coded index bands. Only the middle band culls:
 
-Loki's arena spans 420 × 398 world units, a diagonal of **579**, and
-`PrepareForLokiThread` at `0x030300` is the one call that sets the draw
-distance to **600** — which is what you set when you want nothing in a
-579-unit arena culled. Its only face builder has no depth gate.
+| band | records | distance cull |
+|---|---|---|
+| 1 | 0 … 19 | none |
+| 2 | 20 … 59 | dropped past **100** units |
+| 3 | 60 … count | none |
+
+`LokiEncounter.B3D` is 91 records, and it is not a room: it is a **hub, ten
+named props, and four concentric twenty-segment rings** —
+
+| records | radius | height |
+|---|---|---|
+| 0 | 0 | the hub prop |
+| 1 … 10 | 209 | ten `sub 6` named props at 36° |
+| 11 … 30 | 189 … 202 | step, 5 units tall |
+| 31 … 50 | 195 … 208 | step, 7 |
+| 51 … 70 | 193 … 206 | step, 8 |
+| 71 … 90 | 197 … 212 | **the wall, 70 units tall** |
+
+— so the bands do not line up with the rings at all. They cut through the
+middle of ring 1 and the middle of ring 3, and what falls in the two unculled
+bands is nine segments of ring 1, eleven of ring 3, and **the whole outer
+wall**. Which reads like the authoring decision it probably was: the wall is
+the arena boundary, so it is never allowed to vanish.
+
+`PrepareForLokiThread` at `0x030300` is also the one call that sets the draw
+distance to **600**, and `LokiFaces` does not read it — the 600 is for the
+ground.
 
 **So the reciprocal table is read past its end, and the place it happens is
-the Loki encounter.** Not the overworld: every builder the overworld and the
-other encounters reach stops at 200 or 250 units, comfortably inside 401.75.
+the Loki encounter.** How far past is a measurement, not a guess. The
+arena is a ring, so its anchors' bounding box has a 579-unit diagonal while
+**no two points in it are more than 420 apart** — and 420 is the bound,
+because depth cannot exceed distance and the off-axis widening cannot either.
+420 against a table that ends at 401.75 puts the overrun **18 units deep**,
+which is 73 words: the first 50 of those are the zeros, so what the Loki
+fight mostly does is collapse the far wall onto the vanishing point, and only
+a camera pressed to within ten units of the wall reaches the lattice at all.
 
-Chance is the loose end. Its arena is **587** units — larger still — and no
-face builder appears in its driver's call graph at all, so its frame loop is
-reached the way the threads are, by an address a branch scan cannot follow.
+### Chance is not a second one
 
-A port should compute `1/depth` rather than reproduce this. But it should
-know that the console's Loki fight is reading lattice coordinates as
-reciprocals for its far walls, deterministically, and that a correct divide
-will not look the same.
+Chance's arena is wider than Loki's — **490** units between its two furthest
+vertices, from 216 quads — and it *is* past 401.75. It is still safe, for two
+reasons that had to be found separately:
+
+* its frame loop uses the shared builder, so it is gated at all; and
+* `PrepareForChanceThread` sets the draw distance to **250**, not 600 — by a
+  tail `b` at `0x02e628`, which is why a `bl` scan of `SetDrawDistance`
+  reported twelve sites and Chance was not among them.
+
+Its widest single face is 23 units, so the deepest point that can reach
+`ProjectPoint` during the Chance fight is 250 + 23 = **273**. Every other
+gated encounter works out the same way:
+
+| encounter | arena width | widest face | draw distance | deepest reachable |
+|---|---|---|---|---|
+| Tesla | 400 | 32 | 200 | 232 |
+| Fly | 373 | 87 | 250 | 337 |
+| Chance | 490 | 23 | 250 | 273 |
+| Balkan | props only, no geometry record | — | 250 | — |
+| **Loki** | **420** | 65 | 600, unread | **420 — past the table** |
+
+The three drivers that looked builderless — Chance, Fly and Silva — were
+never builderless. They are three of the five frame loops that share the
+overworld's builder, and the fourth and fifth are Tesla and the overworld
+itself.
+
+A port should compute `1/depth` rather than reproduce any of this. But it
+should know that the console's Loki fight sends its far wall to the vanishing
+point, deterministically, and that a correct divide will not look the same.
 
 ## Scale and detail
 

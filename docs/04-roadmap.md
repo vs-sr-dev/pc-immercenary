@@ -191,10 +191,11 @@ See [../TODO.md](../TODO.md) for the addressed version. In short:
   carried by all three fire buttons and not by C alone
   ([19](19-the-doasys-spire.md)) — the same claim, read off one block and
   generalised too far.
-- **Where Chance's face builder is.** Its arena is 587 units across, larger
-  than the reciprocal table covers, and no face builder appears in its
-  driver's call graph — so its frame loop is reached by an address rather
-  than a branch ([08](08-the-ground.md)).
+- **What the four mover routines that exclude Silva by name actually do.**
+  `cmp shape, #5` then `teq shape, #9` is the mover layer's definition of
+  *lieutenant*, written five times; three of the five go on to test the
+  in-an-encounter bit. Why Silva is outside it is answered
+  ([19](19-the-doasys-spire.md)); what the arm does with the answer is not.
 - Does the disc's redundant-copy layout matter for streaming timing (burst/gap
   fields are populated), and does the port need to care? Almost certainly not.
 
@@ -239,10 +240,17 @@ See [../TODO.md](../TODO.md) for the addressed version. In short:
   ([06](06-code-map.md)).
 
 - *Is the far horizon table ever indexed past its end?* **Yes, in the Loki
-  encounter.** The bound is not the per-cell cull but a three-instruction gate
-  on a face's average depth, present in five of the six face builders at 250,
-  200 or the draw distance. The sixth is Loki's, it has no gate, and Loki's
-  arena is 579 units across against a table that stops at 401.75
+  encounter, and only there.** The bound is not the per-cell cull but a depth
+  gate in two shapes — an average-depth compare in the five per-encounter face
+  builders, and a compare against the draw distance in `BuildVisibleFaces`,
+  the shared builder five of the eleven frame loops use. Loki's frame loop
+  uses neither: `LokiFaces` is three hard-coded index bands and only the
+  middle one culls. Its arena is 420 units wide against a table that stops at
+  401.75, so the overrun is eighteen units and reads zeros, not the lattice
+  ([08](08-the-ground.md)).
+- *Where is Chance's face builder?* There isn't one, and there never needed to
+  be: Chance's frame loop uses the shared builder, at a draw distance of 250
+  that a `bl` scan could not see because it is set by a tail `b`
   ([08](08-the-ground.md)).
 
 - *What are the three unnamed columns of a `PerfectMovers` character block?*
