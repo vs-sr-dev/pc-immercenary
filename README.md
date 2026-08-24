@@ -96,7 +96,8 @@ python tools/frontend.py --verify
 # The DOAsys spire: who you meet there, and how the game hands them to the
 # speech program
 python tools/doasys.py extracted/p
-python tools/doasys.py extracted/p --verify
+python tools/doasys.py extracted/p --roster --art extracted/Perfect/DOASys
+python tools/doasys.py extracted/p --verify     --art extracted/Perfect/DOASys --movers extracted/Perfect/PerfectMovers.B3D
 ```
 
 ## Status
@@ -146,7 +147,7 @@ Early, but moving. Nothing is playable yet.
   seven of its sub-handlers, the CEL bank loader, the floor renderer, the object
   id table and the world globals are identified. `tools/symbols.py` turns the
   code map plus the image's own strings into a symbol file that
-  `armxref.py -S` reads, which names 306 of the 1,477 functions. The call
+  `armxref.py -S` reads, which names 310 of the 1,477 functions. The call
   graph is readable too, after two fixes: an APCS function starts one
   instruction before its `push`, and the code does not stop where the AIF
   header's `image_ro_size` says it does. Past that boundary sits a
@@ -196,7 +197,7 @@ Early, but moving. Nothing is playable yet.
 
 - **The 512-byte save game is read field by field, and it closes.** There is
   no serialiser: the live game-state struct at `0x89d40` is what goes out.
-  `savegame.py --verify` is 56 checks. Four programs write it, not one — `p`
+  `savegame.py --verify` is 61 checks, 67 with `--movers`. Four programs write it, not one — `p`
   and `p1E` while you play, the shell between jumps, and the front end, which
   owns a 38-byte **interlude ledger** at `+0x5c` counting how many times each
   story film has played. That ledger is what proves the nine missing
@@ -235,6 +236,21 @@ Early, but moving. Nothing is playable yet.
   have earned, which is the code behind the guide's warning about returning
   from any other spire. Two things start a conversation: a fire button, or —
   if the video character is Chameleon — one frame in ten thousand, unprompted.
+- **`p` names its own cast, and the table had never been found.** `0x058640`
+  is nineteen NULL-terminated `char *` in id order, and `LoadDOAsysArt` glues
+  each between `"$DOASys/"` and `"StandAA50.anim"` to get a sprite. It agrees
+  with `PerfectMovers.B3D` row for row and with the speech program's speaker
+  order — and because the code *generates* the names, the disc can be asked
+  which exist. Exactly one is missing (**Chameleon**, who the spire can pick)
+  and exactly one is present but unreachable (**Medusa**, the id the game
+  masks out by name), with eleven files of a second naming convention beside
+  them that no executable mentions at all. It went unfound because the string
+  dump's six-character minimum hides nine of the nineteen names.
+- **The difficulty curve is read.** `0x008dc4` maps your earned D+O+A onto
+  five thresholds, your rank onto five more, and averages the two three to
+  one — `round((3 * rankTier + statTier) / 4)`, clamped to 1-5. Its stat
+  thresholds are three columns of `PerfectMovers.B3D` that had sat in the
+  notes for two sessions with no meaning.
 
 See [docs/04-roadmap.md](docs/04-roadmap.md).
 

@@ -18,7 +18,8 @@ load-and-store pairs, the heal rate out of the visit's own loop.
     python tools/doasys.py extracted/p --cast       # rank -> character
     python tools/doasys.py extracted/p --scales     # the two tables
     python tools/doasys.py extracted/p --cels       # what it loads
-    python tools/doasys.py extracted/p --verify
+    python tools/doasys.py extracted/p --roster --art extracted/Perfect/DOASys
+    python tools/doasys.py extracted/p --verify         --art extracted/Perfect/DOASys         --movers extracted/Perfect/PerfectMovers.B3D
 """
 import sys, os, argparse, re
 
@@ -40,18 +41,116 @@ CONTROL     = 0x0001fd2c        # one frame of the controller
 STATE_WORD  = 0x8c              # the state word, inside STATE
 SIDE_BIT    = 23                # which side you fire from
 
-# docs/16: ids 0-5 are the six generic heads and double as speaker indices,
-# ids 6-15 are the ten bosses, in the order of the film-name table at 0x93f0.
-HEADS  = ['Goner', 'David', 'Venus', 'Kilroy', 'Tork', 'Picasso']
-BOSSES = ['Medusa', 'Tesla', 'Balkan', 'Silva', 'Fly', 'Riberto',
-          'Chameleon', 'Chance', 'Loki', 'Raven']
+# The roster is not written down here: `p` carries it.  `0x058640` is a
+# NULL-terminated array of nineteen `char *`, and `LoadDOAsysArt` builds a
+# sprite filename out of it -- `"$DOASys/" + name[id] + "StandAA50.anim"`.
+# Nineteen is also the row count of `PerfectMovers.B3D`
+# ([10](../docs/10-second-b3d-family.md)), and the first six double as speaker
+# indices in `SpeechSubroutine` ([16](../docs/16-speech-and-doa.md)).
+NAME_TABLE = 0x00058640
 
 
-def who(i):
-    if i is None:                  return '?'
-    if 0 <= i < len(HEADS):        return HEADS[i]
-    if 6 <= i < 6 + len(BOSSES):   return BOSSES[i - 6]
-    if i == 0xff:                  return 'nobody'
+def roster_of(im):
+    """The character names, in id order, out of the table at `0x058640`.
+
+    The array ends at its first NULL, which is what makes the length a
+    finding rather than a guess.  Nine of the nineteen are shorter than the
+    string dump's minimum length, which is why the block reads as a
+    scattering of six names in `p_strings.txt` and went unnoticed.
+    """
+    out = []
+    for i in range(64):
+        v = word_at(im, NAME_TABLE + 4 * i)
+        if v == 0:
+            break
+        if not im.code_start <= v < len(im.d):
+            break
+        out.append(cstr(im, v))
+    return out
+
+
+def movers_of(path):
+    """The nineteen names and each one's `Stand` row out of
+    `PerfectMovers.B3D` -- an independent second naming of the same ids, and
+    the file that records Fly's ground offset the code hardcodes."""
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from b3d2 import read_movers
+    out = []
+    for m in read_movers(open(path, 'rb').read())['movers']:
+        nm = (m['names'][0].split('.')[0].replace('Death', '')
+              .replace('Die', '') if m['names'] else '?')
+        stand = next((a for a, n in zip(m['anims'], m['names'])
+                      if 'stand' in n.lower()), None)
+        out.append((nm or '?', stand))
+    return out
+
+
+LOAD_ART   = 0x0000d1f8         # LoadDOAsysArt(reload)
+FREE_ART   = 0x0000d65c         # FreeDOAsysArt(keepGaz)
+ART_TABLE  = 0x00057d14         # sixteen art pointers
+OWNER_MASK = 0x58              # inside 0x57d0c: which loader owns each
+
+
+def art_slots(im):
+    """The sixteen entries of the art table `LoadDOAsysArt` fills.
+
+    Thirteen are literal filenames it materialises onto its own frame at
+    `sp + 0x3c`; the last three are built at run time out of the roster, and
+    are reported as the template rather than a name.
+    """
+    st, out = {}, []
+    for i in walk(im, LOAD_ART, FREE_ART):
+        m, ops = i.mnemonic, i.op_str
+        t = pcrel_target(i.address, m, ops) if m.startswith('add') else None
+        if t is not None and im.code_start <= t < len(im.d):
+            st['pend'] = cstr(im, t)
+        elif m == 'str' and STRSP.match(ops) and st.get('pend'):
+            mm = STRSP.match(ops)
+            off = int(mm.group(2), 0) if mm.group(2) else 0
+            if off >= 0x3c:
+                st[off] = st.pop('pend')
+    for i in range(13):
+        out.append(st.get(0x3c + 4 * i))
+    return out
+
+
+def art_template(im):
+    """The prefix and suffix `LoadDOAsysArt` glues a roster name between for
+    slots 13-15.  They are the only two strings the routine materialises that
+    it does not park in a frame slot."""
+    slots, parts = set(x for x in art_slots(im) if x), []
+    for i in walk(im, LOAD_ART, FREE_ART):
+        t = pcrel_target(i.address, i.mnemonic, i.op_str) \
+            if i.mnemonic.startswith(('add', 'sub')) else None
+        if t is not None and im.code_start <= t < len(im.d):
+            txt = cstr(im, t)
+            if txt and txt not in slots and txt not in parts:
+                parts.append(txt)
+    return parts
+
+
+def sprite_name(im, roster, i):
+    """The filename `LoadDOAsysArt` builds for character `i`."""
+    pre, suf = (art_template(im) + ['', ''])[:2]
+    return pre + who(i, roster) + suf
+
+
+def reachable(im):
+    """Every character id a DOAsys art slot can end up holding.
+
+    Slot 13 takes the video character: the lieutenant range, plus 0 when
+    none of them is left and 15 when the interlude ledger forces it.  Slots
+    14 and 15 take a crowd head each, from 0-5.
+    """
+    c0, c1 = candidates(im)
+    forced = 0xf                        # the `moveq r1, #0xf` at 0xd844
+    return sorted(set(range(c0, c1 + 1)) | {0, forced} | set(range(6)))
+
+
+def who(i, roster):
+    if i is None:                 return '?'
+    if 0 <= i < len(roster):      return roster[i]
+    if i == 0xff:                 return 'nobody'
     return 'id %d' % i
 
 
@@ -418,8 +517,9 @@ def chance_arm(im):
 
 # --------------------------------------------------------------- the report
 
-def report(im, args):
-    all_ = not (args.scales or args.cast or args.cels)
+def report(im, args, roster, movers=None):
+    all_ = not (args.scales or args.cast or args.cels or args.roster)
+    nm = lambda i: who(i, roster)
 
     if all_ or args.cast:
         lo, hi, shift, word = gone_bits(im)
@@ -439,19 +539,21 @@ def report(im, args):
         print('a truncation to sixteen bits and a `bic` of bit %d, so ids 16 and'
               % rej)
         print('up and **id %d, %s** can never start a conversation.'
-              % (rej, who(rej)))
+              % (rej, nm(rej)))
         print('\nThe video character is drawn at random from ids %d-%d --' % (c0, c1))
-        print('  ' + ', '.join(who(i) for i in range(c0, c1 + 1)))
+        print('  ' + ', '.join(nm(i) for i in range(c0, c1 + 1)))
         print('-- keeping only those still flying.  `0x%06x` returns 1 when a'
               % GONE_TEST)
         print('bit is *clear*; it answers for ids %d-%d and tests bit `id - %d` of'
               % (lo, hi, shift))
         print('[0x%06x], so the %d candidates are bits %d-%d.  With none left'
               % (word, c1 - c0 + 1, c0 - shift, c1 - shift))
-        print('the slot stays zero, %s.' % who(0))
-        print('\nCrowd A and crowd B are two *distinct* ids drawn from 0-%d,'
-              % (len(HEADS) - 1))
-        print('the six generic heads, and then sorted so A <= B.')
+        print('the slot stays zero, %s.' % nm(0))
+        print('\nCrowd A and crowd B are two *distinct* ids drawn from 0-5 --')
+        print('  ' + ', '.join(nm(i) for i in range(6)))
+        print('-- the Goner and the five rank-tier leaders, and then sorted so')
+        print('A <= B.  Each gets `2 + RandomBelow(12 - id)` members, so the')
+        print('lower id always brings the bigger crowd.')
 
     if all_ or args.scales:
         upper, lower = scale_tables(im)
@@ -464,9 +566,9 @@ def report(im, args):
         for i in range(16):
             mark = '   <- +%.1f off the ground' % sf16(goff) if i == gid else ''
             print('  %2d  %-11s %6.3f  %6.3f%s'
-                  % (i, who(i), sf16(upper[i]), sf16(lower[i]), mark))
+                  % (i, nm(i), sf16(upper[i]), sf16(lower[i]), mark))
         print('\n%s is the widest of the sixteen and the only one lifted off'
-              % who(gid))
+              % nm(gid))
         print('the ground -- the two facts a flying thing would need.')
 
     if all_ or args.cels:
@@ -477,6 +579,35 @@ def report(im, args):
                   % (name, tbl, ', '.join('0x%x' % o for o in offs) or '-'))
         print('\n  $DOASys/PerfectDOASys.B3D      read whole, then'
               ' ParseWorldRecord to exhaustion')
+
+    if all_ or args.roster:
+        pre, suf = (art_template(im) + ['', ''])[:2]
+        reach, have = reachable(im), None
+        if args.art:
+            names = set(n.lower() for n in os.listdir(args.art))
+            have = lambda f: f.rsplit('/', 1)[-1].lower() in names
+        print('\n== the roster ==\n')
+        print('`p` names its own cast: `0x%06x` is a NULL-terminated array of'
+              % NAME_TABLE)
+        print('%d `char *`, and LoadDOAsysArt at 0x%06x glues each between'
+              % (len(roster), LOAD_ART))
+        print('"%s" and "%s" to get a standing sprite.\n' % (pre, suf))
+        for i, n in enumerate(roster):
+            marks = []
+            if i in reach:
+                marks.append('reachable')
+            if have is not None:
+                marks.append('on the disc' if have(sprite_name(im, roster, i))
+                             else '** NOT ON THE DISC **')
+            print('  %2d  %-14s %s' % (i, n, ', '.join(marks) or '-'))
+        if have is not None:
+            miss = [i for i in reach if not have(sprite_name(im, roster, i))]
+            idle = [i for i, n in enumerate(roster)
+                    if i not in reach and have(sprite_name(im, roster, i))]
+            print('\nReachable with no sprite: %s'
+                  % (', '.join(who(i, roster) for i in miss) or 'none'))
+            print('Sprite with no way to reach it: %s'
+                  % (', '.join(who(i, roster) for i in idle) or 'none'))
 
     if all_:
         n = alloc_size(im)
@@ -511,7 +642,7 @@ def report(im, args):
         want, odds = chance_arm(im)
         print('so the mask is exactly A | B | C.  The other way in is')
         print('unprompted: if the video character is %s, id %d, every frame'
-              % (who(want), want))
+              % (nm(want), want))
         print('rolls RandomBelow(%d) and a zero starts it with nothing held.'
               % odds)
         print('\nEither way 0x%06x writes the id at [0x%06x] and `0x%06x` runs'
@@ -522,7 +653,7 @@ def report(im, args):
 
 # ------------------------------------------------------------------- verify
 
-def verify(im):
+def verify(im, roster, movers=None, art=None):
     checks, fail = [], 0
 
     def ck(name, got, want):
@@ -568,10 +699,65 @@ def verify(im):
     ck('the lower table is coarse: four distinct values -- 7, 7.5, 8, 8.5',
        sorted(sf16(v) for v in set(lower)), [7.0, 7.5, 8.0, 8.5])
     gid, goff = ground_offset(im)
-    ck('exactly one id is lifted off the ground, and it is Fly', gid, 10)
+    ck('exactly one id is lifted off the ground, and it is Fly',
+       (gid, who(gid, roster)), (10, 'Fly'))
     ck('by four units', sf16(goff), 4.0)
     ck('Fly is also the widest of the sixteen',
        max(range(16), key=lambda i: sf16(upper[i])), gid)
+    # --- the roster, out of the image's own table
+    ck('the name table holds nineteen entries and then a NULL',
+       len(roster), 19)
+    ck('and it ends where PerfectMovers.B3D does, three past the DOA range',
+       (roster[15], roster[16]), ('Raven', 'PerfectMale'))
+    # docs/16 read the first six off the speech side, as speaker indices
+    from speech import SPEAKERS
+    ck('the first six agree with the speaker order docs/16 read',
+       roster[:6], SPEAKERS[:6])
+    ck('and speaker 6 is id 11, the collision docs/16 reconciles by hand',
+       roster[11], SPEAKERS[6])
+    ck('LoadDOAsysArt builds a sprite name out of the table',
+       im.d.find(b'StandAA50.anim') > 0
+       and any(im.func_of(a) == 0xd1f8
+               for a in im.litrefs.get(NAME_TABLE, [])), True)
+
+    ck('the sprite name is built out of a prefix and a suffix',
+       art_template(im), ['$DOASys/', 'StandAA50.anim'])
+    ck('every id but Medusa can reach an art slot',
+       [i for i in range(16) if i not in reachable(im)], [6])
+
+    if art:
+        names = set(n.lower() for n in os.listdir(art))
+        on = lambda i: sprite_name(im, roster, i).rsplit('/', 1)[-1].lower() \
+            in names
+        reach = reachable(im)
+        ck('one reachable character has no standing sprite on the disc',
+           [who(i, roster) for i in reach if not on(i)], ['Chameleon'])
+        ck('and one unreachable character has one',
+           [who(i, roster) for i in range(16)
+            if i not in reach and on(i)], ['Medusa'])
+        ck('the three player forms have none, so sixteen is the DOA range',
+           [i for i in range(16, len(roster)) if on(i)], [])
+        # eleven `*Stand5AA.anim` files sit beside them and no executable
+        # names the form at all -- the same block, wrong in both directions
+        ck('the disc carries Stand5AA files as well',
+           sum(1 for n in names if 'stand5aa' in n), 11)
+        ck('and p never builds that form',
+           im.d.count(b'Stand5AA'), 0)
+
+    if movers:
+        # PerfectMovers.B3D carries a ground offset per animation.  The one
+        # the code hardcodes is the one the file records, and Fly is the only
+        # row in the file with a positive one.
+        stands = [(i, c[1]) for i, c in enumerate(movers) if c[1]]
+        ck('the file gives Fly a standing ground offset of +4.0',
+           sf16(movers[gid][1]['ground'] & 0xffffffff), sf16(goff))
+        ck('and Fly is the only row in the file with a positive one',
+           [i for i, a in stands if a['ground'] > 0], [gid])
+        ck('the file has one row per name in the table',
+           len(movers), len(roster))
+        ck('and every row names the character the table names',
+           [i for i, (n, _) in enumerate(movers)
+            if not n.lower().startswith(roster[i][:4].lower())], [16, 17, 18])
 
     # --- the cels
     cl = cels(im)
@@ -632,7 +818,7 @@ def verify(im):
     ck('the conversation trigger is exactly those three bits',
        trigger_mask(im), 0x8000 | 0x4000 | 0x2000)
     want, odds = chance_arm(im)
-    ck('the unprompted arm needs Chameleon', (want, who(want)),
+    ck('the unprompted arm needs Chameleon', (want, who(want, roster)),
        (12, 'Chameleon'))
     ck('and one roll in ten thousand', odds, 10000)
 
@@ -649,12 +835,21 @@ def main():
     ap.add_argument('--cast', action='store_true')
     ap.add_argument('--scales', action='store_true')
     ap.add_argument('--cels', action='store_true')
+    ap.add_argument('--roster', action='store_true')
     ap.add_argument('--verify', action='store_true')
+    ap.add_argument('--art', metavar='DIR',
+                    help='extracted Perfect/DOASys, to check which sprite '
+                         'names the disc actually carries')
+    ap.add_argument('--movers', metavar='PerfectMovers.B3D',
+                    help='cross-check the roster and the ground offset '
+                         'against the cast file')
     a = ap.parse_args()
     im = Image(a.image)
+    movers = movers_of(a.movers) if a.movers else None
+    roster = roster_of(im)
     if a.verify:
-        sys.exit(1 if verify(im) else 0)
-    report(im, a)
+        sys.exit(1 if verify(im, roster, movers, a.art) else 0)
+    report(im, a, roster, movers)
 
 
 if __name__ == '__main__':

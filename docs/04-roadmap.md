@@ -171,6 +171,10 @@ See [../TODO.md](../TODO.md) for the addressed version. In short:
 6. `main` of `CinepakSubroutine` at `0x9a4` and its Cinepak player at
    `0x2368` — the front end's own control flow, the last unwalked piece of
    it ([17](17-the-front-end.md)).
+7. The rithm spawner: `0x009138` opens on the five live populations and asks
+   `0x008e88` for a kind, and neither is walked past its opening
+   ([19](19-the-doasys-spire.md)). `PlayerTier` at `0x008dc4` — the thing
+   they both consult — is read, so the difficulty input is known.
 
 ## Open questions
 
@@ -232,6 +236,15 @@ See [../TODO.md](../TODO.md) for the addressed version. In short:
   ([08](08-the-ground.md)).
 - *What is `0x4d660`?* Not a C++ dispatch fetch: `OpenFileFolio`
   ([06](06-code-map.md)).
+
+- *What are the three unnamed columns of a `PerfectMovers` character block?*
+  The stat half of the difficulty curve — `0x008dc4` sums your earned D+O+A
+  and walks them for the tier you have outgrown, then averages that three to
+  one against the same walk over your rank ([10](10-second-b3d-family.md),
+  [18](18-the-save-game.md)).
+- *Where is the character id space written down?* In `p`, at `0x058640` —
+  nineteen NULL-terminated `char *` in id order
+  ([19](19-the-doasys-spire.md)).
 
 - *Who decides which character a DOA conversation is with?* The spire does,
   and it addresses them by **rank**: 13, 14 and 15 are the video character

@@ -18,16 +18,18 @@ python tools/doasys.py extracted/p            # the whole reading
 python tools/doasys.py extracted/p --cast     # rank -> character
 python tools/doasys.py extracted/p --scales   # the two sixteen-entry tables
 python tools/doasys.py extracted/p --cels     # what the spire loads
-python tools/doasys.py extracted/p --verify
+python tools/doasys.py extracted/p --roster --art extracted/Perfect/DOASys
+python tools/doasys.py extracted/p --verify     --art extracted/Perfect/DOASys     --movers extracted/Perfect/PerfectMovers.B3D
 ```
 
-`--verify` is 52 checks against the image. They all pass. Every number in
+`--verify` is 59 checks against the image, 68 with the disc's own art
+directory and the cast file beside it. They all pass. Every number in
 this document is recovered by walking the code — the two scale tables come
 out of a constant trace over the stores to the frame, the cast out of the
 three arms of `0x00f42c`, the cel list out of the load-and-store pairs — so
 nothing here is a constant somebody typed twice.
 
-## Six functions
+## Eight functions
 
 | Address | Name | What it is |
 |---|---|---|
@@ -36,13 +38,16 @@ nothing here is a constant somebody typed twice.
 | `0x00f1f8` | **DOAsysFrame** | one frame of it; starts the conversation |
 | `0x00f33c` | **FindTalker** | is anyone in reach, and who |
 | `0x00f42c` | **RankToCharacter** | a rithm's rank to a character id |
+| `0x00d1f8` | **LoadDOAsysArt** | sixteen art pointers; builds three names from the roster |
+| `0x00d65c` | **FreeDOAsysArt** | frees them, by the loader the ownership mask names |
 | `0x03e7b0` | **LieutenantGone** | one bit of the render flags word, inverted |
 
-The first five have one caller each and the chain closes: `DOAsysVisit` calls
-`LoadDOAsys` once and then spins on `DOAsysFrame`, which is the only caller
-of `FindTalker`, which is the only caller of `RankToCharacter`. Nothing else
-in `p` reaches any of them. `LieutenantGone` is the exception, and its second
-caller is the one loose end this document leaves.
+`DOAsysVisit` calls `LoadDOAsys` once and then spins on `DOAsysFrame`, which
+is the only caller of `FindTalker`, which is the only caller of
+`RankToCharacter`. Those five have one caller each and nothing else in `p`
+reaches them. `LoadDOAsysArt` and `FreeDOAsysArt` are called from
+`LoadDOAsys` and `DOAsysFrame` only. `LieutenantGone` is the exception, and
+its second caller is the one loose end this document leaves.
 
 ## The cast is three characters, addressed by rank
 
@@ -127,11 +132,12 @@ Tesla, Balkan, Silva, Fly, Riberto, Chameleon, Chance, Loki
 another door, below. With none of the eight left the slot stays zero, which
 is the Goner.
 
-Crowd A and crowd B are two *distinct* ids drawn from 0-5 — the six generic
-heads — by drawing one of six, deleting it from the list, and drawing one of
-the five that remain. The two are then sorted so `A <= B`, and the population
-of each crowd is `2 + RandomBelow(12 - id)`, so **the lower-numbered head is
-always the more numerous**. Each member gets a random position 30-79 units
+Crowd A and crowd B are two *distinct* ids drawn from 0-5 — the Goner and
+the five rank-tier leaders — by drawing one of six, deleting it from the list,
+and drawing one of the five that remain. The two are then sorted so
+`A <= B`, and the population of each crowd is `2 + RandomBelow(12 - id)`, so
+**the lower-numbered one is always the more numerous** — the same direction
+the tier populations run, 123 down to 8. Each member gets a random position 30-79 units
 out on both axes with random signs, and a random facing in `-128 … 127`.
 
 ### And the front end can override all of it
@@ -152,6 +158,97 @@ tells you the lieutenants are dying is followed by one conversation with the
 person responsible, and the ledger byte the front end keeps is what carries
 that across a program boundary.
 
+## `p` names its own cast
+
+`0x058640` is an array of nineteen `char *`, NULL-terminated, in `p`'s
+initialised data:
+
+```
+ 0 Goner      5 David      10 Fly         15 Raven
+ 1 Picasso    6 Medusa     11 Riberto     16 PerfectMale
+ 2 Tork       7 Tesla      12 Chameleon   17 PerfectFemale
+ 3 Kilroy     8 Balkan     13 Chance      18 PerfectRobot
+ 4 Venus      9 Silva      14 Loki
+```
+
+That is the character id space, written down by the program itself. It agrees
+with two things already read: the nineteen rows of `PerfectMovers.B3D`
+([10](10-second-b3d-family.md)) row for row, and the speaker order
+`SpeechSubroutine` uses for its first six ([16](16-speech-and-doa.md)) —
+including the collision on 6, where speaker 6 is character id 11, Riberto.
+So ids **0-5** are the Goner and the five rank-tier leaders (the five whose
+tiers hold 123, 64, 32, 16 and 8 rithms, [18](18-the-save-game.md)); **6-15**
+are the ten bosses; **16-18** are the three player forms, which no DOA path
+can reach.
+
+The table went unfound for nine sessions because of a filter. `p_strings.txt`
+keeps printable runs of six characters or more, and *Goner*, *Tork*, *Venus*,
+*David*, *Tesla*, *Silva*, *Fly*, *Loki* and *Raven* are all shorter — so the
+block reads as six scattered names in the dump, with the pattern that makes
+it a table filtered out.
+
+### And it is a filename generator
+
+`0x00d1f8` — **LoadDOAsysArt** — fills sixteen art pointers at `0x057d14`.
+Thirteen are literal names it parks on its own frame:
+
+```
+  0  $DOASys/GazFront.mask                   4-6   pmale.stand .anim/.mask/.glow
+  1  $DOASys/GazFrontAA.anim                 7-9   pfemale.stand .anim/.mask/.glow
+  2  $DOASys/GazBack.mask                   10-12  probot.stand .anim/.mask/.glow
+  3  $DOASys/GazBackAA.anim
+```
+
+and the last three it **builds**, one per speaker, with two `strcat`s around
+a roster lookup:
+
+```
+0000d2d8  KernelCopyMem(sp, "$DOASys/", 9)
+0000d2e8  r0 = [0x57d0c + 0x5c]                 ; the video character
+0000d2ec  r1 = [0x58640 + 4*r0]                 ; its name
+0000d2f0  strcat(sp, r1)
+0000d2fc  strcat(sp, "StandAA50.anim")
+0000d308  [0x57d14 + 0x34] = load(sp)
+```
+
+then the same again for crowd A into `+0x38` and crowd B into `+0x3c`. Those
+three slots are what the draw records read their cel from — `+0x34`, `+0x38`
+and `+0x3c` of `0x057d14`, not of the cel table.
+
+`[0x057d0c + 0x58]` is the
+**ownership mask**: one bit per art slot, saying which of the two loaders
+allocated the pointer, so `0x00d65c` — **FreeDOAsysArt** — can call the
+matching free. Bit 13, 14 and 15 are the three built names.
+
+`FreeDOAsysArt(keepGaz)` frees slots 4-12 always and 0-3 as well when its
+argument is zero. `DOAsysFrame` calls it with **1** immediately before
+launching `SpeechSubroutine`, and calls `LoadDOAsysArt(1)` to put them back
+afterwards: the three player-form standing sprites are dropped for the
+duration of the conversation and reloaded when it ends. That is a
+memory-pressure dance around a subprogram launch, and a port has to keep it
+or find the memory somewhere else.
+
+### One sprite is missing, and one is unreachable
+
+The generator makes the check easy. Fifteen of the sixteen names it can build
+are files in `Perfect/DOASys`. The exception is **`ChameleonStandAA50.anim`**,
+which is on no part of the disc — and Chameleon, id 12, is squarely inside the
+lieutenant range, so the spire can and will pick him.
+
+The mirror image is next to it: **`MedusaStandAA50.anim` is on the disc** and
+`FindTalker` masks Medusa out by name, so nothing can ever ask for it.
+
+```
+Reachable with no sprite:        Chameleon
+Sprite with no way to reach it:  Medusa
+```
+
+Exactly one each way. And beside those sixteen sit **eleven
+`*Stand5AA.anim`** files — the same characters, a second naming convention —
+which **no executable on the disc mentions at all**. The same directory is
+wrong in both directions at once: a name with no file, a file with no name,
+and a whole convention nobody asks for.
+
 ## Two sixteen-entry tables, and the one that flies
 
 `LoadDOAsys` builds two tables of sixteen 16.16 words on its own frame, one
@@ -163,11 +260,11 @@ reach.
 ```
   id  who          +0x18   +0x1c
    0  Goner        5.141   7.000
-   1  David        2.333   7.000
-   2  Venus        4.250   8.000
+   1  Picasso      2.333   7.000
+   2  Tork         4.250   8.000
    3  Kilroy       2.667   8.000
-   4  Tork         2.667   8.000
-   5  Picasso      3.188   8.500
+   4  Venus        2.667   8.000
+   5  David        3.188   8.500
    6  Medusa       5.250   7.000
    7  Tesla        3.778   8.500
    8  Balkan       3.778   8.500
@@ -198,6 +295,12 @@ And the routine has exactly one special case:
 is also the widest of the sixteen.** Id 10 is *Fly*. Two independent columns
 of the same table say the same thing about the same character, and neither
 was written down for that purpose.
+
+And a third source agrees. `PerfectMovers.B3D` records a ground offset per
+animation, and `FlyStand.anim`'s is **+4.000** — the same number this code
+hardcodes. It is also the only positive one in the file: every other standing
+pose sits at `-2.319`, `-1.000` or `0.000`. `--verify --movers` checks both
+halves of that.
 
 ## What the spire is made of
 
@@ -364,7 +467,55 @@ every time: the video character is redrawn from whoever is still flying, so
 who you meet changes as the game goes on, and once the eight are all crashed
 the slot falls back to the Goner.
 
-`LieutenantGone` has one other caller, `0x008e88` at `0x008f30`, which runs
-the same loop over ids **6 to 15** and skips **id 9, Silva**, by name — a
-different selector with a different exclusion, and the only place on the disc
-that singles Silva out. That one is unread.
+## The other caller of `LieutenantGone`, and where it leads
+
+`0x008e88` runs the same loop, over ids **6 to 15**, and it differs in three
+ways. It skips **id 9, Silva**, by name. It then appends **16, 17 and 18** —
+the three player forms — unconditionally. And it picks one of the whole list
+at random:
+
+```
+00008f28  r4 = 6
+00008f30  bl  #0x3e7b0            ; LieutenantGone
+00008f38  bne skip                ; gone
+00008f3c  teq r4, #9
+00008f40  beq skip                ; Silva, always
+00008f50  list[n++] = r4
+00008f58  cmp r4, #0x10
+00008f60  list[n++] = 16          ; PerfectMale
+00008f70  list[n++] = 17          ; PerfectFemale
+00008f80  list[n++] = 18          ; PerfectRobot
+00008f90  bl  #0x38c00            ; RandomBelow(n)
+00008f98  r0 = list[r0]
+```
+
+Its one caller, `0x009138`, opens by scanning the five live rithm populations
+at `[0x89d40 + 0xa0]` ([18](18-the-save-game.md)), so this is the **rithm
+spawner**, and `0x008e88` is what it asks for a kind. That the three player
+forms are in the list is consistent with them being the Perfect One's three
+shapes — but this document has not walked what the caller does with the
+answer, and does not claim it.
+
+Silva's exclusion is a fact, not a guess: it is one `teq`, and it is the only
+place on the disc that singles her out. A tempting explanation is that Silva
+is the one character with a patrol rectangle and **no `*Encounter.B3D`**
+([10](10-second-b3d-family.md)) — except that Raven has no arena either and
+stays in the list. So the exclusion is written down and not explained.
+
+### What that thread did answer
+
+`0x008e88` and `0x009138` both call `0x008dc4`, which is short enough to
+close. It sums your three **earned** stats, walks the five tier records at
+`0x89f40` for the first stat threshold you have not passed, does the same
+with your **rank** against the rank thresholds, and averages the two three to
+one:
+
+```
+round((3 * rankTier + statTier) / 4)   clamped to 1 … 5
+```
+
+That is the **difficulty tier**, and its stat half is bytes `+0x1c`, `+0x1d`
+and `+0x1e` of each tier record — three columns
+[10](10-second-b3d-family.md) had written down two sessions ago with no
+meaning at all. Both documents now carry the reading, and
+`savegame.py --verify --movers` checks it.

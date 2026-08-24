@@ -119,10 +119,15 @@ every reference beyond 255 bytes.
 | `0x04f6c4` | **CinepakFrame** — walks the strips and dispatches chunks `0x30`–`0x32` | calls the three block renderers |
 | `0x00d040` | **DOAsysVisit** — the whole DOAsys spire, as one blocking call | heals D/O/A a quarter of a point a frame |
 | `0x00d754` | **LoadDOAsys** — builds the spire and picks the three speakers | *"Video Character is %d"* |
+| `0x00d1f8` | **LoadDOAsysArt** — sixteen art pointers; builds three filenames out of the roster | *"StandAA50.anim"*, the only reference to it |
+| `0x00d65c` | **FreeDOAsysArt** — frees them through the loader the ownership mask names | two loops, 4-12 and 0-3 |
 | `0x00f1f8` | **DOAsysFrame** — one frame of the visit; launches the conversation | the two arms that call `0x03f0d4` |
 | `0x00f33c` | **FindTalker** — is a rank-13/14/15 mover in reach, and who | sets `[0x57d0c + 4]`, the id `argv[1]` carries |
 | `0x00f42c` | **RankToCharacter** — rank 13, 14 or 15 to a character id, else `0xff` | nine instructions, three arms |
 | `0x03e7b0` | **LieutenantGone(id)** — 1 when bit `id - 3` of the render flags word is clear | ids 6-15 only; `0x8f30` uses it too |
+| `0x008dc4` | **PlayerTier** — `round((3 * rankTier + statTier) / 4)`, 1 to 5; the stat half is bytes `+0x1c`-`+0x1e` of the five tier records | `add r0, r0, r0, lsl #1` then `asr #2` |
+| `0x009138` | SpawnManager — opens on the five live rithm populations at `[0x89d40 + 0xa0]`; unread past that | |
+| `0x008e88` | ChooseSpawnKind — the living bosses except Silva, plus the three player forms, one at random | `teq r4, #9` |
 | `0x03f0d4` | **RunSpeechSubroutine** — LoadProgram, ExecuteAsSubroutine, DeleteProgram | *"Couldn't load SpeechSubroutine."* |
 | `0x01fd2c` | **ControlFrame** — one frame of the controller; returns an action word | the ten button masks at `0x5804c` |
 
@@ -337,6 +342,8 @@ that the released game does in C instead.
 | `0x07b758` | object records, 44 bytes each, indexed by object id |
 | `0x069474`, `0x069478` | the live sprite count and the sprite list it counts, 44-byte records; reached as `0x60cdc + 0x8798` and `+ 0x879c`, and compacted per frame at `0x038f38` |
 | `0x0862b8` | the DOAsys cel table: the pedestal, the two spires and the three `.far.scel` props |
+| `0x058640` | **the character name table** — nineteen `char *`, NULL-terminated: Goner, Picasso, Tork, Kilroy, Venus, David, Medusa, Tesla, Balkan, Silva, Fly, Riberto, Chameleon, Chance, Loki, Raven, PerfectMale, PerfectFemale, PerfectRobot. The id space of `PerfectMovers.B3D` and of the DOA conversation, written down by the program. See [19](19-the-doasys-spire.md) |
+| `0x057d14` | sixteen DOAsys art pointers: 0-3 the Gaz front and back, 4-12 the three player forms' stand/mask/glow, 13-15 the three speakers' `StandAA50.anim`, built at run time |
 | `0x057d0c` | the DOAsys record: `+0` the mover you are talking to, `+4` the character id `argv[1]` carries, `+0x58` a mask, `+0x5c`/`+0x60`/`+0x64` the three speakers' ids, `+0x68` four 44-byte pedestals |
 | `0x08988c` | the 257-word spatial grid |
 | `0x05fa68` | 15 floor tile pairs, `[i*8]` far 16x16 and `[i*8+4]` near 32x32 |

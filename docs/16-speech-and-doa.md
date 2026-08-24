@@ -133,10 +133,18 @@ The list always ends with two entries the table has no say over:
 
 ### A character id is not a speaker index
 
-Ids `0`–`5` are the six generic heads and double as speaker indices. Ids
-`6`–`15` are the ten bosses, in the order of the film-name table at `0x93f0`:
+Ids `0`–`5` double as speaker indices. Ids `6`–`15` are the ten bosses, in
+the order of the film-name table at `0x93f0`:
 Medusa, Tesla, Balkan, Silva, Fly, **Riberto**, Chameleon, Chance, Loki,
-Raven. Riberto is the only one of the ten with a face and a voice on the
+Raven.
+
+**The whole id space is written down in `p`**, as it turns out — an array of
+nineteen NULL-terminated `char *` at `0x058640`, in id order, ending with the
+three player forms. It agrees with the speaker order here for all six, and
+with the nineteen rows of `PerfectMovers.B3D` row for row. So ids 0-5 are the
+Goner and the five rank-tier leaders — Picasso, Tork, Kilroy, Venus, David —
+not "six generic heads": they are the five archetypes the rank ladder is
+built out of ([18](18-the-save-game.md), [19](19-the-doasys-spire.md)). Riberto is the only one of the ten with a face and a voice on the
 disc, and he is speaker 6 — so the two numbering spaces collide on 6, and the
 code reconciles them by hand, twice:
 

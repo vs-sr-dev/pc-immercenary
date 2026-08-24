@@ -241,6 +241,14 @@ The index into a tier is `threshold[tier-1] - rank`, and the byte is
 `(size-1) - (index >> 3)`, so the map runs backwards through memory from the
 worst rank up.
 
+Those thresholds have a second reader. `0x008dc4` walks them against the
+player's own rank byte, and walks the three bytes at `+0x1c` of the same five
+records against the player's earned D+O+A, and averages the two answers three
+to one: `round((3 * rankTier + statTier) / 4)`, clamped to 1 … 5. That is the
+**difficulty tier**, and it is what the rithm spawner asks for. See
+[10](10-second-b3d-family.md) for the stat half, which had been sitting in
+that document as three unnamed columns.
+
 **Every number in that table comes from somewhere else and they all agree.**
 The thresholds are constants the world loader ORs in at `0x0082a4`; the
 populations are byte `+0x1f` of each character block in `PerfectMovers.B3D`,

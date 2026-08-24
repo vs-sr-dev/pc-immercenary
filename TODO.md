@@ -10,7 +10,7 @@ open-ended research.
   `0x00d754` is **LoadDOAsys**, and with the four functions around it — the
   visit at `0x00d040`, the frame at `0x00f1f8`, the probe at `0x00f33c`, the
   map at `0x00f42c` — it is the whole DOAsys spire. See
-  [docs/19](docs/19-the-doasys-spire.md); `tools/doasys.py --verify` is 52
+  [docs/19](docs/19-the-doasys-spire.md); `tools/doasys.py --verify` is 68
   checks that pass.
 - **The game addresses DOA characters by rank.** `RankToCharacter` is nine
   instructions: rank 13 is the *video character*, 14 and 15 the two crowd
@@ -60,10 +60,47 @@ open-ended research.
   `FindTalker`, `RankToCharacter`, `LieutenantGone`, `RunSpeechSubroutine`,
   `ControlFrame`.
 
-- **Where the verifiers stand after all of it**: `savegame.py --verify` 56,
-  60 with `--movers`, `doasys.py --verify` 52, `speech.py --verify` 34, `frontend.py --verify`
-  19, `armmath.py --verify` 14, `dsp.py --verify` and `strm.py
-  --verify-dither` clean.
+- **`p` names its own cast, and nobody had found the table.** `0x058640` is
+  nineteen NULL-terminated `char *` in id order: Goner, Picasso, Tork,
+  Kilroy, Venus, David, Medusa, Tesla, Balkan, Silva, Fly, Riberto,
+  Chameleon, Chance, Loki, Raven, PerfectMale, PerfectFemale, PerfectRobot.
+  It agrees with `PerfectMovers.B3D` row for row and with the speaker order
+  in [16](docs/16-speech-and-doa.md) for all six. **Which corrects this
+  session's own first reading** — ids 1-5 had been written down in the
+  reverse order, guessed off the rank ladder instead of read.
+- **And it is a filename generator.** `LoadDOAsysArt` at `0x00d1f8` glues
+  each name between `"$DOASys/"` and `"StandAA50.anim"`. Fifteen of the
+  sixteen exist on the disc; the missing one is **`ChameleonStandAA50.anim`**,
+  and Chameleon is squarely inside the video-character range. The mirror is
+  beside it: `MedusaStandAA50.anim` is on the disc and Medusa is the one id
+  `FindTalker` masks out. **Exactly one each way.** Plus eleven
+  `*Stand5AA.anim` files no executable mentions at all.
+- **`[0x57d0c + 0x58]` is an ownership mask**, one bit per art slot, saying
+  which of two loaders allocated the pointer so `FreeDOAsysArt` can call the
+  matching free. And `DOAsysFrame` frees slots 4-12 before launching
+  `SpeechSubroutine` and reloads them after — a memory-pressure dance a port
+  has to keep.
+- **A third source agrees on Fly.** `PerfectMovers.B3D` records `+4.000` as
+  `FlyStand.anim`'s ground offset — the number `LoadDOAsys` hardcodes — and
+  it is the only positive one in the file.
+- **`0x008dc4` is the difficulty tier**, and it names three columns
+  [10](docs/10-second-b3d-family.md) had recorded with no meaning. Your
+  earned D+O+A against bytes `+0x1c`-`+0x1e` of the five tier records
+  (thresholds 26, 75, 125, 170, 230 out of 384), your rank against the five
+  rank thresholds, then `round((3 * rankTier + statTier) / 4)` clamped to
+  1-5. Three parts rank, one part stats.
+- **The other caller of `LieutenantGone` is the rithm spawner.** `0x008e88`
+  picks a kind: the living bosses **except Silva, by name**, plus the three
+  player forms always. Its caller `0x009138` opens on the five live
+  populations at `[0x89d40 + 0xa0]`. Silva is the one character with a patrol
+  rectangle and no arena — but so is Raven, who stays in the list, so the
+  exclusion is recorded and not explained.
+
+- **Where the verifiers stand after all of it**: `savegame.py --verify` 61,
+  67 with `--movers`; `doasys.py --verify` 59, 68 with `--art` and
+  `--movers`; `speech.py --verify` 34, `frontend.py --verify`
+  `frontend.py --verify` 19, `armmath.py --verify` 14, `dsp.py --verify` and
+  `strm.py --verify-dither` clean.
 
 ## Done in session 9
 
@@ -681,3 +718,21 @@ camera in about 1.5 seconds a frame. What is missing:
   first counts. A literal-pool cross-referencer lists them as unrelated
   because the base registers differ. When two globals are always touched in
   the same routine, add their offsets out.
+
+- **A string table can hide behind the string dump's minimum length.** The
+  nineteen character names at `0x058640` had been on the disc for nine
+  sessions. `p_strings.txt` keeps runs of six printable bytes or more, and
+  *Goner*, *Tork*, *Venus*, *David*, *Tesla*, *Silva*, *Fly*, *Loki* and
+  *Raven* are all shorter — so the block read as six scattered names with the
+  pattern filtered out. When a set of related names is half-missing from a
+  dump, lower the threshold and look again.
+- **Do not derive an order you can read.** Ids 1-5 got written down backwards
+  this session because the rank-ladder table lists its tiers top-down and
+  that felt like the id order. `speech.py --doa` had been printing
+  *"Picasso, id 1"* since session 7, and `b3d2.py --names` had the same list
+  from the file. Two tools in the repo already knew.
+- **A filename generator is a completeness checker.** Once you know the code
+  builds `prefix + name[i] + suffix`, you can ask the disc which of those
+  files exist — and the answer here was one missing and one unreachable, in
+  the same directory, in opposite directions. A hardcoded name list gives you
+  nothing to check.

@@ -382,6 +382,20 @@ def populations(movers_path):
     return [m['stats'][7] for m in d['movers'][1:]]
 
 
+def stat_thresholds(movers_path):
+    """Bytes +0x1c to +0x1e of the five tier records, summed.
+
+    `0x008dc4` adds your three *earned* stats and walks these five sums to
+    find the tier you have outgrown, which is what those three columns are
+    for -- [10](../docs/10-second-b3d-family.md) recorded them with no
+    meaning two sessions before the code that reads them turned up.
+    """
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import b3d2
+    d = b3d2.read_movers(open(movers_path, 'rb').read())
+    return [sum(m['stats'][4:7]) for m in d['movers'][1:6]]
+
+
 def check(ok, name, detail=''):
     print(f"  {'ok  ' if ok else 'FAIL'}  {name}" + (f"   {detail}" if detail else ''))
     return bool(ok)
@@ -441,6 +455,30 @@ def verify(p, p1e, movers=None):
         c(spans[1:] == pop[1:5], "and the other four match to the head")
         c([m for m in pop[5:16]] == [1] * 11,
           "the eleven bosses are one of a kind each")
+        # and the three columns beside that population byte are the other
+        # half of the same ladder: 0x008dc4 reads them as stat thresholds
+        sums = stat_thresholds(movers)
+        c(sums == sorted(sums),
+          "the five stat thresholds rise with the tier", str(sums))
+        c(len(sums) == 5 and sums[0] == 26 and sums[-1] == 230,
+          "from 26 to 230 out of a possible 384", str(sums))
+
+    print("the difficulty tier, 0x008dc4")
+    c(text(p, 0x008dd0) == 'ldm r2, {r0, r2}' and
+      text(p, 0x008dd8) == 'ldr r2, [r1, #0x14]',
+      "it sums the earned triple at +0x0c, +0x10 and +0x14")
+    c(text(p, 0x008df0) == 'ldrb lr, [ip, #0x1c]' and
+      text(p, 0x008df8) == 'ldrb r4, [ip, #0x1d]' and
+      text(p, 0x008e00) == 'ldrb ip, [ip, #0x1e]',
+      "and compares it with bytes +0x1c, +0x1d and +0x1e of a tier record")
+    c(text(p, 0x008e2c) == 'lsr r1, r1, #0x18' and
+      text(p, 0x008e3c) == 'and ip, lr, ip, asr #13',
+      "then does the same with your rank against bits 13-20 of +0x20")
+    c(text(p, 0x008e58) == 'add r0, r0, r0, lsl #1' and
+      text(p, 0x008e64) == 'add r0, r0, r1, asr #2',
+      "and the answer is (3 * rank tier + stat tier) / 4, rounded")
+    c(text(p, 0x008e70) == 'movlt r0, #1' and text(p, 0x008e7c) == 'movgt r0, #5',
+      "clamped to 1 to 5")
 
     print("the two statistics blocks")
     c(0x24 + 0x1c == 0x40, "the second block is 28 bytes past the first")

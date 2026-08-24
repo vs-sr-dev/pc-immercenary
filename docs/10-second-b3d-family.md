@@ -277,6 +277,30 @@ corner, and the five whose animation sets are nothing but `Death`, `Run` and
 which is the order the game expects you to beat them in, and the player forms
 sit at 128 in all three.
 
+**And the three columns at `+0x1c` are the stat half of the difficulty
+curve.** `0x008dc4` adds your three *earned* stats — `+0x0c`, `+0x10`,
+`+0x14` of the game state — and walks the five tier records at `0x89f40`
+looking for the first whose `+0x1c + +0x1d + +0x1e` you have not passed:
+
+| tier | Picasso | Tork | Kilroy | Venus | David |
+|---|---|---|---|---|---|
+| threshold | 26 | 75 | 125 | 170 | 230 |
+
+out of a possible 384. It then does the same with your **rank** against the
+five rank thresholds in bits 13-20 of `+0x20` ([18](18-the-save-game.md)), and
+the answer is `round((3 * rankTier + statTier) / 4)`, clamped to 1 … 5. Three
+parts rank, one part stats. `savegame.py --verify --movers` checks the whole
+of it.
+
+So the character block's last four bytes are, in order, three stat thresholds
+and one population count — every one of them a column of the same ladder, and
+none of them anything to do with the character whose block they sit in.
+
+`p` carries the same roster as text. `0x058640` is an array of nineteen
+`char *`, NULL-terminated, in the same order — which is the independent
+confirmation this table never had, and it also names the ids the DOA
+conversation uses ([19](19-the-doasys-spire.md)).
+
 The names are the roster:
 
 | | | |
