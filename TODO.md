@@ -3,6 +3,39 @@
 Everything below has a concrete starting address or file. Nothing here is
 open-ended research.
 
+## Done in session 18
+
+- **`MoverDecide` is read, and `docs/25` had the state wrong.** `0x004ff8` is
+  a **weighted vote** between thirteen states, rebuilt from scratch once a
+  second: thirteen signed bytes out of a table at `0x057c0c` plus
+  `RandomBits(4)` each, then a dozen terms — its own DOA against a ceiling of
+  20.0, yours, the distance, one Bresenham of line of sight, `PlayerTier`, the
+  **hours you have played**, and a temperament byte rolled at birth — argmax,
+  `RandomBelow` between ties. [26](docs/26-the-decision.md) is the read and
+  [`tools/behave.py`](tools/behave.py) the transcription, 38 checks against
+  the image.
+- **State `0x40` is not the wander.** Exactly one instruction in either image
+  writes it — `0x04605c`, when a projectile of kind 4 lands — and
+  `MoverDecide`'s first two instructions refuse to re-decide out of it. It is
+  a **scramble**. `NewMover` zeroes the record, so a rithm is born in state
+  **0** and decides on its first frame; there is no idle. Everything
+  `docs/25` says `0x40` *does* is right, and both renderers still run it
+  exactly; what was wrong is that a rithm is ever in it.
+- **`+0x75` is not an animation slot**, which is what `docs/06` called it. Two
+  instructions read it and one of those is a copy; the other shifts it up
+  sixteen against an octagonal distance. It is the **arrival radius**, in
+  whole world units, and nothing draws from it.
+- **`SpawnNewShapes` makes a fourth draw per mover and `spawns.py` did not.**
+  `0x00994c` rolls `RandomBelow(5)` into the temperament byte at `+0x42` for
+  every mover but the second of a paired shape-4 spawn. One missing draw on a
+  single shared stream moves every mover placed after it. Fixed. It does not
+  touch the pack: `population()` uses `fill_zone` and `entry_burst` only, both
+  of which leave `+0x42` at zero, and `--walk 36000` is still clean.
+- **Seven more routines named**, all in the mover loop: `MoverStateDone`
+  `0x004a88`, `PickDestination` `0x0048c0`, `NearestMover` `0x0049b8`,
+  `PickCompanion` `0x006c00`, `OctDistance` `0x004870`, `LineBlocked`
+  `0x04439c` and `ScrambleMover` `0x04603c`.
+
 ## Done in session 17
 
 - **The rithms walk, and the whole chain is read.** `MoverFrame` at `0x00bacc`
@@ -990,15 +1023,26 @@ after touching either renderer, and pass `--assets extracted/Perfect` to
 
 What is still missing:
 
-- **`MoverDecide`, `0x004ff8`, is the last piece of the movers.** Everything
-  under it is transcribed and running — the gait, the rate, the stride, the
-  two probes, the turn out of a wall, the eight-phase walk cycle — but nothing
-  ever *leaves* the wander, because the weighted choice between the fifteen
-  states `MoverEnterState` sets up is not written down. It is read
-  ([20](docs/20-p1e-the-final-encounter.md)) but not transcribed: three
-  current/max DOA pairs through `0x004810`, compared against yours, folded
-  with `PlayerTier` and the distance, and a `RandomBelow` over the weights.
-  Transcribe it and rithms start chasing you.
+- **The rithms still run state `0x40`, and that is now a known wrong state.**
+  `MoverDecide` is read and transcribed ([26](docs/26-the-decision.md),
+  [`tools/behave.py`](tools/behave.py)), but a decision needs somewhere to go.
+  Two routines stand between here and a rithm that chases you, and §4 and §5
+  of `docs/26` are the specification for both:
+  - **`MoverEnterState`'s other fourteen arms**, `0x0058f0`, 1,712 bytes.
+    Thirteen of the fifteen are tabulated already — destination, target,
+    arrival radius, gait — and every one of them reaches `PickDestination`
+    `0x0048c0`, `PickCompanion` `0x006c00` or `NearestMover` `0x0049b8`, all
+    three of which are read. Only states 2 and 3 need something unread, and
+    they are held at −128 outside a warp.
+  - **`MoverStateDone`, `0x004a88`**, 1,392 bytes, read but not transcribed:
+    a fifteen-arm switch on the same state byte that forces an early
+    re-decide.
+  - Then `MoverAim`'s target arm (`0x00607c`, four cases on `+0x70`), which is
+    read, and `TurnMover`'s gradual arm, which is already in both renderers
+    and has never been exercised.
+
+  Do it in Python first — `behave.py` is the authority and `packdiff --walk`
+  is the check — and port to `native/view.c` after, exactly as the walk went.
 - **The rest of `DrawMover`'s 2,400 bytes.** The Perfect One's three forms and
   the hit states. The stealth branch and the PPMPC are answered
   ([24](docs/24-the-cast.md)). Goner's three spare palettes are still unused:
@@ -1089,10 +1133,12 @@ What is still missing:
   arguments, and the shell treats its result as six coin flips
   ([docs/09](docs/09-os-surface.md)). Everything about it says random source
   and nothing proves it.
-- **`0x006128`, the last unread mover routine.** `0x004ff8` beside it is read
-  now ([20](docs/20-p1e-the-final-encounter.md)); this one is 464 bytes and
-  `p1e` `0x0198f4` is its 296-byte counterpart at similarity 0.60. Read the
-  small one first — that is what worked on `0x004ff8`.
+- **`0x006128`, `MoverThink`'s third deadline**, 464 bytes, and `p1e`
+  `0x0198f4` is its 296-byte counterpart at similarity 0.60. Read the small
+  one first — that is what worked on `0x004ff8`.
+- **`0x006de8`, 2,160 bytes**, behind states 2 and 3, is the only routine
+  either half of the state machine reaches that is still unread. It is
+  unreachable while the world is not warping.
 - **`p1e` `0x01aa40`, 2,876 bytes, one caller**, is now the largest unread
   function in either image, and `0x01a1a4`, `0x01a4f8` and `0x0194b4` sit
   beside it in the Perfect One's behaviour band. ~~The two-bit phase at mover
@@ -1107,6 +1153,19 @@ What is still missing:
 
 ## Notes to self
 
+- **A state the transcription never leaves is a state the game may never
+  enter.** `docs/25` found that `MoverAim`, `TurnMover` and `MoverEnterState`
+  all special-case `0x40`, transcribed all three correctly, and concluded that
+  `0x40` was therefore the state the overworld lives in. It is the opposite:
+  three routines special-case it *because* it is an exception, and one
+  instruction in 90,000 puts a rithm there. Before deciding a state is the
+  default, grep for what **writes** it, and check what the allocator leaves
+  behind — `NewMover` memsets 0x90 bytes, so the default state is 0 by
+  construction and no instruction has to say so.
+- **A field named from one reader is named from a guess.** `+0x75` was "an
+  animation slot" because it looked like one beside `+0x74`. Two instructions
+  read it in the whole image and neither draws anything: it is an arrival
+  radius. Grep the readers before naming a field, not only the writers.
 - **"Nothing writes this field" is a claim about your grep, not about the
   game.** `docs/25` said the mover's `+0x34` was written only by `NewMover`,
   which zeroes it, and built a conclusion on it — that a rithm cannot animate.

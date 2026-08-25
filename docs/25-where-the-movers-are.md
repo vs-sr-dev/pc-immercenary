@@ -478,14 +478,22 @@ And when an axis is refused, the mover turns:
 Eleven and a quarter degrees off a wall, forty-five out of a corner, and the
 heading truncated to a whole unit on the way out.
 
-### The wander is the state a viewer can run
+### The one state a viewer can run
 
-`MoverDecide` at `0x004ff8` is a weighted choice between fifteen states and is
-not transcribed. One of them is, end to end: **`0x40`**, and it is the one the
-overworld idles in.
+> **Corrected by [26](26-the-decision.md).** This section called `0x40` "the
+> wander" and "the one the overworld idles in", and it is neither. `0x40` is
+> the **scramble**, and the only instruction in either image that ever writes
+> it is `0x04605c`, which fires when a projectile of kind 4 lands on a rithm.
+> `NewMover` zeroes `+0x74`, so a rithm is born in state **0** and decides its
+> way out of it on its first frame. Everything below about *what `0x40` does*
+> is right; the claim that a rithm is ever in it is not, and the mill it
+> describes is the mill of a scrambled rithm, not of a walking one.
+
+`MoverDecide` at `0x004ff8` is a weighted choice between thirteen states.
+One state is transcribed here end to end: **`0x40`**.
 
 `MoverEnterState` gives it a destination where the mover already stands, an
-animation slot of `0x10`, and gait 1 (`0x005ee8` into `0x005cb0`). Then
+arrival radius of `0x10` and gait 1 (`0x005ee8` into `0x005cb0`). Then
 `MoverAim` refuses to aim:
 
 ```
@@ -496,7 +504,7 @@ animation slot of `0x10`, and gait 1 (`0x005ee8` into `0x005cb0`). Then
 ```
 
 and `TurnMover` refuses to turn gradually — `0x00a510` sends state `0x40`
-straight to the snap — so a wandering rithm picks a fresh random heading every
+straight to the snap — so a scrambled rithm picks a fresh random heading every
 sixty ticks and is instantly facing it. A random walk at 5.6 units a second
 with a new leg every second: over ten seconds they cover 56 units of path and
 end six from where they started. They mill.
@@ -520,10 +528,11 @@ python tools/packdiff.py --walk 36000                 # the state, not the pixel
 python tools/packdiff.py --sweep                     # the tick count is swept too
 ```
 
-What the viewer does not run is `MoverDecide`, so nothing ever leaves the
-wander: no rithm chases you, and the gaits above 1 are in the pack's reach but
-never chosen. That is the next piece, and it is a weighting function rather
-than a mechanism.
+What the viewer does not run is `MoverDecide`, so nothing ever leaves state
+`0x40`: no rithm chases you, and the gaits above 1 are in the pack's reach but
+never chosen. [26](26-the-decision.md) reads the decision and the two routines
+under it; what is still to do is transcribe `0x0058f0`'s other fourteen arms
+and `0x004a88` beside it, so that a choice has somewhere to go.
 
 ## The city is populated
 
@@ -615,7 +624,9 @@ pink, and every one of them on the open half of the city.
 | `0x006768` | `UpdateCrowds` — drift, retarget, fill and empty, once a frame | `AudioTicks() & 7` as a compass |
 | `0x00bacc` | `MoverFrame` — the per-frame pass over the whole `CharacterList` | the list anchor at `[0x60cdc+0xa544]` |
 | `0x0062f8` | `MoverThink(mover)` — the decide, aim and `0x006128` deadlines | `+0x80`, `+0x88`, `+0x84` |
+| `0x004ff8` | `MoverDecide(mover)` — the weighted vote, read in [26](26-the-decision.md) | the table at `0x057c0c` |
 | `0x0058f0` | `MoverEnterState(mover)` — what each state sets up | the jump table at `0x005984` |
+| `0x004a88` | `MoverStateDone(mover)` — when a state has run out | `+0x75` is the arrival radius |
 | `0x005fa0` | `MoverAim(mover)` — the target into a bearing | `teq r3, #0x40` at `0x005fc4` |
 | `0x00a4a4` | `TurnMover(mover)` — the bearing into a heading, and into a velocity | `cmp r3, #0x58000` |
 | `0x00a600` | `SetMoverBearing(mover, angle)` — two instructions and a fall-through | `str r1, [r0, #0x7c]` |

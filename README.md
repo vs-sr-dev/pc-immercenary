@@ -17,7 +17,7 @@ only shipping build is the 3DO ARM6 executable on the retail CD.
 |---|---|
 | `native/` | A walkable viewer of the overworld, props, item spawns and *walking* rithms included: SDL2, a software span rasteriser, ~84 fps at 960x600 with 1,594 sprites in the world, the game's own radar-map collision, and pixel-identical to the Python reference renderer over a swept grid of cameras and mover tick counts |
 | `tools/` | Opera (3DO) filesystem reader, CEL/anim decoder, CEL bank reader, B3D world parser, ground tile map reader, OBJ exporter, textured software renderer, font decoder, DataStream demuxer with Cinepak and SDX2 decoders, HUD radar map decoder, ARM cross-referencer and call-graph reader, symbol-file builder, OS-surface scanner, DSP instrument reader, library-versus-game classifier, the hand-written ARM math module reimplemented and self-checking, the 512-byte game state read out of the code, a function-level pairing of the two game executables, a reachability pass over the call graph, the placed-prop reader, a reimplementation of the three mover spawners, the radar-map probe they place against and the walk they then do, a scene packer for the native viewer and a frame differ |
-| `docs/` | Findings: disc layout, file formats, executables, roadmap, B3D format, code map, CEL banks, the ground, the OS surface, the second B3D family, the fonts, the DataStream, the HUD maps, the DSP instruments, library versus game code, the DOA system and its lip sync, the front end, the save game, the DOAsys spire, the final encounter, the call graph, the props, the item spawns, the cast, where the movers are |
+| `docs/` | Findings: disc layout, file formats, executables, roadmap, B3D format, code map, CEL banks, the ground, the OS surface, the second B3D family, the fonts, the DataStream, the HUD maps, the DSP instruments, library versus game code, the DOA system and its lip sync, the front end, the save game, the DOAsys spire, the final encounter, the call graph, the props, the item spawns, the cast, where the movers are, the decision |
 
 ## Quick start
 
@@ -45,6 +45,12 @@ python tools/props.py --verify
 
 # The item spawns: which table the id indexes, and what the id-0 roll grows
 python tools/items.py --verify
+
+# What a rithm decides to do next, and the weights it decides with
+python tools/behave.py --verify
+python tools/behave.py --table
+python tools/behave.py --states
+python tools/behave.py --poll
 
 # The cast: which file each character's animations come from, and how big
 python tools/movers.py --verify
@@ -246,6 +252,23 @@ Early, but moving. Nothing is playable yet.
   the record's own easting, the canopy widened by a second roll. It had been
   written down as a random weapon spawn on the strength of an off-by-one in
   `RandomBelow`. [23](docs/23-the-item-spawns.md).
+- **A rithm's next move is a weighted vote, and it is on a wall clock.**
+  `MoverDecide` at `0x004ff8` runs once a second per rithm and rebuilds
+  thirteen scores from scratch every time: a row of thirteen hand-tuned bytes
+  out of a table, `RandomBits(4)` on each, and then a dozen terms — its own
+  D/O/A measured against a fixed ceiling of 20.0 so that a *healthy* rithm
+  weighs its condition at nothing, your Offense against its, the octagonal
+  distance, one Bresenham of line of sight over the radar map, your tier, and
+  a temperament byte rolled at birth. The largest single term in the whole
+  routine is the **hours you have played**: under four, the weakest rithms
+  will not come after you outside eight units; past ten it is your tier
+  instead. Standing still narrows every rithm's eye by 33 degrees, and being
+  behind a building multiplies your apparent distance by eight. Reading it
+  corrects [25](docs/25-where-the-movers-are.md): state `0x40`, which that
+  session called "the wander", is written by **one instruction in the whole
+  image** — it is what a projectile of kind 4 does to a rithm, a *scramble*,
+  and `MoverDecide` refuses to decide its way out of it. A rithm is born in
+  state 0 and chooses on its first frame. [26](docs/26-the-decision.md).
 - **The rithms walk, and the collision was never geometric.** `MoverFrame` at
   `0x00bacc` runs the whole character list once a frame, and the five routines
   under it are the movement: the gait — the two-bit field at `+0x18` bits

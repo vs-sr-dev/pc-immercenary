@@ -278,13 +278,18 @@ DOA = {0: (2.5, 2.5, 2.5), 1: (2.0, 1.5, 3.5),
 
 
 class Mover:
-    __slots__ = ('kind', 'x', 'y', 'source', 'zone', 'widen', 'face', 'doa')
+    __slots__ = ('kind', 'x', 'y', 'source', 'zone', 'widen', 'face', 'doa',
+                 'temper', 'mate')
 
     def __init__(self, kind, x, y, source, zone=None, widen=0,
                  face=0, doa=None):
         self.kind, self.x, self.y = kind, x, y
         self.source, self.zone, self.widen = source, zone, widen
         self.face, self.doa = face, doa
+        # `+0x42` and `+0x8c`.  Only `0x009544` fills either: everything the
+        # other two spawners make keeps `NewMover`'s zeroes.  See
+        # `shape_spawn` below and docs/26.
+        self.temper, self.mate = 0, None
 
     def __repr__(self):
         return '%-6s kind %2d  (%5d,%5d)  facing %3d%s%s' % (
@@ -363,6 +368,7 @@ def shape_spawn(rng, probe, wanted=(0, 0), live=(-1, -1), tier=1,
             n = min(n, budget[shape])
         prev = [0, 0]
         quad = 0
+        mate = None
         for _ in range(max(0, n)):
             def sign(dx, dy, q=quad, p=prev):
                 # 0x009760: the previous accepted offset's signs, flipped a
@@ -380,7 +386,20 @@ def shape_spawn(rng, probe, wanted=(0, 0), live=(-1, -1), tier=1,
             x, y, w = pl.place(ex, ey, 8, 0x40, False, sign, give_up=None)
             prev = [x - ex, y - ey]
             quad = (quad + 1) & 3
-            out.append(new_mover(rng, shape, x, y, 'shape', widen=w))
+            m = new_mover(rng, shape, x, y, 'shape', widen=w)
+            # 0x00985c: shape 4 comes in pairs that point at each other
+            # through `+0x8c`, and the second of a pair copies the first's
+            # temperament instead of rolling one.  Everybody else rolls, and
+            # that draw -- `RandomBelow(5)` at 0x00994c -- is a fourth call
+            # on the generator this spawner makes per mover.  It was missing
+            # here, which put every mover after the first in the wrong place.
+            if shape == 4 and mate is not None:
+                m.temper, m.mate, mate.mate, mate = mate.temper, mate, m, None
+            else:
+                m.temper = rng.below(5)
+                if shape == 4:
+                    mate = m
+            out.append(m)
     return out
 
 
@@ -450,13 +469,19 @@ def populate(rng, probe, zones, **kw):
 # the game's is: the accumulator, the heading and the velocity are integers,
 # and a floating transcription would not reproduce them tick for tick.
 #
-# What is *not* here is `MoverDecide`, `0x004ff8` -- the weighted choice
-# between the states `0x0058f0` sets up.  A viewer runs the one state whose
-# whole chain is read: `0x40`, the wander, which `0x0058f0` gives a half-speed
-# gait and which `0x005fa0` short-circuits at its first instruction, handing
-# `0x00a600` a fresh `RandomBits(8)` instead of a bearing to anything.
+# The state below is `0x40`, and it is **not** the state a spawned rithm is
+# in -- [`behave.py`](behave.py) reads `MoverDecide` and docs/26 says so.  It
+# is the *scramble*, the one a projectile of kind 4 puts a rithm into through
+# `0x04603c`: `0x0058f0` gives it a half-speed gait and a destination where it
+# already stands, `0x005fa0` short-circuits at its first instruction and hands
+# `0x00a600` a fresh `RandomBits(8)` instead of a bearing to anything, and
+# `MoverDecide` refuses to decide its way out of it.  Its whole chain is read
+# and this is the transcription of it; what a rithm does when it is *not*
+# scrambled needs the other fourteen arms of `0x0058f0` and `0x004a88`
+# besides, and neither is transcribed yet.
 # ---------------------------------------------------------------------------
-WANDER = 0x40                   # the state; 0x005ee8 sets it up
+SCRAMBLE = 0x40                 # the state; 0x005ee8 sets it up
+WANDER = SCRAMBLE               # the name docs/25 used for it, and it was wrong
 CROWD_RATE = 0x3000             # 0x0085b8: every crowd's own +0x18, 0.1875
 TURN_BASE = 0x10000             # 0x00a4d8: 1.0 a tick, plus Agility/32
 TURN_DEAD = 0x8000              # 0x00a4f0: inside half a sector, do nothing
@@ -509,7 +534,7 @@ class Walker:
         self.agility = agility          # +0x60, which is also the turn rate
         self.aim_at = 0                 # +0x88
         self.slow = False               # +0x18 bit 28
-        self.state = WANDER             # +0x74
+        self.state = SCRAMBLE           # +0x74
 
     @property
     def pos(self):
@@ -554,14 +579,14 @@ class Walk:
     def turn(self, w, dt=1):
         """`0x00a4a4`.
 
-        A wanderer never takes the gradual arm: `0x00a510` sends state `0x40`
-        straight to the snap, so the branch below is the code's shape rather
-        than something this viewer exercises.
+        A scrambled rithm never takes the gradual arm: `0x00a510` sends state
+        `0x40` straight to the snap, so the branch below is the code's shape
+        rather than something this viewer exercises.
         """
         d = _s32(w.heading - w.want)
         if abs(d) < TURN_DEAD:                   # 0x00a4f0, no velocity either
             return
-        if abs(d) < TURN_SNAP or w.state == WANDER:
+        if abs(d) < TURN_SNAP or w.state == SCRAMBLE:
             w.heading = w.want                   # 0x00a518
         else:
             rate = TURN_BASE + (w.agility >> 5)  # 0x00a4d8
