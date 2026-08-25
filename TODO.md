@@ -3,6 +3,50 @@
 Everything below has a concrete starting address or file. Nothing here is
 open-ended research.
 
+## Done in session 16
+
+- **The city is populated, and nothing on the disc places a rithm.**
+  [`tools/spawns.py`](tools/spawns.py) is the read,
+  [docs/25](docs/25-where-the-movers-are.md) the write-up. `NewMover` at
+  `0x00a6b0` takes a character id and an `(x, y)` pair; sixteen callers, five
+  of them scripted encounters, and **three** that are the overworld's whole
+  ecology. All three place the same way — offset a random amount from an
+  anchor, `ClampToWorld`, then `MapProbe`, accepting **only open ground** —
+  and widen the ring after two ticks of the 59.9 Hz clock.
+- **The anchors are the player and four wandering crowds.** `PopulateWorld`
+  at `0x0088ac` makes 10..13 rithms within 128 units of you, or **6..9 if you
+  have never crashed one below your rank** — the cap is the Lower Crashes pair
+  at `[0x89d40+0x3c]`/`+0x58` — and `NewCrowds` at `0x0083d0` puts one
+  6..10-strong crowd in each quadrant of the world box. `UpdateCrowds` at
+  `0x006768` walks each crowd towards a target cell it retargets every twenty
+  seconds off `AudioTicks() & 7`, and **makes it when its centre enters the
+  5 x 5 streaming window and frees it when it leaves**. `SpawnNewShapes` at
+  `0x009544` is the third: it places a *named* shape when the cache rotates,
+  in a 64..319-unit annulus, four consecutive spawns in four quadrants.
+- **`MapProbe` at `0x011094` is the radar map's second job**, and reading it
+  closes the maps. It reads the near tile MSB-first — the art's own order,
+  unlike `SetHUDPixel`, which is mirrored — remaps `1 -> 3`, and falls through
+  to the far tile. The near tile's footprint is **exactly a 64 x 64 block of
+  far pixels, x 49-112 and y 49-112, the same block on all 256 cells**: that
+  is [13](docs/13-hud-maps.md)'s "far map's hole" from the reader's side, and
+  the far map is 1.13% set inside it against 16.95% outside.
+- **SWI 1:17 seeds the generator, and [09](docs/09-os-surface.md) said `p`
+  threw it away.** `BuildReciprocalTable` ends `svc #0x10011` /
+  `ldmdb fp, {..., lr}` / `b SeedRandom` — a tail call with `r0` untouched. So
+  the whole procedural half of Perfect comes out of that SWI, and `1:17` has
+  two independent consumers that both want fresh bits.
+- **`0x038c40` is not `RandomBelow`**: it is the same eight instructions with
+  the multiply replaced by a shift, so it returns `0 .. 2^k - 1`. The
+  generator under both is a 54-word additive lagged Fibonacci whose table the
+  image ships **already filled by `srand(1)`** — `tools/spawns.py --verify`
+  rebuilds all 54 words and both cursors from the seed.
+- **The viewer draws them, and the two renderers still agree.** A mover is a
+  `sub = 3` turntable prop: eight views, `face` the heading `NewMover` rolls,
+  sizes from three columns of `PerfectMovers.B3D`. 400,000 of 400,000 pixels
+  identical at the reference camera with 26 rithms in frame, the same 20
+  as before at the second one, 94.1 fps at 960x600 with 1,594 sprites.
+  Twelve functions named; `tools/p.sym` now covers 335 starts, 172 named.
+
 ## Done in session 15, second half
 
 - **The cast's art is resolved: an animation number opens a file.**
@@ -816,8 +860,8 @@ open-ended research.
 
 ## 1. The interactive viewer  *(the one real artefact)*
 
-**It exists, it walks, and the props and item spawns are in it.**
-`native/view.c` at 97 fps with 1,547 sprites, pixel-identical to
+**It exists, it walks, and the props, the item spawns and the rithms are in
+it.** `native/view.c` at 94 fps with 1,594 sprites, pixel-identical to
 `tools/b3dview.py`, collision included.
 
 ```sh
@@ -835,16 +879,20 @@ the two renderers still agree; run it after touching either, and pass
 
 What is still missing:
 
-- **The movers.** Their art, geometry and draw path are read now
-  ([24](docs/24-the-cast.md)) — what is missing for a viewer is **where they
-  are**. They are not in the world file: `LoadStaticObjects` clears the list
-  and the game spawns rithms as it runs, through `NewMover` at `0x00a6b0`,
-  onto the circular linked list `CullMovers` walks. Read `NewMover` and its
-  callers and the city can be populated. Two smaller pieces sit beside it:
-  the rest of `DrawMover`'s 2,400 bytes (the Perfect One's three forms, the
-  stealth and hit states) and the PPMPC question — `0x018280` writes
-  `0xe288e288` for one state and the neutral `0x1f001f00` for the other, and
-  decoding that word is also what settles what the `.mask` is for.
+- **The movers stand still, and they should not.** They are placed and drawn
+  now ([25](docs/25-where-the-movers-are.md)) but each shows one frame: the
+  turntable is right and the *phase* of the walk is missing. `DrawMover` reads
+  the view from the visible entry's `+0x1c`, which is the mover's own `+0x34`,
+  and **nothing has read who writes it** — start there, and the animation
+  phase should come with it. Then the movement: `MoverDecide` at `0x004ff8` is
+  read, `0x00a608` turns a heading into `Cos`/`Sin` times an animation column,
+  and a mover that walked would need the same collision the camera already
+  has. Two smaller pieces sit beside it: the rest of `DrawMover`'s 2,400 bytes
+  (the Perfect One's three forms, the stealth and hit states) and the PPMPC
+  question — `0x018280` writes `0xe288e288` for one state and the neutral
+  `0x1f001f00` for the other, and decoding that word is also what settles what
+  the `.mask` is for. Goner's three spare palettes are unused too: the byte at
+  `+0x1e` picks one, and the pack carries no PLUT variants.
 - **The radar.** `tools/hudmap.py` gives the tile, the world-to-pixel
   transform and the rotation the CCB applies. A viewer can draw the real HUD
   map with no further reversing. `tools/armmath.py` now gives the exact
@@ -853,9 +901,12 @@ What is still missing:
   circle-versus-segment solver knows nothing about the near radar maps, where
   value 1 is open ground at two units a pixel and
   [13](docs/13-hud-maps.md) has them agreeing with the geometry to within a
-  pixel. Adding them to the pack would settle the disagreements the game
-  itself settles that way — and `STEP_OVER`, the height below which a quad is
-  scenery rather than a wall, is a guess of 16 units until they do.
+  pixel. `spawns.Probe` is now the reader, transcribed from `0x011094`, and
+  `UnstickCamera` at `0x0219f0` shows the game itself walking the camera back
+  two units a step until that probe answers 3 — so the pack has only to carry
+  the two tiles. That would settle the disagreements the game settles that way,
+  and `STEP_OVER`, the height below which a quad is scenery rather than a wall,
+  is a guess of 16 units until it does.
 - **The pixel-for-pixel check is one camera, not a claim about all of them.**
   At `--eye -279 640 30 --yaw 90 --pitch 2` the two renderers agree on
   400,000 of 400,000. At `--eye 760 380 6 --yaw 0 --pitch 0` they disagree on

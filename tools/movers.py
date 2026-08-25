@@ -148,6 +148,34 @@ def frames(path):
     return out
 
 
+def mover_art(assets, kinds, slot=RUN_SLOT, views=8):
+    """Everything a renderer needs to draw a spawned mover, per character.
+
+    The three sizes are columns of `PerfectMovers.B3D` and are not whole
+    units -- Goner's run is 6.196 by 9.674 with its base 2.319 below the
+    ground point.  They are quantised to 1/16 of a unit **here**, once, so
+    that the scene pack and the Python viewer round them the same way and can
+    still be compared pixel for pixel.
+
+    The frames are the first `views` of the animation.  A run is laid out
+    `frame = phase * 8 + view`, so those eight are one stride of the gait seen
+    from eight sides -- the turntable, without the walk.
+    """
+    disc = Disc(assets)
+    rows = {(r['char'], r['slot']): r
+            for r in cast(os.path.join(assets, 'PerfectMovers.B3D'), disc)}
+    out = {}
+    for k in kinds:
+        r = rows.get((k, slot))
+        if r is None or not r['animpath']:
+            continue
+        c = r['cols']
+        q = lambda v: round(v / 65536.0 * 16) / 16.0
+        out[k] = dict(w=q(c['width']), h=q(c['height']), z=q(c['ground']),
+                      frames=frames(r['animpath'])[:views], row=r)
+    return out
+
+
 class Disc(object):
     """Case-insensitive lookup under `Perfect/`, because the code's spelling
     and the disc's differ on a dozen files."""

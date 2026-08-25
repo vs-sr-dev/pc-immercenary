@@ -15,9 +15,9 @@ only shipping build is the 3DO ARM6 executable on the retail CD.
 
 | Path | Contents |
 |---|---|
-| `native/` | A walkable viewer of the overworld, props and item spawns included: SDL2, a software span rasteriser, 97 fps at 960x600 with 1,547 sprites in the world, and pixel-identical to the Python reference renderer |
-| `tools/` | Opera (3DO) filesystem reader, CEL/anim decoder, CEL bank reader, B3D world parser, ground tile map reader, OBJ exporter, textured software renderer, font decoder, DataStream demuxer with Cinepak and SDX2 decoders, HUD radar map decoder, ARM cross-referencer and call-graph reader, symbol-file builder, OS-surface scanner, DSP instrument reader, library-versus-game classifier, the hand-written ARM math module reimplemented and self-checking, the 512-byte game state read out of the code, a function-level pairing of the two game executables, a reachability pass over the call graph, the placed-prop reader, a scene packer for the native viewer and a frame differ |
-| `docs/` | Findings: disc layout, file formats, executables, roadmap, B3D format, code map, CEL banks, the ground, the OS surface, the second B3D family, the fonts, the DataStream, the HUD maps, the DSP instruments, library versus game code, the DOA system and its lip sync, the front end, the save game, the DOAsys spire, the final encounter, the call graph, the props, the item spawns, the cast |
+| `native/` | A walkable viewer of the overworld, props, item spawns and rithms included: SDL2, a software span rasteriser, 94 fps at 960x600 with 1,594 sprites in the world, and pixel-identical to the Python reference renderer |
+| `tools/` | Opera (3DO) filesystem reader, CEL/anim decoder, CEL bank reader, B3D world parser, ground tile map reader, OBJ exporter, textured software renderer, font decoder, DataStream demuxer with Cinepak and SDX2 decoders, HUD radar map decoder, ARM cross-referencer and call-graph reader, symbol-file builder, OS-surface scanner, DSP instrument reader, library-versus-game classifier, the hand-written ARM math module reimplemented and self-checking, the 512-byte game state read out of the code, a function-level pairing of the two game executables, a reachability pass over the call graph, the placed-prop reader, a reimplementation of the three mover spawners and the radar-map probe they place against, a scene packer for the native viewer and a frame differ |
+| `docs/` | Findings: disc layout, file formats, executables, roadmap, B3D format, code map, CEL banks, the ground, the OS surface, the second B3D family, the fonts, the DataStream, the HUD maps, the DSP instruments, library versus game code, the DOA system and its lip sync, the front end, the save game, the DOAsys spire, the final encounter, the call graph, the props, the item spawns, the cast, where the movers are |
 
 ## Quick start
 
@@ -184,9 +184,9 @@ Early, but moving. Nothing is playable yet.
   Python reference renderer draws: 400,000 of 400,000 pixels identical, props
   and item spawns included, which is the whole point of having kept a
   reference. The data side never left Python: `tools/scenepack.py` freezes the
-  walked world, the 876 decoded wall cels, the 30 ground cels, the tile map and
-  the 138 sprite frames into one 9.2 MB file, so no C in this repository parses
-  a game format.
+  walked world, the 876 decoded wall cels, the 30 ground cels, the tile map,
+  the 146 sprite frames and one run of the mover spawner into one 9.4 MB file,
+  so no C in this repository parses a game format.
 - **The call graph is closed, and there is no dispatch mechanism to find.**
   Every function in `p` is reached by a `bl`, by a tail-call `b`, or by
   having its address handed to `CreateThread` or to a subscriber registrar —
@@ -233,6 +233,22 @@ Early, but moving. Nothing is playable yet.
   the record's own easting, the canopy widened by a second roll. It had been
   written down as a random weapon spawn on the strength of an off-by-one in
   `RandomBelow`. [23](docs/23-the-item-spawns.md).
+- **The city's population is not on the disc, and now it is in the viewer.**
+  Nothing in the world file places a rithm: `LoadStaticObjects` clears the
+  character list and the game makes every mover at run time through
+  `NewMover`, from a position one of **three spawners** hands it. All three
+  work the same way — offset a random amount from an anchor, clamp into the
+  world box, and ask the radar map what is there, accepting **only open
+  ground**; miss for two ticks of the 59.9 Hz clock and the ring widens. The
+  anchors are the player (10 to 13 rithms on the way in, or 6 to 9 if you have
+  never crashed one below your rank) and **four wandering crowd centres**, one
+  per quadrant, each carrying 6 to 10 and each made and unmade as it drifts in
+  and out of the streaming window. Reading the probe also closes the radar
+  maps: the near tile's footprint is exactly a 64 x 64 block of far pixels, the
+  same block on all 256 cells, which is the "hole" in the far map arrived at
+  from the reader's side. Both renderers now run the same spawner from the same
+  seed and still agree on 400,000 of 400,000 pixels.
+  [25](docs/25-where-the-movers-are.md).
 - **The cast is resolved down to the filenames.** `PerfectMovers.B3D` gave the
   nineteen characters and their per-animation width, height and ground offset
   three sessions ago, but the animation *names* in it are read into scratch and

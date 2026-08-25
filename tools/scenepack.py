@@ -41,6 +41,8 @@ from cel import rgb555
 from floor import Floor, TILE, COL_BIAS, ROW_BIAS
 import props as propmod
 import items as itemmod
+import movers as movermod
+import spawns as spawnmod
 
 MAGIC = b'IMPK'
 VERSION = 3
@@ -49,6 +51,9 @@ QUAD = '<12h hh HH'                       # 32 bytes
 TEXENT = '<HHI'                           # 8 bytes
 PROP = '<3h 3h 3B x'                      # 16 bytes
 ANIMENT = '<HH'                           # 4 bytes
+
+# Every overworld animation is an eight-view turntable -- docs/24.
+VIEWS = 8
 
 
 def u4(v):
@@ -95,7 +100,7 @@ def flatten(im, bgnd=True):
     return w, h, bytes(out)
 
 
-def pack(b3dpath, celpath, floorpath, assets, out):
+def pack(b3dpath, celpath, floorpath, assets, out, spawn=None):
     t0 = time.time()
     b = B3D(b3dpath)
     recs, failed = b.walk()
@@ -198,7 +203,41 @@ def pack(b3dpath, celpath, floorpath, assets, out):
                     0, iidx[(i.src, i.oid)], 4)
         for i in ilist)
     props_bin += items_bin
-    nprops = len(plist) + len(ilist)
+
+    # The movers.  Nothing on the disc says where a rithm stands: `NewMover`
+    # is handed a position by one of three spawners, all of which offset a
+    # random amount from an anchor and accept only ground the radar map calls
+    # open.  tools/spawns.py is the authority; docs/25 is the read.  So the
+    # pack freezes one run of it, which is the closest a static file can come
+    # to a population the console rebuilds as you walk.
+    #
+    # A mover draws as an ordinary `sub = 3` turntable: eight views round the
+    # circle with `face` naming view zero, which for a rithm is the heading
+    # `NewMover` rolls into its `+0x24`.  The eight are the first row of the
+    # run animation -- `frame = phase * 8 + view`, so frames 0..7 are one
+    # stride seen from eight sides.  What the game does with the *phase* needs
+    # the byte at the mover's `+0x34`, which is written somewhere this project
+    # has not read yet.
+    mlist = spawn or []
+    if mlist:
+        art = movermod.mover_art(assets, {m.kind for m in mlist}, views=VIEWS)
+        mlist = [m for m in mlist if m.kind in art]
+        midx = {}
+        for kind in sorted(art):
+            midx[kind] = len(anims)
+            anims.append((len(art[kind]['frames']), len(sents)))
+            for im in art[kind]['frames']:
+                w, h, px = flatten(im, im[3])
+                sents.append((w, h, span))
+                blobs.append(px)
+                span += len(px)
+        for m in mlist:
+            a = art[m.kind]
+            props_bin += struct.pack(PROP, m.x, m.y, u4(a['z']),
+                                     u4(a['w']), u4(a['h']),
+                                     m.face, VIEWS, midx[m.kind], 8)
+
+    nprops = len(plist) + len(ilist) + len(mlist)
 
     hsz = struct.calcsize(HEADER)
     quads_off = hsz
@@ -235,10 +274,11 @@ def pack(b3dpath, celpath, floorpath, assets, out):
         for blob in blobs:
             f.write(blob)
 
-    print("%s: %d quads, %d of %d textures, %d floor cels, %d props and "
-          "%d item spawns in %d anims (%d frames), %.1f MB, %.1fs"
+    print("%s: %d quads, %d of %d textures, %d floor cels, %d props, "
+          "%d item spawns and %d movers in %d anims (%d frames), %.1f MB, "
+          "%.1fs"
           % (os.path.basename(out), len(quads), len(used), ntex, 30,
-             len(plist), len(ilist), len(anims), len(sents),
+             len(plist), len(ilist), len(mlist), len(anims), len(sents),
              os.path.getsize(out) / 1048576.0, time.time() - t0))
     if failed:
         print("  %d unwalked ranges" % len(failed))
@@ -252,8 +292,23 @@ def main():
     ap.add_argument('--floor', default='extracted/Perfect/Floor/AllFloor')
     ap.add_argument('--assets', default='extracted/Perfect',
                     help="where the props' .anim files live")
+    ap.add_argument('--hud', default=spawnmod.HUD,
+                    help='the .Maps the spawner probes')
+    ap.add_argument('--spawn-seed', type=int, default=1,
+                    help='the seed the population is rolled from')
+    ap.add_argument('--spawn-eye', type=int, nargs=2, default=[-279, 640],
+                    help='where the player walks in')
+    ap.add_argument('--crowds', choices=('all', 'inrange'), default='all',
+                    help="'inrange' is what the console would have alive at "
+                         "--spawn-eye; 'all' fills every quadrant, so there "
+                         "is something to walk to")
+    ap.add_argument('--crashes', type=int, default=20,
+                    help='lower-rank crashes, which is what caps the entry')
+    ap.add_argument('--no-movers', action='store_true')
     a = ap.parse_args()
-    pack(a.b3d, a.cels, a.floor, a.assets, a.out)
+    pack(a.b3d, a.cels, a.floor, a.assets, a.out,
+         None if a.no_movers else spawnmod.population(
+             a.spawn_seed, tuple(a.spawn_eye), a.hud, a.crowds, a.crashes))
 
 
 if __name__ == '__main__':

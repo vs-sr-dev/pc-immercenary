@@ -1,0 +1,346 @@
+# 25. Where the movers are
+
+[24](24-the-cast.md) resolved the cast's art and its geometry: which file an
+animation number opens, how big the sprite is, which of the eight views is
+drawn. What it could not answer was the question a viewer actually needs —
+**where the rithms stand**.
+
+They are not in the world file. `LoadStaticObjects` at `0x015c04` clears the
+character list and hand-writes twenty static objects; no record kind in
+`CondensedPerfectWorld.B3D` is a mover, and no loader on the disc reads one.
+The city's population is made at run time by `NewMover` at `0x00a6b0`, from
+three arguments — a character id and an `(x, y)` pair in 16.16 — and the
+question reduces to which callers supply that pair, and with what.
+
+Sixteen call sites. Eleven of them are the encounters and the arenas, one
+mover apiece with a scripted position. **Three** are the overworld, and
+between them they are the whole ecology.
+
+The read is [`tools/spawns.py`](../tools/spawns.py), which reimplements all of
+it — the generator, the world box, the radar probe, the placement loop and
+the four crowds — and checks fourteen claims against the disc:
+
+```sh
+python tools/spawns.py --verify
+python tools/spawns.py --enter
+python tools/spawns.py --zones
+python tools/spawns.py --png out/spawns.png
+```
+
+## `NewMover` allocates a point in the table every entity shares
+
+Before anything else, the shape of a mover. `0x00a6b0` takes `AllocMem(0x90)`
+from the pool at `[[[0x057b0c]+0x98]+0xa8]`, zeroes it, and then does one
+thing that matters more than the rest:
+
+```
+0000a74c   [0x0584a8]                     ; a cursor, -1 in the image
+0000a76c   lr = [0x07bac8 + slot * 8]
+0000a774   ip = lr - 0x13800000
+0000a778   teq ip, #0x80000               ; free when X == 5000.0
+0000a79c   if slot == count: count++      ; [0x0582bc], and extend
+0000a7bc   [mover + 0x1c] = 0x080ec0 + slot * 8
+0000a7c4   [0x07bac8 + slot * 8]     = x  ; the first argument
+0000a7cc   [0x07bac8 + slot * 8 + 4] = y  ; the second
+```
+
+`0x07bac8` and `0x080ec0` are not mover tables. They are **the world-space and
+camera-space point tables every entity shares** — the ones
+`ParseWorldRecord` allocates from for a prop or an item spawn and
+`CameraTransform` transforms wholesale once a frame ([06](06-code-map.md)).
+A mover takes a slot in the same array and keeps a pointer into the
+camera-space half at its `+0x1c`, which is exactly what `CullMovers` reads.
+
+The free-slot sentinel is **5000.0**, written into a slot's X when its owner
+dies. The world box stops at 2146, so the sentinel can never be mistaken for
+a position — `--verify` checks that against the `.B3D` header.
+
+The rest of the constructor is bookkeeping already written down in
+[06](06-code-map.md) and [10](10-second-b3d-family.md): the character id as a
+16-bit big-endian pair at `+0x14`, again at `+0x32`; the DOA triple at `+0x58`
+and the maxima at `+0x64`; a rank at `+0x20`; the record on the tail of the
+`CharacterList`, a plain kernel `List` at `0x06b20c` whose anchor is why
+`CullMovers` sees a circular chain.
+
+### There are two random functions, not one
+
+`0x038c40` sits immediately after `RandomBelow` and is the same eight
+instructions, with the multiply replaced by a shift. Every argument in this
+document goes to one or the other, so it is worth being exact about which:
+
+```
+RandomBelow  0x038c00     result = (n * (2 * rand())) >> 32     ; 0 .. n-1
+RandomBits   0x038c40     result = ((2 * rand()) << k) >> 32    ; 0 .. 2^k-1
+```
+
+`NewMover` picks a crowd rithm's DOA profile with `RandomBits(2)` and switches
+on the answer four ways: a flat 2.5 at `0x00a850` and the three permutations
+of 1.5, 2.0 and 3.5 at `0x00a868`, `0x00a884` and `0x00a828`. Reading the call
+as `RandomBelow(2)` would leave two of those four unreachable, which is the
+check that the shift is a shift — the generic rithm comes in four builds.
+
+The generator underneath is a 54-word additive lagged Fibonacci over Knuth's
+`69069` LCG, `0x04e448` and `0x04e4a8`. The image ships its table **already
+filled by `srand(1)`**, the ANSI default, which is what pins every constant:
+`tools/spawns.py --verify` rebuilds all 54 words and the two cursors from the
+seed and compares them with the bytes at `0x05d540`.
+
+### And it settles SWI 1:17
+
+[09](09-os-surface.md) left `1:17` open — no arguments, a return value, three
+call sites in three programs, and *"both throw the result away"*. `p` does
+not. `BuildReciprocalTable` ends:
+
+```
+00014404   svc #0x10011
+00014408   ldmdb fp, {r4, r5, r6, fp, sp, lr}   ; r0 is not restored
+0001440c   b   #0x04e4a8                        ; srand
+```
+
+A tail call, which is why it read as a discard. The SWI's return value is the
+seed of the game's random number generator, and `launchme` takes six coin
+flips out of the same call. Three programs, no arguments, two consumers that
+both want fresh bits: `1:17` is the kernel's clock or entropy sample —
+`SampleSystemTimeTT` on the Portfolio kernel is the call that fits — and the
+city's population is different on every run because of it.
+
+## Every placement is the same eleven instructions
+
+`0x009748`, `0x0089a8` and `0x0086b8` are the same loop three times over.
+Offset an anchor by a random amount, clamp into the world box, ask the radar
+map what is there, and accept only open ground:
+
+```
+000089a8   dx = RandomBits(bits) - off
+000089b4   dy = RandomBits(bits) - off
+000089d8   ClampToWorld(&dx)              ; 0x0065a4, against 0x058434..40
+000089e4   MapProbe(x, y)                 ; 0x011094
+000089e8   teq r0, #3                     ; 3 is open ground, nothing else
+000089f0   if AudioTicks() <= deadline: retry
+00008a10   off = 1 << bits; bits++        ; widen, deadline = now + 2
+000089fc   if widened three times: give up
+```
+
+The deadline is two ticks of `0x04437c`, the audio folio's counter at 59.9 Hz
+— about 33 ms — so how many candidates one ring gets depends on the machine.
+A port has to pick a number; `tools/spawns.py` takes `--tries`. The widening
+rule and the give-up are exact, and so is one asymmetry: the crowd spawner
+doubles its offset outright (`1 << bits`), the shape spawner halves it first
+(`1 << (bits - 1)`), because one offset is a half-span and the other a floor.
+
+| | anchor | first ring | after one widening | gives up |
+|---|---|---|---|---|
+| `0x0088ac` burst | the player | ±128 | ±256 | after three |
+| `0x00862c` crowd | a crowd centre | ±128 | ±256 | after three, and wants one fewer |
+| `0x009544` shape | the player | 64 … 319 | 128 … 639 | never |
+
+## The probe is the radar map, read correctly
+
+`0x011094` is where the near `.Maps` tile earns a second job. Its addressing
+is `SetHUDPixel`'s, transcribed in [13](13-hud-maps.md) — two world units a
+pixel, 64 bytes a row, two bits a pixel — but where `SetHUDPixel` shifts from
+the low end and plots a blip up to three pixels from where it was asked, the
+probe shifts the byte **left** by `2x & 7` and takes bits 7-6. That is
+MSB-first, the CEL engine's order, the same order the art is stored in. The
+reader is right; only the writer is mirrored.
+
+It also remaps, at `0x01114c`, and the remap is not the identity:
+
+| stored | meaning ([13](13-hud-maps.md)) | probe returns |
+|---|---|---|
+| 0 | solid — the inside of a building | 0 |
+| 1 | open ground | **3** |
+| 2 | wall | 2 |
+| 3 | encounter site | 1 |
+
+Off the near tile it falls through to `0x011180` and the far map, one bit a
+pixel at eight units: set is solid and returns 0, clear returns 3. Off both,
+or with no map loaded, it returns 3 — open.
+
+### The two tiles are complementary to the pixel
+
+The near tile is its cell plus 128 units on every side: 512 units square. The
+far tile is its cell plus 512: 1280 units square, which is exactly the 5 x 5
+block of cells `BuildCellList` keeps resident. Walk a far tile's own 160 x 160
+pixels and ask which map would answer each of them, and the near tile accounts
+for **a 64 x 64 block at far pixels x 49-112, y 49-112 — the same block on all
+256 cells**. Every point in the streaming window has exactly one map that
+answers it, and never two.
+
+That block is [13](13-hud-maps.md)'s "far map's hole", arrived at from the
+other side. Over all 256 tiles the far map is **1.13% set inside it against
+16.95% outside**, a fifteenfold drop. The hole is not missing data: it is the
+region the probe never asks the far map about, because the near one is
+sharper there.
+
+## Three spawners
+
+### `0x0088ac` — walking in
+
+Called once, from `0x00835c`, the routine that builds the `CharacterList` and
+the four crowds. After topping up whichever crowds are in range it makes its
+own burst around the player:
+
+```
+00008948   n = RandomBits(2) + 10                       ; 10 .. 13
+00008958   if [0x89d40+0x3c] + [0x89d40+0x58] == 0:
+00008974      n = RandomBits(2) + 6                     ; 6 .. 9
+```
+
+Those two words are the same counter in the stats block's two columns, this
+jump and the total ([18](18-the-save-game.md)): **Lower Crashes**. A save that
+has never crashed a rithm below its own rank walks into a quieter city.
+
+### `0x00862c` — a crowd
+
+Four 44-byte records at `0x089c90`, built by `0x0083d0(4)`, one per quadrant
+of the world box:
+
+```
+00008400   halfW = [0x0584e0] >> 17       ; the world is 4095 x 4095
+0000853c   x = minX + RandomBelow(halfW)  or  midX + RandomBelow(halfW)
+0000855c   y = maxY - RandomBelow(halfH)  or  midY - RandomBelow(halfH)
+00008468   want = RandomBelow(5) + 6      ; 6 .. 10, flag bits 13-16
+```
+
+`0x00862c` tops one crowd up to `want` and sets `have = want`. Every rithm it
+makes is character **0**, the generic rithm — the one character with three
+spare palettes, which [24](24-the-cast.md) noticed and could not explain.
+This is why: it is the only shape the city is full of.
+
+`0x006768` drives them per frame. Each crowd walks towards a target cell,
+retargeting every `0x4b0` ticks — twenty seconds — by taking `AudioTicks() & 7`
+as a compass point and stepping the target 256 units that way, clamped to the
+world. Its heading is `ATan2` of the difference and its velocity `Cos` and
+`Sin` of that, both `>> 4`. Then:
+
+```
+00006a74   CellMask(x, y)                 ; 0x01170c: one bit for the column,
+00006a80   if (mask & [0x058414]) == mask ;          one for the row
+00006a98      if not live: FillCrowd(i)   ; 0x00862c
+00006ab4   else if live:  EmptyCrowd(i)   ; 0x008804, walks the list and frees
+```
+
+`[0x058414]` is `BuildCellList`'s 5 x 5 window. So a crowd is **made when its
+centre drifts into the streaming window and unmade when it drifts out**, and
+the far radar tile covers exactly that window, which is why the probe always
+has an answer for a crowd that is being filled.
+
+### `0x009544` — the shape cache turning
+
+The third spawner is the one that places a *named* rithm. It runs on
+`LoadWorldCels`, the streaming thread, over the two slots of the rithm shape
+cache, and it places `min(count, cap, budget)` of each newly loaded shape:
+
+```
+00009644   count = 10..11 for shapes 0-2, 7..8 for 3, 5..6 for 4, 4 for 5,
+                  2 for 6, and 1 for anything above
+0000959c   cap   = max(1, (jumpLowerCrashes + totalLowerCrashes) / 2)
+000096ac   cap   = 2 if the shape outranks your tier
+000096e4   budget = [0x089d40 + 0x9c + shape * 4]
+```
+
+The cap is the same Lower Crashes pair again. A new save's cap is **1**: the
+city fills up as you empty it.
+
+Its placement is the annulus, 64 to 319 units, and it remembers where the last
+one went:
+
+```
+00009760   quadrant 1: flip dx against the last accepted dx
+           quadrant 2: flip dy
+           quadrant 3: flip both
+           quadrant 0: two coin flips
+00009814   quadrant = (quadrant + 1) & 3
+```
+
+Four consecutive rithms land in four different quadrants around you.
+
+One sequencing detail that looks like a bug and is not: a slot whose wanted
+shape is already one of the two live ones is skipped outright at `0x0095e0`,
+and `0x00835c` clears both pairs to zero before the first pass. So on the
+first run of `LoadWorldCels` `wanted == live == 0` and this spawner places
+nothing; it calls `RithmShapeCache` at its tail, which *chooses* the pair, and
+the next pass is the one that spawns them.
+
+## The city is populated
+
+**There is no authored mover placement anywhere on the disc.** A viewer cannot
+read the population out of the world file, because the game does not either.
+What it can do is run the same three spawners against the same radar maps —
+which is what both renderers now do, from the same seed, through
+`spawns.population()`:
+
+```sh
+python tools/scenepack.py out/world.pack          # --spawn-seed, --spawn-eye
+native/view.exe out/world.pack
+```
+
+A mover needs no new draw path. It is a `sub = 3` turntable prop: eight views
+round the circle, `face` naming view zero, and for a rithm that is the heading
+`NewMover` rolls into its `+0x24` at `0x00ac10`. Its width, height and ground
+offset are three columns of `PerfectMovers.B3D` ([10](10-second-b3d-family.md))
+— 6.196 by 9.674 with its base 2.319 below the ground point, for Goner's run —
+quantised once in `movers.mover_art` so that the pack's 12.4 and the Python
+renderer's floats round the same way.
+
+The eight frames are the first eight of the run animation. A run is laid out
+`frame = phase * 8 + view`: frames 0 to 7 are one stride of the gait seen from
+eight sides, and the next eight the next stride. So the turntable is right and
+the walk is missing, which is the honest state of it — the *phase* the game
+shows comes from the byte at the mover's `+0x34`, and nothing has read who
+writes it.
+
+```sh
+python tools/b3dview.py extracted/Perfect/CondensedPerfectWorld.B3D        out/movers.png --cels extracted/Perfect/PerfectWorld.CELS        --floor extracted/Perfect/Floor/AllFloor --assets extracted/Perfect        --eye -292 636 8 --yaw -161.6 --fov 30 --size 480 360
+```
+
+That one is a rithm on the road, forty units off, between the trees.
+
+The check that both renderers still agree survives the addition:
+
+| camera | identical | note |
+|---|---|---|
+| `--eye -279 640 30 --yaw 90 --pitch 2` | 400,000 / 400,000 | 26 movers in frame |
+| `--eye 760 380 6 --yaw 0 --pitch 0` | 399,980 / 400,000 | the same 20 as before movers existed |
+
+94.1 fps at 960 x 600 against 96.8 without them, for 47 more sprites in the
+world.
+
+One thing the pack cannot reproduce: the console has no static population.
+A crowd is made when its centre drifts into the streaming window and freed
+when it drifts out, so whatever a file holds is a snapshot. `--crowds
+inrange` freezes what would actually be alive at `--spawn-eye`; the default
+`all` fills every quadrant, so a viewer that can walk the whole city finds
+something in each of them.
+
+## The numbers
+
+For one walk in at `(-279, 640)` with twenty lower crashes behind you: 37
+rithms in the four crowds, 10 more around the player, and up to two more each
+time the shape cache turns. Every one of them on ground the probe calls open —
+`--verify` places 146 across nine seeds and cells and finds none that is not,
+and all 146 land in the first ring.
+
+Across all 256 near tiles, **74.03%** of the city is open ground and can take
+a rithm, which is the same figure [13](13-hud-maps.md) measured from the art.
+`--png` draws a whole run over the stitched map: the four crowd centres in red,
+their rithms in yellow, the entry burst in green and the shape cache's own in
+pink, and every one of them on the open half of the city.
+
+## Twelve functions named
+
+| Address | What it is | Identified by |
+|---|---|---|
+| `0x011094` | `MapProbe(x, y)` — the near radar tile at two units a pixel, falling through to the far one | `teq r0, #3` at every caller |
+| `0x01170c` | `CellMask(x, y)` — one bit for the column, one for the row, against `[0x058414]` | the two `1 << i` tables at `0x0584f8` and `0x058538` |
+| `0x0065a4` | `ClampToWorld(pair)` — an `(x, y)` pair into `0x058434`..`0x058440` | four compares, four conditional stores |
+| `0x038c40` | `RandomBits(k)` — `RandomBelow` with the multiply replaced by a shift | `lsl r1, r1, r4` at `0x038c6c` |
+| `0x04e448` | `RandomWord` — 54-word additive lagged Fibonacci, two cursors at `0x05d618` | `movmi r0, #0x35` twice |
+| `0x04e4a8` | `SeedRandom(seed)` — 69069 and `x + (x >> 16)`, 54 words | the image's own table is `srand(1)` |
+| `0x0083d0` | `NewCrowds(n)` — one 44-byte record per quadrant at `0x089c90` | the four arms at `0x0084b4` |
+| `0x00862c` | `FillCrowd(i)` — tops one crowd up to its `want`, lowering it if the city will not take another | flag bits 9-12 against 13-16 |
+| `0x008804` | `EmptyCrowd(i)` — walks the `CharacterList` and frees that crowd's rithms | `0x06b220`, the list anchor |
+| `0x0088ac` | `PopulateWorld` — the crowds in range, then 6..13 around the player | `RandomBits(2) + 10` |
+| `0x009544` | `SpawnNewShapes` — the shape cache's own spawner, on the streaming thread | `LoadWorldCels`'s only game call |
+| `0x006768` | `UpdateCrowds` — drift, retarget, fill and empty, once a frame | `AudioTicks() & 7` as a compass |

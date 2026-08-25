@@ -176,15 +176,30 @@ globals that receive a `CreateThread` return and the set that receive an
 `AllocSignal` return, then check which register each site draws from which set.
 `1:9` was proved by the absence of one — no site anywhere writes `r0` for it.
 
-**`1:17` is the interesting one still open.** It takes no arguments and
-returns a value. `p` calls it once, at the tail of `BuildReciprocalTable`
-right after `AllocSignal(0)`; the front end calls it once, as the first
-instruction of `main`; both throw the result away. `launchme` calls it at the
-moment you crash and uses the low six bits as six independent coin flips to
-decide what a crash costs you ([18](18-the-save-game.md)). Three call sites
-in three programs, no arguments, and one consumer that wants fresh bits — but
-that is an argument for a random source, not a proof, and `1:5` is the
-standing reminder of what naming a SWI by the company it keeps costs.
+**`1:17` is a source of fresh bits, and `p` is the second consumer.** It
+takes no arguments and returns a value. `launchme` calls it at the moment you
+crash and uses the low six bits as six independent coin flips to decide what a
+crash costs you ([18](18-the-save-game.md)). `p` calls it once, at the tail of
+`BuildReciprocalTable` right after `AllocSignal(0)` — and it does *not* throw
+the result away, which is what this document said for eleven sessions:
+
+```
+00014404   svc #0x10011
+00014408   ldmdb fp, {r4, r5, r6, fp, sp, lr}   ; r0 is not restored
+0001440c   b   #0x04e4a8                        ; SeedRandom
+```
+
+A tail call, which is why it read as a discard. The value is the seed of the
+game's random number generator, so the whole procedural half of Perfect —
+which rithms stand where, what each one is built from
+([25](25-where-the-movers-are.md)) — comes out of it. The front end still
+calls it as the first instruction of `main` and still drops the result.
+
+Two programs, no arguments, two independent consumers that both want
+unpredictable bits: `SampleSystemTimeTT` is the Portfolio call that fits, and
+that last step is still an inference from the shape rather than from the code
+— `1:5` is the standing reminder of what naming a SWI by the company it keeps
+costs.
 
 One field of `KernelBase` falls out of the same reading: **`+0x98` is the
 current task**. `p` reaches `KernelBase->[0x98]->[0x18]` at `0x0143e4`, the

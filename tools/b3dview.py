@@ -22,6 +22,8 @@ from celbank import Bank
 from floor import Floor, TILE
 import props as propmod
 import items as itemmod
+import movers as movermod
+import spawns as spawnmod
 
 
 def flat_hue(texid):
@@ -228,7 +230,7 @@ UV_FLOOR = ((0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0))
 
 def render(path, out, eye, yaw, pitch, fov=70.0, size=(800, 500), far=6000.0,
            cels=None, allfloor=None, floor_radius=40, assets=None, clock=0.0,
-           draw_props=True):
+           draw_props=True, spawn=None):
     b = B3D(path)
     recs, failed = b.walk()
     bank = Bank(cels) if cels else None
@@ -407,11 +409,46 @@ def render(path, out, eye, yaw, pitch, fov=70.0, size=(800, 500), far=6000.0,
             r._sprite(sx - 0.5 * it.w * f * iz, sx + 0.5 * it.w * f * iz,
                       sbot - it.h * f * iz, sbot, iz, shade, tex)
             ni_ += 1
+
+    # The movers. Nothing on the disc places them: docs/25 reads the three
+    # spawners and tools/spawns.py runs them, and the scene pack freezes the
+    # same run from the same seed -- which is the only way this renderer and
+    # the native one can be compared with a population in the frame. Drawn as
+    # a `sub = 3` turntable: eight views, `face` the heading NewMover rolled.
+    nm_ = 0
+    if draw_props and assets and spawn:
+        art = movermod.mover_art(assets, {m.kind for m in spawn})
+        mtex = {k: [Texture(im[0], im[1], im[2], im[3])
+                    for im in v['frames']] for k, v in art.items()}
+        for m in spawn:
+            if m.kind not in art:
+                continue
+            if (m.x - ex) ** 2 + (m.y - ey) ** 2 > far * far:
+                continue
+            a = art[m.kind]
+            frames = mtex[m.kind]
+            tex = frames[propmod.view_frame(int(m.x - ex), int(m.y - ey),
+                                            m.face, len(frames), len(frames))]
+            x, y, z = m.x - ex, m.y - ey, a['z'] - ez
+            fx = x * cy + y * sy
+            rx = -x * sy + y * cy
+            fz = fx * cp + z * sp
+            uz = -fx * sp + z * cp
+            if fz <= 1.0:
+                continue
+            iz = 1.0 / fz
+            sx = W / 2 - rx * f * iz
+            sbot = H / 2 - uz * f * iz
+            shade = FADE_SHADE[propmod.depth_shade(fz)]
+            r._sprite(sx - 0.5 * a['w'] * f * iz, sx + 0.5 * a['w'] * f * iz,
+                      sbot - a['h'] * f * iz, sbot, iz, shade, tex)
+            nm_ += 1
     r.png(out)
     print("%s: %d wall quads%s%s from (%d,%d,%d) yaw=%g pitch=%g%s -> %s"
           % (os.path.basename(path), nq,
              ", %d floor tiles" % nf if ground else "",
              ", %d props" % np_ + (", %d items" % ni_ if ni_ else "")
+             + (", %d movers" % nm_ if nm_ else "")
              if np_ else "", ex, ey, ez, yaw, pitch,
              ", %d textures" % len([tt for tt in cache.values() if tt]) if bank else "",
              out))
@@ -437,9 +474,18 @@ def main():
     ap.add_argument('--time', type=float, default=0.0,
                     help='seconds, for the clock-animated props')
     ap.add_argument('--no-props', action='store_true')
+    ap.add_argument('--no-movers', action='store_true')
+    ap.add_argument('--hud', default=spawnmod.HUD)
+    ap.add_argument('--spawn-seed', type=int, default=1)
+    ap.add_argument('--spawn-eye', type=int, nargs=2, default=[-279, 640])
+    ap.add_argument('--crowds', choices=('all', 'inrange'), default='all')
+    ap.add_argument('--crashes', type=int, default=20)
     a = ap.parse_args()
+    spawn = None if a.no_movers else spawnmod.population(
+        a.spawn_seed, tuple(a.spawn_eye), a.hud, a.crowds, a.crashes)
     render(a.b3d, a.png, a.eye, a.yaw, a.pitch, a.fov, tuple(a.size), a.far,
-           a.cels, a.floor, a.floor_radius, a.assets, a.time, not a.no_props)
+           a.cels, a.floor, a.floor_radius, a.assets, a.time, not a.no_props,
+           spawn)
 
 
 if __name__ == '__main__':
