@@ -5,6 +5,48 @@ open-ended research.
 
 ## Done in session 19
 
+- **Both arctangents are transcribed, and there really are two.**
+  `MoverFrame` writes a mover's bearing byte with the octant ramp `0x0184b4`
+  and `MoverAim` turns a target into a heading with **`ATan2Fine`**
+  `0x04cd00` -- eight octants, then `DivUF16(min, max)` into a **257-word
+  table** at `0x0590f4` with the low eight bits interpolating. The table is
+  `round(atan(i/256) * 2^24 / 2pi)` to the unit, 258 words, immediately
+  before the sine table `armmath.py` already reads, in both images. The
+  divide is Operamath folio vector **-12**, the last of the eight with no
+  name. Both are in [`tools/armmath.py`](tools/armmath.py) now, worst error
+  43 of 16,777,216 against `math.atan2`, and the two disagree with each other
+  by up to **four whole units of 256**.
+- **`MoverAim` is transcribed, and it has a door in it.** Four cases on
+  `+0x70` -- you, the destination pair, another mover, and **0 for the world
+  origin**, which is the DOAsys and which only *mark* writes. But arm 0 of
+  its nineteen-arm table is the **Goner**, and a Goner with `+0x18` bit 6
+  clear never looks at its own target at all.
+- **`0x006ac8` is `CrowdAim`, and it is the pack.** Quiet, a crowd is a knot
+  of rithms facing their own centre. `ResolveHit` sets bit 8 of the crowd
+  word when you shoot one of them, and from then on **every Goner of that
+  crowd turns on you and fires every time it aims** -- once every thirty
+  ticks, on top of `MoverShoot`'s own deadline. Three more things come with
+  the bit: they take the crowd's **second** rate at `+0x1c`, which
+  `NewCrowds` writes as exactly **double** the first (0x3000 -> 0x6000); they
+  go on firing after their Offense reaches zero, because the test is `< 0`
+  and the clamp is after the shot where `MoverShoot`'s is `== 0` before it;
+  and the alarm is called off two ways -- `ResolveHit` itself once the crowd
+  is down to **four or fewer**, and `UpdateCrowds` once its centre is **256
+  units from you in either axis**. Kill enough of them, or walk away.
+- **`+0x18` bit 6 is the loner bit.** `FillCrowd` clears it, the entry burst
+  and `CrashMover`'s replacement set it. It picks the aim *and* the rate: a
+  loner carries its own rate at `+0x42` and everyone else takes its crowd's.
+- **The walk is driven by the states, in Python.** `behave.StateWalk` is
+  `MoverFrame` with the whole of `MoverThink` under it and `spawns.Walk`'s
+  own `TurnMover`/`MoverStep` below that, borrowed unchanged -- `Body` now
+  carries `spawns.Walker`'s field names. `--live` runs the real
+  `spawns.population()` and the rithms decide, walk there, arrive and decide
+  again; `--live --shoot` puts one bullet in and turns 1 shot in thirty
+  seconds into 477. `spawns.Walk` is **untouched on purpose**: it is what
+  `native/view.c` matches and `packdiff --walk` still reports 0 differing.
+- [28](docs/28-what-a-decision-does.md) grew four sections; `behave.py` is
+  **153 checks** and `armmath.py` **20**.
+
 - **`0x006128` is read, and it is the trigger.** `MoverThink`'s third
   deadline is **`MoverShoot`**: no Offense at `+0x5c` or no target at `+0x70`
   and it refuses; the range is *half the draw distance + 4 × cid* — 79 units
@@ -1094,28 +1136,27 @@ after touching either renderer, and pass `--assets extracted/Perfect` to
 
 What is still missing:
 
-- **The rithms still run state `0x40`, and everything above it is now
-  transcribed.** `MoverDecide`, `MoverEnterState`, `MoverStateDone`,
-  `PickDestination`, `PickCompanion`, `NearestMover`, `NearestSource` and the
-  drink are all in [`tools/behave.py`](tools/behave.py) and all verified
-  ([26](docs/26-the-decision.md), [27](docs/27-the-doa-field.md),
-  [28](docs/28-what-a-decision-does.md)). One routine stands between here and
-  a rithm that chases you:
-  - **`MoverAim`'s target arm**, `0x00607c` — four cases on `+0x70`: −1 the
-    player, 1 the destination pair, 0 the **world origin**, otherwise another
-    mover. Read, four lines of Python, and blocked on one thing: it turns the
-    answer into a bearing with **Operamath's `ATan2` at `0x04cd00`**, a
-    table-driven routine over `0x0590f4` reached through the divide at
-    `0x04cca0` — *not* the octant ramp at `0x0184b4` that `MoverFrame` uses
-    for the bearing byte and that `behave.atan2_units` already has. Two
-    different arctangents in one frame. Transcribe `0x04cd00` into
-    [`tools/armmath.py`](tools/armmath.py) beside `Sin`/`Cos`/`MulSF16` — it
-    is the same shape of job and the table is in the image.
-  - Then wire `Body`'s new fields into `spawns.Walker`, drive the walk from
-    the states instead of from the scramble, and only then port to
-    `native/view.c`. `TurnMover`'s gradual arm is in both renderers already
-    and has never been exercised; it will be, the moment a rithm has a
-    destination it did not snap to.
+- **The rithms still run state `0x40`, and it is now the only thing left
+  between the viewer and a city that fights back.** Every routine above it is
+  transcribed *and* verified in Python, and `behave.StateWalk` drives the
+  whole frame; what is missing is on the C side.
+  - **`native/view.c` still runs the scramble.** Everything above it is
+    transcribed and verified in Python: `MoverDecide`, `MoverEnterState`,
+    `MoverStateDone`, `MoverAim`, `CrowdAim`, `MoverShoot`, the pickers, the
+    drink and both arctangents ([26](docs/26-the-decision.md),
+    [27](docs/27-the-doa-field.md), [28](docs/28-what-a-decision-does.md)).
+    `behave.StateWalk` is the whole frame and it works. The job is now a
+    **port**, not a read: carry `Body`'s fields into `native/view.c`'s mover
+    struct, put `MoverThink` where the scramble aim is, and swap
+    `spawns.Walk.tick` for `StateWalk.tick` so that `packdiff --walk` covers
+    the new walk on both sides. Do the two ends together -- the moment either
+    one moves alone the check goes red, and it is the only check there is.
+  - `TurnMover`'s **gradual** arm is in both renderers and has never been
+    exercised, because a scrambled rithm snaps. Every state but the scramble
+    goes through it, so the port is also the first real test of it.
+  - `ResolveHit`'s thirteen arms at `0x00bff0` are the other half of the
+    shot: what a hit *does*. The crowd alarm is one line of it, the +0x77 hit
+    credit another, and nothing else in it is read.
 
   `behave.py` is the authority and `packdiff --walk` is the check, exactly as
   the walk went.
@@ -1211,9 +1252,9 @@ What is still missing:
   and nothing proves it.
 - ~~**`0x006128`, `MoverThink`'s third deadline**~~ is read: it is
   `MoverShoot`, and reading `p1e` `0x0198f4` first is what made it quick, for
-  the third time running. **There is no unread routine left in the mover
-  loop.** What is left in the *shot* is `0x006ac8`, `SpawnShot`'s other
-  caller, and `ResolveHit`'s thirteen arms at `0x00bff0`.
+  the third time running. `0x006ac8`, `SpawnShot`'s other caller, is read too
+  -- it is `CrowdAim`. **There is no unread routine left in the mover loop.**
+  What is left of the *shot* is `ResolveHit`'s thirteen arms at `0x00bff0`.
 - **`Floor/SpirePad.Cel`, loaded at `0x03238c`**, and `0x01a9c4`, called from
   `DrawItemSpawn`, are the *drawn* half of the DOA field
   ([27](docs/27-the-doa-field.md)): floor tile 13 is the pad and `0x01a9c4`
@@ -1235,6 +1276,21 @@ What is still missing:
   consumes it.
 
 ## Notes to self
+
+- **When a table is one entry longer than it needs to be, that is the
+  interpolator asking for room.** `ATan2Fine`'s table is 257 entries and the
+  258th is a copy of the 257th. It looks like padding and it is not: the
+  interpolation reads `T[i]` and `T[i + 1]`, and `i` reaches 256 exactly when
+  `min == max`. The duplicate is multiplied by a weight of zero every time it
+  is read. A port that ships 257 words and stops walks off the end once every
+  time a rithm faces a perfect diagonal.
+- **A jump table with nineteen identical arms has the interesting ones in the
+  two that differ.** `MoverAim` dispatches on the character id into nineteen
+  branches and seventeen of them go to the same address. It would have been
+  easy to read the default and move on -- and the two exceptions are Medusa's
+  encounter aim and, in arm 0, the entire overworld crowd, which does not use
+  `MoverAim`'s target logic at all. Read the odd arms of a jump table first;
+  the default is the part you can infer.
 
 - **Tabulating a switch is not transcribing it.** `docs/26` §4 and §5 read
   all thirty arms of `MoverEnterState` and `MoverStateDone` and wrote them

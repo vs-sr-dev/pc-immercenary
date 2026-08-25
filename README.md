@@ -253,6 +253,23 @@ Early, but moving. Nothing is playable yet.
   the record's own easting, the canopy widened by a second roll. It had been
   written down as a random weapon spawn on the strength of an off-by-one in
   `RandomBelow`. [23](docs/23-the-item-spawns.md).
+- **Shoot one rithm and the whole crowd turns on you.** `MoverAim`'s
+  nineteen-arm table has seventeen identical arms and two that are not, and
+  arm 0 -- the Goner, which is every rithm in the overworld crowd -- goes
+  somewhere else entirely. `0x006ac8` is the pack: quiet, a crowd is a knot of
+  rithms all facing their own centre and milling; **alarmed**, every one of
+  them turns on whoever hit one of them and fires on the spot every time it
+  aims, once every thirty ticks, on top of its own trigger. `ResolveHit` rings
+  the alarm and puts *your* index in the word when the shot was yours, the
+  crowd takes its **second** base rate -- exactly double the first, 0.1875 to
+  0.375 world units a tick -- and it keeps firing after its Offense runs out,
+  because that test is `< 0` with the clamp after the shot where the other
+  one is `== 0` before it. Two things call it off: killing the crowd down to
+  four, and walking 256 units away. And the frame turns out to carry **two
+  arctangents**: the bearing byte at a mover's `+0x37` comes from a
+  three-instruction octant ramp and the heading a rithm turns to comes from a
+  257-word interpolated table, and the two disagree by up to five and a half
+  degrees. [28](docs/28-what-a-decision-does.md).
 - **A rithm shoots to spend the Offense it walks across the city to refill.**
   `MoverThink`'s third deadline, `0x006128`, was the last unread routine of
   the mover loop and it is the **trigger**. Range is the only hard cut in it —

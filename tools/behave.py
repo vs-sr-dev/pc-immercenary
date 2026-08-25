@@ -861,6 +861,9 @@ class World:
         self.image, self.now, self.tries = image, now, tries
         self.records = character_records(movers_b3d)
         self.homes = home_boxes(image)
+        self.crowds = [Crowd() for _ in range(4)]
+        from armmath import ATan2Fine
+        self.atan2 = ATan2Fine(open(image, 'rb').read())
 
 
 def set_gait(m, g):
@@ -1185,6 +1188,139 @@ def city_power_off(pl):
     on, and the vote is free to send it somewhere else.
     """
     return 1 if pl.power == 0 else 0
+
+
+# ---------------------------------------------------------------------------
+# What a rithm turns to face, and the crowd that turns with it
+#
+# `MoverAim` is `MoverThink`'s second deadline and the smallest of the three,
+# and it has a door in it: a **crowd** Goner does not aim at its own `+0x70`
+# at all.  It aims where its crowd is looking, and when the crowd has been
+# shot at it fires every time it aims.
+# ---------------------------------------------------------------------------
+CROWD_RATE = 0x3000             # `0x0085b8`, 0.1875 units a tick
+CROWD_ALARMED = 0x6000          # `0x0085c0`, and double that once you shoot
+AIM_MOVING = 0x1e               # `0x006468`, thirty ticks while it walks
+AIM_STILL = 0x3c                # `0x006460`, and sixty while it stands
+ALARM_RANGE = 0x1000000         # `0x006a5c`, 256 units in either axis
+ALARM_FLOOR = 4                 # `0x00c4f0`, a crowd this small gives up
+
+
+class Crowd:
+    """The 44-byte record at `0x089c90 + i * 44`, as much as the aim reads.
+
+    `spawns.Zone` models the same record for the spawners and carries the
+    centre and the two population counts; this is the rest of the flags word
+    and the two rates beside it.
+    """
+
+    def __init__(self, x=0, y=0, have=0):
+        self.x, self.y = x, y               # `+4`/`+6`, the crowd's centre
+        self.alarm = 0                      # bit 8: somebody shot one of us
+        self.flag80 = 0                     # bit 7, which the rate reads too
+        self.at = None                      # bits 17+, and `None` is you
+        self.have = have                    # bits 9-12
+        self.rate = CROWD_RATE              # `+0x18`
+        self.fast = CROWD_ALARMED           # `+0x1c`
+
+    def hit(self, by=None, have=None):
+        """`ResolveHit`, `0x00c42c`: whoever hits one of us puts the whole
+        crowd on us, and `0x00c4f0` calls it off once four or fewer are
+        left."""
+        self.alarm, self.at = 1, by
+        if have is not None:
+            self.have = have
+        if self.have <= ALARM_FLOOR:        # 0x00c4f0
+            self.alarm, self.at = 0, None
+
+    def look_from(self, pl):
+        """`UpdateCrowds`, `0x006a5c`: 256 units in *either* axis and the
+        alarm is off again.  Walking away really does work."""
+        if (abs(s32(self.x << 16) - s32(pl.x)) > ALARM_RANGE and
+                abs(s32(self.y << 16) - s32(pl.y)) > ALARM_RANGE):
+            self.alarm, self.at = 0, None
+
+
+def crowd_rate(m, w):
+    """`MoverFrame`, `0x00bbf4`: where a mover's base rate at `+0x20` comes
+    from, once a frame.
+
+    A **loner** -- `+0x18` bit 6, which `PopulateWorld`'s entry burst and
+    `CrashMover`'s replacement set and `FillCrowd` clears -- carries its own
+    rate in the sixteen bits at `+0x42`. Everyone else takes the crowd's, and
+    an **alarmed** crowd takes the second rate at `+0x1c`, which `NewCrowds`
+    writes as exactly **double** the first.
+    """
+    if m.loner:
+        return m.own_rate
+    c = w.crowds[m.crowd]
+    return c.fast if (c.alarm or c.flag80) else c.rate
+
+
+def crowd_aim(m, pl, w):
+    """`CrowdAim`, `0x006ac8` -- and it is the pack.
+
+    A Goner that belongs to a crowd never looks at its own target. Quiet, the
+    whole crowd faces the crowd's own centre and mills; **alarmed**, every one
+    of them turns on whoever hit one of them and **fires on the spot, every
+    time it aims** -- which is once every thirty ticks while it is walking.
+    That is on top of `MoverShoot`'s own deadline, and it costs the same
+    eighth of a unit of Offense.
+
+    Note it writes only `+0x7c`: `SetMoverBearing` does not touch the bearing
+    at `+0x78` that `MoverShoot` scores its aim with, so a crowd Goner's
+    `+0x78` is whatever the last `MoverAim` proper left there.
+    """
+    if m.cid != 0 or m.loner:               # 0x006af4, and 0x00605c above it
+        return
+    c = w.crowds[m.crowd]
+    if c.alarm and m.o:                     # 0x006b40
+        tx, ty = (pl.x, pl.y) if c.at is None else (c.at.x, c.at.y)
+    else:                                   # 0x006b70, the crowd's own centre
+        tx, ty = c.x << 16, c.y << 16
+    m.want = w.atan2(s32(tx - m.x), s32(ty - m.y)) & 0xffffff
+    if not c.alarm:                         # 0x006bc8
+        return
+    if s32(m.o) < 0:
+        return
+    m.o = max(0, m.o - 0x2000)              # 0x006bdc, and SpawnShot
+    m.hitmark |= 0x80
+    m.shots += 1
+
+
+def mover_aim(m, pl, w):
+    """`MoverAim`, `0x005fa0`.
+
+    A nineteen-arm jump table on the character id with two arms in it, and
+    then four cases on `+0x70`: **−1** is you, **1** the destination pair, a
+    pointer another mover, and **0** the world origin -- which is to say the
+    DOAsys, and which only `MoverStateDone`'s *mark* arm ever writes.
+
+    The bearing goes through `ATan2Fine` at `0x04cd00`, the table-driven
+    arctangent, and **not** the octant ramp at `0x0184b4` that `MoverFrame`
+    writes the bearing byte at `+0x37` with. Two arctangents in one frame,
+    and up to four whole units apart.
+    """
+    if (m.state & 0xff) == 0x40:            # 0x005fc4, the scramble
+        m.want = (w.rng.bits(8) << 16) & 0xffffff
+        return 1
+    if m.cid == 6 and pl.flags & 0x20000000:
+        return 1                            # 0x006054: Medusa's fight owns her
+    if m.cid in (0, 6) and not m.loner:     # 0x00605c, `+0x18` bit 6
+        crowd_aim(m, pl, w)                 # which refuses unless cid is 0
+        return 0
+    t = m.target
+    if t == -1:                             # 0x006084
+        tx, ty = pl.x, pl.y
+    elif t == 1:                            # 0x006094, the destination pair
+        tx, ty = m.dest[0] << 16, m.dest[1] << 16
+    elif t == 0:                            # 0x0060c4, and r1/r2 are still 0
+        tx, ty = 0, 0
+    else:
+        tx, ty = t.x, t.y
+    m.aim = w.atan2(s32(tx - m.x), s32(ty - m.y)) & 0xffffff
+    m.want = m.aim                          # `SetMoverBearing`, 0x00a600
+    return 1
 
 
 def mover_shoot(m, pl, rng, probe, w=None):
@@ -1804,6 +1940,150 @@ def verify(args):
     check('and a full one costs the city nothing',
           sum(c[1] for c in f if c is not None) == before)
 
+    print('== 0x04cd00, the other arctangent')
+    from armmath import ATan2Fine, atan2_ramp
+    at = ATan2Fine(im.d)
+    check('MoverAim takes 0x04cd00 and MoverFrame takes 0x0184b4',
+          text(0x00610c) == 'bl #0x4cd00' and text(0x00c710) == 'bl #0x184b4')
+    check('257 entries of round(atan(i/256) * 2**24 / tau), plus one pad',
+          sum(abs(at._t(i) - round(math.atan(i / 256.0) * 0x1000000 /
+                                   (2 * math.pi))) > 1 for i in range(257)) == 0
+          and at._t(257) == at._t(256))
+    check('the index is the top of an unsigned 16.16 divide and the rest '
+          'interpolates',
+          text(0x04cd74) == 'bl #0x4cca0' and text(0x04cd78) == 'lsr r1, r0, #8' and
+          text(0x04cd7c) == 'and r0, r0, #0xff' and
+          text(0x04cd9c) == 'lsr r0, r0, #8')
+    check('an eighth of a turn per octant, and the result is not masked',
+          text(0x04cda4) == 'rsbne r0, r0, #0x200000' and
+          text(0x04cda8) == 'add r0, r0, r4, lsl #21' and
+          text(0x006110) == 'bic r1, r0, #0xff000000')
+    worst = max(abs(((atan2_ramp(round(math.cos(math.radians(g)) * 65536),
+                                 round(math.sin(math.radians(g)) * 65536)) -
+                      at(round(math.cos(math.radians(g)) * 65536),
+                         round(math.sin(math.radians(g)) * 65536))
+                      + 0x800000) % 0x1000000) - 0x800000)
+                for g in range(360)) / 65536.0
+    check('and the two disagree by up to four whole units of 256',
+          3.0 < worst < 4.0, '   %.2f' % worst)
+
+    print('== 0x005fa0, what a rithm turns to face')
+    check('nineteen arms, and only two of them are not the default',
+          text(0x005ff0) == 'cmp r3, #0x12' and
+          text(0x005ff4) == 'addls pc, pc, r3, lsl #2' and
+          [text(0x005ffc + 4 * k) for k in range(19)] ==
+          ['b #0x605c'] + ['b #0x607c'] * 5 + ['b #0x6048'] +
+          ['b #0x607c'] * 12)
+    check('four cases on +0x70: you, the pair, another mover, and the origin',
+          text(0x006084) == 'cmn r3, #1' and text(0x006094) == 'teq r3, #1' and
+          text(0x0060c4) == 'teq r3, #0' and text(0x005fb8) == 'mov r1, #0' and
+          text(0x005fbc) == 'mov r2, r1')
+    check('and SetMoverBearing writes +0x7c and falls into TurnMover',
+          text(0x00a600) == 'str r1, [r0, #0x7c]' and text(0x00a604) == 'b #0xa4a4')
+
+    print('== 0x006ac8, the crowd aims together')
+    check('only a Goner, and only one that belongs to a crowd',
+          text(0x006af4) == 'teq r0, #0' and text(0x006afc) == 'andeq r0, r0, #0x40' and
+          text(0x00605c) == 'ldr r3, [r4, #0x18]' and
+          text(0x006060) == 'tst r3, #0x40' and text(0x006064) == 'bne #0x607c')
+    check('the crowd is bits 17-18 of +0x18, and the record is 44 bytes',
+          text(0x006b28) == 'and r0, r7, r0, asr #17' and
+          text(0x006b2c) == 'add ip, r0, r0, lsl #1' and
+          text(0x006b30) == 'add r0, ip, r0, lsl #3')
+    check('quiet, it faces the crowd centre at +4/+6',
+          text(0x006b70) == 'ldrb ip, [r0, #4]' and
+          text(0x006b80) == 'ldrb ip, [r0, #6]')
+    check('alarmed, it faces bits 17+ of the word, or you when they are zero',
+          text(0x006b40) == 'tst r3, #0x100' and
+          text(0x006b50) == 'lsrs r0, r3, #0x11' and
+          text(0x006b54) == 'ldreq r0, [pc, #-0xb4]')
+    check('and it fires there and then, once an aim',
+          text(0x006bc8) == 'tst r0, #0x100' and
+          text(0x006bdc) == 'sub r0, r0, #0x2000' and
+          text(0x006be8) == 'bl #0x447fc')
+    check('at Offense **zero** it still fires -- the test is `< 0`, and the '
+          'clamp is after the shot. MoverShoot refuses at zero; this does not',
+          text(0x006bd4) == 'cmp r0, #0' and
+          text(0x006bd8) == 'ldmdblt fp, {r4, r5, r6, r7, fp, sp, pc}' and
+          text(0x006bf4) == 'movlt r0, #0' and text(0x006144) == 'teq r0, #0')
+
+    print('== and an alarmed crowd walks at double speed')
+    check('NewCrowds writes 0x3000 at +0x18 and 0x6000 at +0x1c',
+          text(0x0085b8) == 'mov r2, #0x3000' and
+          text(0x0085bc) == 'str r2, [r4, #0x18]' and
+          text(0x0085c0) == 'mov r2, #0x6000' and
+          text(0x0085c4) == 'str r2, [r4, #0x1c]')
+    check('MoverFrame takes the second one when bit 8 or bit 7 is set',
+          text(0x00bc18) == 'tst r1, #0x100' and
+          text(0x00bc1c) == 'andeq r1, r1, #0x80' and
+          text(0x00bc24) == 'ldrne r0, [r0, #0x1c]' and
+          text(0x00bc28) == 'ldreq r0, [r0, #0x18]')
+    check('and a loner carries its own rate at +0x42 instead',
+          text(0x00bbfc) == 'tst r0, #0x40' and
+          text(0x00bc34) == 'ldrb ip, [r5, #0x2a]')
+    check('FillCrowd clears bit 6; the entry burst and CrashMover set it',
+          text(0x0087bc) == 'bic r1, r1, #0x40' and
+          text(0x008a54) == 'orr r1, r1, #0x40' and
+          text(0x00ba44) == 'orr r0, r0, #0x40')
+
+    print('== who rings the alarm, and who calls it off')
+    check('ResolveHit sets bit 8 on the victim crowd',
+          text(0x00c42c) == 'orr r1, r1, #0x100' and text(0x00c430) == 'str r1, [r0]')
+    check('a shot of *yours* leaves the target index zero, which is you',
+          text(0x00c434) == 'ldr r1, [pc, #-0x284]' and
+          text(0x00c438) == 'teq r7, r1' and text(0x00c440) == 'lsleq r0, r0, #0xf')
+    check('four or fewer left and the crowd gives up',
+          text(0x00c4ec) == 'and r2, r0, r1, asr #9' and
+          text(0x00c4f0) == 'cmp r2, #4' and text(0x00c500) == 'bic r1, r1, #0x100')
+    check('and 256 units in *either* axis calls it off too',
+          text(0x006a5c) == 'cmp r3, #0x1000000' and
+          text(0x006a60) == 'cmpgt ip, #0x1000000' and
+          text(0x006a64) == 'bicgt r1, r1, #0x100')
+
+    print('== the aim and the crowd, run')
+    aw = World(spawns.Rng(1), (lambda x, y: 3), [], field_seed(args.image),
+               world_box(args.world), args.image, args.movers)
+    b = Body(0, (2.5, 2.5, 2.5))
+    b.x, b.y, b.loner, b.target = 0, 0, 1, -1
+    pl2 = Player(100 << 16, 100 << 16, args.image, args.movers)
+    mover_aim(b, pl2, aw)
+    check('a loner told to aim at you faces 45 degrees when you are on the '
+          'diagonal', b.want == 0x200000 and b.aim == b.want,
+          '   %#08x' % b.want)
+    b.target, b.dest = 1, (0, -100)
+    mover_aim(b, pl2, aw)
+    check('and aiming at its destination pair works the same way',
+          b.want == 0xc00000, '   %#08x' % b.want)
+    b.target = 0
+    b.x = b.y = 0x640000
+    mover_aim(b, pl2, aw)
+    check('a target of 0 faces the world origin -- the DOAsys',
+          b.want == 0xa00000, '   %#08x' % b.want)
+
+    crowd = Body(0, (2.5, 2.5, 2.5))
+    aw.crowds[0] = Crowd(-100, -100, 9)
+    mover_aim(crowd, pl2, aw)
+    check('a crowd Goner faces its crowd, not its target, and does not shoot',
+          crowd.want == 0xa00000 and crowd.shots == 0 and crowd.aim == 0,
+          '   %#08x' % crowd.want)
+    aw.crowds[0].hit(None, have=9)
+    before = crowd.o
+    mover_aim(crowd, pl2, aw)
+    check('and once you shoot one of them it turns on you and fires',
+          crowd.want == 0x200000 and crowd.shots == 1 and
+          crowd.o == before - 0x2000, '   %#08x' % crowd.want)
+    crowd.o = 0
+    mover_aim(crowd, pl2, aw)
+    check('and keeps firing after its Offense runs out',
+          crowd.shots == 2 and crowd.o == 0)
+    aw.crowds[0].hit(None, have=4)
+    check('but a crowd of four or fewer gives up', aw.crowds[0].alarm == 0)
+    aw.crowds[0].hit(None, have=9)
+    pl2.x = pl2.y = 0x7d00000                   # 2000 units away
+    aw.crowds[0].look_from(pl2)
+    check('and so does one you have walked 256 units away from',
+          aw.crowds[0].alarm == 0)
+
     print('\n%d/%d checks pass' % (ok, ok + fail))
     return 1 if fail else 0
 
@@ -1844,18 +2124,35 @@ class Body:
         # `MoverThink`'s three deadlines
         self.at_decide = 0                      # +0x80
         self.at_fire = 0                        # +0x84
-        self.at_aim = 0                         # +0x88
+        self.aim_at = 0                         # +0x88, `spawns.Walker`'s name
         self.nudge = 0                          # +0x76, decide *now*
+        # and the rest of `spawns.Walker`, so that `Walk`'s own `TurnMover`
+        # and `MoverStep` run on a `Body` unchanged
+        self.want = 0                           # +0x7c
+        self.vx = self.vy = 0                   # +0x50/+0x54
+        self.acc = 0                            # +0x4c, the step accumulator
+        self.phase = 0                          # +0x34
+        self.step = 0x10000                     # the animation's own stride
+        self.rate = CROWD_RATE                  # +0x20, written once a frame
+        self.own_rate = CROWD_RATE              # +0x42, a loner's own
+        self.agility = 0                        # +0x60, and the turn rate
+        self.slow = False                       # +0x18 bit 28, the lake
+        self.loner = 0                          # +0x18 bit 6
+        self.crowd = 0                          # +0x18 bits 17-18
 
 
-def mover_think(m, pl, d, w):
-    """`MoverThink`, `0x0062f8`, with `MoverAim` and `MoverStep` left out.
+def mover_think(m, pl, d, w, turn=None):
+    """`MoverThink`, `0x0062f8`, whole.
 
-    The three routines this session read, in the order the frame runs them,
-    against the three deadlines they hang off.  `0x006128`'s own interval is
-    ten ticks flat inside an encounter and for Silva, and elsewhere ten plus
-    what is left of `10 - PlayerTier() - cid` between 0 and 9 -- so a Goner
-    facing a tier-1 player shoots every nineteen ticks and Loki every ten.
+    All three deadlines, in the order the frame runs them.  `MoverAim` wants
+    `TurnMover` under it -- `SetMoverBearing` at `0x00a600` writes `+0x7c` and
+    falls straight into `0x00a4a4` -- so a caller with a walk under it passes
+    it in; `--arms` and `--verify` do not have one and do not need one.
+
+    `0x006128`'s interval is ten ticks flat inside an encounter and for Silva,
+    and elsewhere ten plus what is left of `10 - PlayerTier() - cid` between 0
+    and 9 -- so a Goner facing a tier-1 player gets a chance every nineteen
+    ticks and Loki every ten.
     """
     if state_done(m, pl, w):                    # 0x006324
         m.at_decide = w.now
@@ -1867,6 +2164,11 @@ def mover_think(m, pl, d, w):
             m.state = new
             enter_state(m, pl, w)
             m.at_decide = w.now + 0x3c
+    if w.now >= m.aim_at:                       # 0x006438
+        mover_aim(m, pl, w)
+        if turn is not None:
+            turn(m)
+        m.aim_at = w.now + (AIM_MOVING if m.gait else AIM_STILL)
     if w.now >= m.at_fire:                      # 0x006470
         mover_shoot(m, pl, w.rng, w.probe)
         if pl.flags & 0x20000000 or m.cid == 9:
@@ -1876,58 +2178,148 @@ def mover_think(m, pl, d, w):
         m.at_fire = w.now + gap
 
 
-def live(args):
-    """Drive the loop and print what a rithm actually does with its day.
+class StateWalk(object):
+    """`MoverFrame`, `0x00bacc`, with `MoverThink` under it.
 
-    No walk under it: the mover stands where it is put, so every state that
-    ends on an arrival ends on the sixty-tick deadline instead.  What this
-    shows is the *sequence* -- which is the half `packdiff --walk` cannot see
-    and the half `docs/25` got wrong.
+    `spawns.Walk` is the walk `native/view.c` matches to the bit and
+    `packdiff --walk` checks, and it runs exactly one arm of `MoverAim` --
+    the scramble's -- because the scramble was the only state `docs/25` knew
+    a rithm to be in.  This is the same frame with the real loop under it, so
+    the two are deliberately different walks and only `spawns.Walk` is the one
+    under test.  Everything below the think is `spawns.Walk`'s own:
+    `TurnMover`, `MoverStep` and the velocity are borrowed unchanged, which is
+    why `Body` carries `spawns.Walker`'s field names.
+
+    ```
+    0000bef0   [+0x4c] += rate * gait share
+    0000bf0c   MoverThink
+    0000bf14   TurnMover
+    0000bf34   MoverStep, once the accumulator has paid for a stride
+    ```
+    """
+
+    def __init__(self, bodies, player, decider, world, steps=None,
+                 hud=None, lake=None):
+        import spawns
+        self.walk = spawns.Walk([], {}, image=world.image,
+                                hud=hud or spawns.HUD, lake=lake)
+        self.walk.probe = world.probe
+        self.walk.walkers = list(bodies)
+        self.walk.rng = world.rng
+        self.bodies, self.pl, self.d, self.w = list(bodies), player, decider, world
+        if steps:
+            for m in self.bodies:
+                m.step = steps.get(m.cid, m.step)
+
+    def tick(self, eye):
+        w, pl = self.w, self.pl
+        self.walk.probe.look_from(int(eye[0] // 1), int(eye[1] // 1))
+        for c in w.crowds:                           # 0x006a5c, UpdateCrowds
+            c.look_from(pl)
+        drink_from_field(None, pl, w.field, w.box)
+        for m in self.bodies:
+            look_at_player(m, pl)                    # 0x00c6ec and 0x00c710
+            drink_from_field(m, pl, w.field, w.box)
+            m.rate = crowd_rate(m, w)                # 0x00bbf4
+            m.acc += self.walk.gait_rate(m)          # 0x00bef0, with dt = 1
+            mover_think(m, pl, self.d, w, turn=self.walk.turn)
+            self.walk.turn(m)                        # 0x00bf14
+            if m.step <= m.acc:                      # 0x00bf2c
+                self.walk.step(m)
+        w.now = self.walk.now = self.walk.now + 1
+
+    def run(self, ticks, eye):
+        for _ in range(ticks):
+            self.tick(eye)
+        return self.bodies
+
+
+def live(args):
+    """The whole loop, walking, and what a rithm does with its day.
+
+    This is the real population -- `spawns.population()`, the same one both
+    renderers freeze -- put through `StateWalk` rather than through
+    `spawns.Walk`, so the rithms decide, walk to what they decided on, arrive,
+    and decide again.  `--shoot` puts one bullet into a crowd on the first
+    tick, which is the whole of what `ResolveHit` does to it, and the trace
+    after that is the pack.
     """
     import spawns
+    import movers as moversmod
     d = Decider(args.image, args.movers)
     pl = Player(args.eye[0] << 16, args.eye[1] << 16, args.image, args.movers)
     pl.jump_ticks = args.hours * 0xe10
-    rng = spawns.Rng(args.seed)
-    probe = spawns.Probe()
-    probe.look_from(*args.eye)
     field, box = field_seed(args.image), world_box(args.world)
 
-    cast = []
-    for i in range(args.count):
-        doa = (spawns.DOA[rng.bits(2)] if args.cid == 0
-               else d.records[args.cid - 1]['doa'])
-        m = Body(args.cid, doa)
-        m.temper = rng.below(5)
-        m.x = (args.eye[0] + rng.below(0x100) - 0x80) << 16
-        m.y = (args.eye[1] + rng.below(0x100) - 0x80) << 16
-        cast.append(m)
-    w = World(rng, probe, cast, field, box, args.image, args.movers)
+    pop = spawns.population(seed=args.seed, eye=tuple(args.eye),
+                            crowds='inrange')
+    pop = [m for m in pop if m.kind == args.cid] if args.cid else pop
+    del pop[args.count:]
+    probe = spawns.Probe()
+    probe.look_from(*args.eye)
+    rng = spawns.Rng(args.seed)
+    w = World(rng, probe, [], field, box, args.image, args.movers)
 
-    print('%d %s at (%d, %d), %d hours of play, tier %d, city power %d'
-          % (args.count, NAMES[args.cid], args.eye[0], args.eye[1],
-             pl.hours, pl.tier, pl.power))
-    print('%-7s %-9s %-9s %6s %4s %5s %s'
-          % ('tick', 'was', 'is', 'within', 'gait', 'shots', 'destination'))
+    zones = spawns.new_zones(spawns.Rng(args.seed))
+    for i, z in enumerate(zones):
+        w.crowds[i] = Crowd(z.x, z.y, z.want)
+
+    cast = []
+    for m in pop:
+        doa = m.doa or d.records[m.kind - 1]['doa']
+        b = Body(m.kind, doa)
+        b.x, b.y = m.x << 16, m.y << 16
+        b.heading = b.want = m.face << 16       # 0x00ac10
+        b.temper = m.temper
+        b.crowd = m.zone or 0
+        b.loner = 0 if m.source == 'zone' else 1
+        cast.append(b)
+    w.movers = cast
+    try:
+        steps = moversmod.mover_steps(args.assets, {b.cid for b in cast})
+    except Exception as e:
+        print('  (no animation stride: %s -- using 1.0)' % e)
+        steps = {}
+    sw = StateWalk(cast, pl, d, w, steps)
+
+    print('%d rithms round (%d, %d), %d hours of play, tier %d, power %d'
+          % (len(cast), args.eye[0], args.eye[1], pl.hours, pl.tier, pl.power))
+    print('%d in crowds, %d loners' % (sum(1 for b in cast if not b.loner),
+                                       sum(1 for b in cast if b.loner)))
+    if args.shoot:
+        w.crowds[cast[0].crowd].hit(None, have=9)   # one bullet, from you
+        print('and you have just shot one of crowd %d: the alarm is on'
+              % cast[0].crowd)
+    print()
+    who = cast[0]
+    print('%-7s %-9s %-9s %6s %4s %6s %5s %s'
+          % ('tick', 'was', 'is', 'within', 'gait', 'walked', 'shots',
+             'destination'))
     seen = collections.Counter()
+    walked = 0
     for t in range(args.ticks):
-        w.now = t
-        drink_from_field(None, pl, field, box)   # 0x00bc38, you drink too
-        for m in cast:
-            look_at_player(m, pl)
-            drink_from_field(m, pl, field, box)  # 0x00bc50, once a frame each
-            was = m.state & 0xff
-            mover_think(m, pl, d, w)
-            seen[m.state & 0xff] += 1
-            if m is cast[0] and (m.state & 0xff) != was:
-                print('%-7d %-9s %-9s %6d %4d %5d (%d, %d)'
-                      % (t, STATES[was][0], STATES[m.state & 0xff][0],
-                         m.radius, m.gait, m.shots, m.dest[0], m.dest[1]))
+        px, py = who.x, who.y
+        was = who.state & 0xff
+        sw.tick(args.eye)
+        walked += oct_dist(px, py, who.x, who.y)
+        for b in cast:
+            seen[b.state & 0xff] += 1
+        if (who.state & 0xff) != was:
+            print('%-7d %-9s %-9s %6d %4d %6d %5d (%d, %d)'
+                  % (t, STATES[was][0], STATES[who.state & 0xff][0],
+                     who.radius, who.gait, walked >> 16, who.shots,
+                     who.dest[0], who.dest[1]))
     print()
     print('%-9s %s' % ('state', 'ticks spent in it, over the whole cast'))
     for k, n in seen.most_common():
         print('%-9s %6d  %4.1f%%' % (STATES[k][0], n,
-                                     100.0 * n / (args.ticks * args.count)))
+                                     100.0 * n / (args.ticks * len(cast))))
+    print()
+    print('%d shots fired, %d units walked by the first of them, '
+          '%d rithms have moved at all'
+          % (sum(b.shots for b in cast), walked >> 16,
+             sum(1 for b, m in zip(cast, pop)
+                 if (b.x >> 16, b.y >> 16) != (m.x, m.y))))
 
 
 def world_box(path=WORLD_B3D):
@@ -2039,6 +2431,10 @@ def main():
     ap.add_argument('--count', type=int, default=8)
     ap.add_argument('--cid', type=int, default=0)
     ap.add_argument('--eye', type=int, nargs=2, default=(-279, 640))
+    ap.add_argument('--assets', default='extracted/Perfect',
+                    help='where PerfectMovers.B3D is, for the stride')
+    ap.add_argument('--shoot', action='store_true',
+                    help='put one bullet into a crowd before the first tick')
     a = ap.parse_args()
 
     if a.verify:

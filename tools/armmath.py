@@ -119,6 +119,100 @@ class Trig:
         return self.Cos(a), self.Sin(a)
 
 
+# --------------------------------------------------------------- 0x04cd00
+def DivUF16(a, b):
+    """Operamath folio vector **−12**, `0x04cca0`.
+
+    The one vector of the eight that had no name.  `ATan2Fine` is its only
+    caller in either image and it feeds it two non-negative 16.16 numbers
+    with the smaller first, so `(a << 16) / b` is the only reading that puts
+    the answer in the 0 .. 0x10000 the table index wants.  Unsigned: every
+    sign is already folded out by the time the divide is reached.
+    """
+    return ((a << 16) // b) & M32 if b else 0
+
+
+class ATan2Fine:
+    """`0x04cd00`, and the 257-word table at `0x0590f4` it interpolates.
+
+    Not the arctangent `MoverFrame` uses.  There are **two** in a frame: the
+    octant ramp at `0x0184b4`, which is three instructions and up to four
+    whole units out, writes the bearing byte at a mover's `+0x37`, and this
+    one -- a table lookup with linear interpolation, right to a unit -- is
+    what `MoverAim` turns a target into a heading with.
+
+    Eight octants out of three sign tests and one compare, then a single
+    lookup of `min / max` in the first eighth of the circle:
+
+        0004cd2c   if dy < 0:   oct  = 4;  dx = -dx;  dy = -dy
+        0004cd3c   if dx < 0:   oct ^= 3;  flip = 1;  dx = -dx
+        0004cd4c   if dx < dy:  oct ^= 1;  flip ^= 1
+        0004cd74   q = DivUF16(min, max)                 0 .. 0x10000
+        0004cd84   a = (T[q >> 8] * (256 - lo) + T[(q >> 8) + 1] * lo) >> 8
+        0004cda0   if flip:  a = 0x200000 - a
+        0004cda8   return a + (oct << 21)
+
+    `0x200000` is an eighth of a turn and `oct << 21` is which eighth, so the
+    result is the same 24-bit angle everything else in the game uses -- and
+    it is *not* masked, so `(0, 0)` aside, a full turn can come back as
+    `0x1000000` exactly.  `MoverAim` masks with `bic #0xff000000`.
+
+    The table is game data in both images, 258 words immediately before the
+    sine table `Trig` reads, and the last of them is a duplicate of the one
+    before it so that the interpolation at `q == 0x10000` stays in bounds.
+    """
+    SIGNATURE = struct.pack('>3I', 0, 10430, 20860)     # atan(0, 1/256, 2/256)
+    WORDS = 258
+    OCTANT = 0x200000                                   # an eighth of a turn
+
+    def __init__(self, image, addr=None):
+        if addr is None:
+            addr = image.find(self.SIGNATURE)
+            if addr < 0:
+                raise SystemExit('no arctangent table in this image')
+        self.d, self.addr = image, addr
+
+    def _t(self, i):
+        return struct.unpack_from('>I', self.d, self.addr + 4 * i)[0]
+
+    def __call__(self, dx, dy):
+        dx, dy = s32(dx), s32(dy)
+        if dx == 0 and dy == 0:                         # 0x04cd14
+            return 0
+        oct_, flip = 0, 0
+        if dy < 0:                                      # 0x04cd2c
+            oct_, dx, dy = 4, -dx, -dy
+        if dx < 0:                                      # 0x04cd3c
+            oct_, flip, dx = oct_ ^ 3, 1, -dx
+        if dx < dy:                                     # 0x04cd4c
+            oct_, flip = oct_ ^ 1, flip ^ 1
+        q = DivUF16(min(dx, dy), max(dx, dy))
+        i, lo = q >> 8, q & 0xff
+        a = (self._t(i) * (0x100 - lo) + self._t(i + 1) * lo) >> 8
+        if flip:                                        # 0x04cda4
+            a = self.OCTANT - a
+        return a + (oct_ << 21)                         # 0x04cda8
+
+
+def atan2_ramp(dx, dy):
+    """`0x0184b4`, the *other* one, for comparison.
+
+    An octant from the two signs and which of the two is larger, then
+    `32 * min / max` inside it: a straight ramp where `ATan2Fine` has a
+    curve.  `tools/behave.py` carries the same transcription because the
+    decision reads its answer out of `+0x37`.
+    """
+    ax, ay = abs(s32(dx)), abs(s32(dy))
+    o = (1 if s32(dx) < 0 else 0) | (2 if s32(dy) < 0 else 0) | (4 if ax < ay else 0)
+    if o < 4:
+        q = 0 if ax == 0 else (ay * 32) // ax
+        r = (q, 0x80 - q, -q, q - 0x80)[o]
+    else:
+        q = 0 if ay == 0 else (ax * 32) // ay
+        r = (0x40 - q, q + 0x40, q - 0x40, -0x40 - q)[o - 4]
+    return s32(r << 16)
+
+
 # ----------------------------------------------------------- 0x08c16c table
 def recip_table(n=1600, first=2.0, step=0.25):
     """1/depth in 16.16 for depth 2.0 .. 401.75 in 0.25 steps."""
@@ -340,6 +434,40 @@ def verify(image_path):
                 for z in range(0x20000, 0x1900000, 0x4000)
                 for hgt in (-0x60000, -0x10000, 0, 0x8000, 0x40000))
     check('HorizonY', 'worst error against 160 - 160*h/z, in pixels: %.4f', worst, 0.05)
+
+    # ATan2Fine against real trigonometry, and against the ramp it is not.
+    at = ATan2Fine(d)
+    check('ATan2Fine', 'table 258 words, ending where the sine table begins: %d',
+          abs(at.addr + at.WORDS * 4 - trig.addr), 0)
+    check('ATan2Fine', 'entries off round(atan(i/256) * 2**24 / tau): %d',
+          sum(abs(at._t(i) - round(math.atan(i / 256.0) * 0x1000000 /
+                                   (2 * math.pi))) > 1 for i in range(257)), 0)
+    check('ATan2Fine', 'and the 258th is a copy of the 257th, not data: %d',
+          abs(at._t(257) - at._t(256)), 0)
+    worst = 0.0
+    for _ in range(20000):
+        dx = random.randint(-4000, 4000) << 16
+        dy = random.randint(-4000, 4000) << 16
+        if not (dx or dy):
+            continue
+        want = math.atan2(dy, dx) * 0x1000000 / (2 * math.pi) % 0x1000000
+        e = abs((at(dx, dy) - want + 0x800000) % 0x1000000 - 0x800000)
+        worst = max(worst, e)
+    check('ATan2Fine', 'worst error over 20k bearings, of 16777216: %.1f',
+          worst, 64)
+    check('ATan2Fine', 'the eight octant boundaries are exact: %d',
+          max(abs(at(round(math.cos(q * math.pi / 4) * 65536),
+                     round(math.sin(q * math.pi / 4) * 65536)) - q * 0x200000)
+              for q in range(8)), 0)
+    # The ramp is the other one, and being four units out is its whole point.
+    worst = max(abs(((atan2_ramp(round(math.cos(math.radians(deg)) * 65536),
+                                 round(math.sin(math.radians(deg)) * 65536))
+                      - at(round(math.cos(math.radians(deg)) * 65536),
+                           round(math.sin(math.radians(deg)) * 65536))
+                      + 0x800000) % 0x1000000) - 0x800000)
+                for deg in range(360)) / 65536.0
+    check('ATan2', 'the octant ramp disagrees with it by up to %.2f units',
+          worst, 4.0)
 
     # The two culling predicates, against straightforward Python.
     bad = 0
