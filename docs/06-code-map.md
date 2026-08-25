@@ -163,6 +163,20 @@ every reference beyond 255 bytes.
 | `0x001fc8` | **SplitMover** — creates a second mover of shape 8 and charges both copies D −2.0, O −5.0, A −5.0, current *and* maximum | `0x2034`-`0x2078`, twelve stores |
 | `0x004ff8` | **MoverDecide(mover)** — a mover's per-frame choice. Turns each of its three current/max DOA pairs into 0-255 through `0x004810`, compares them against your own `+0x04` and `+0x10`, folds in `PlayerTier`, the distance and the lieutenant question, and finishes at `RandomBelow` over the weights. `p1e`'s copy is the same function without `PlayerTier` and without the Loki/Raven arm | 2,296 bytes; `p1e` `0x018f24`, similarity 0.57 |
 | `0x004810` | **DOAFraction(value, max)** — 255 halved once per halving of `max` needed to fall to `value`; the cheap "what fraction of full is this" | four instructions, no prologue |
+| `0x00bacc` | **MoverFrame** — the per-frame pass over the `CharacterList`. Writes each mover's bearing to the player into its `+0x37`, refreshes the gait rate at `+0x20` from the crowd record, spends the gait's share of it into the step accumulator at `+0x4c`, then `MoverThink`, `TurnMover` and `MoverStep` | `[0x60cdc+0xa544]`, the list |
+| `0x0062f8` | **MoverThink(mover)** — three deadlines: `+0x80` runs `MoverDecide` and, on a change, `MoverEnterState`; `+0x88` runs `MoverAim`; `+0x84` runs `0x006128` | 30 or 60 ticks, by the gait |
+| `0x0058f0` | **MoverEnterState(mover)** — a fifteen-arm switch on the new state at `+0x74`. Each arm sets the destination pair at `+0x44`/`+0x46`, the target kind at `+0x70`, an animation slot at `+0x75` and the gait bits. State `0x40` is the wander: destination where you stand, half-speed gait | jump table at `0x005984` |
+| `0x005fa0` | **MoverAim(mover)** — turns the target into a bearing and hands it to `SetMoverBearing`. State `0x40` short-circuits at the first instruction and takes `RandomBits(8)` instead; `+0x70` of −1 means the player, 1 the stored destination, 0 the origin, anything else a pointer to another mover | `0x005fcc` |
+| `0x00a4a4` | **TurnMover(mover)** — steers `+0x24` towards `+0x7c` at `1.0 + Agility/32` a tick, does nothing inside half a sector, snaps inside 5.5 — or always, in state `0x40` — and recomputes the velocity pair | `cmp r3, #0x58000` |
+| `0x00a600` | **SetMoverBearing(mover, angle)** — two instructions: `+0x7c = angle`, then fall into `TurnMover` | 13 call sites |
+| `0x00a608` | **SetMoverHeading(mover, angle)** — `+0x7c` *and* `+0x24` at once, then `velocity = MulSF16(step, Cos/Sin(angle))` where `step` is the animation record's `+0x14` | `NewMover`'s last call |
+| `0x007658` | **MoverStep(mover)** — one stride per `step` the accumulator has paid for: the phase byte at `+0x34` counts up and masks to three bits, and each axis is offered to `MapProbe` and `InsideWorld` separately. A refused axis turns the mover 11.25 degrees, both refused 45 | `0x0079d8` truncates the heading to a whole unit |
+| `0x00652c` | **InsideWorld(x, y)** — `ClampToWorld`'s four words asked as a question | `0x058434`..`0x058440` |
+| `0x00ac88` | **FreeMover(mover)** — unlinks and releases; 20 call sites | `0x04e438` |
+| `0x00aec0` | **MoverSound(entry)** — reads the mover's point slot and tail-calls the positional sound at `0x0274b0` | three instructions |
+| `0x010ca8` | **MovePlayer(buttons)** — measures the frame into `[0x58bac]`, clamps it to 1..10 ticks, turns, advances the head-bob phase, and moves the camera one tick at a time against `MapProbe`. See *How the player moves* below | called from `EncounterFrame` |
+| `0x011c64` | **TurnPlayer(buttons, dt)** — the yaw *rate* at `[0x58b98]`, ramped and braked, clamped to ±2.0 a tick; also the head bob and the stride word at `[0x58b94]` | `0x058274`, the six-entry stride table |
+| `0x00f9e4` | **OnLakeTile(x, y)** — the floor tile under a point is 9. `0x00f9b0` is the same question about the camera and `0x00fa0c` asks for tile 13 | `teq r0, #9` |
 | `0x020404` | **EncounterFrame** — one frame of an encounter: `GameTick`, `ControlFrame`, `TraverseCells` | `p1e` `0x013e10` |
 | `0x022200` | **DrawWorldFrame** — the draw half beside it: `DrawFloor`, `WorldFrame`, the *"Angle %d X %d Y %d Faces %d"* trace | `p1e` `0x015dbc`, rewritten |
 | `0x012298` | **DepthToShade(depth)** — 15 down to 0 in bands of `[0x058bc0]`, the fade step | `mov r1, #0xf`, `cmp r3, #0xf` |
@@ -575,11 +589,77 @@ Agility pays for all of it: `GameTick` drains it by `|[0x5803c]| >> 9` every
 frame, so the faster you move the faster you tire, and a high Agility both
 raises the top speed and lasts longer at it.
 
-**Not read yet:** the scale that turns that 16.16 speed into world units, and
-the turn rate. The camera position at `0x6bed0` is written by ten functions
-and every one of them is a *placement* — `SetCamera`, `UnstickCamera`,
-`WrapCamera`, the encounter entries — so the per-frame advance reaches it some
-other way.
+### And how far that carries
+
+The per-frame advance was the missing half, and it is `0x010ca8` — the
+function `EncounterFrame` calls after `ControlFrame` and `GameTick`, which no
+search for a *writer* of `[0x6bed0]` was going to find, because it holds the
+camera struct in a register the whole way through.
+
+It opens by measuring the frame:
+
+```
+00010cc4  bl 0x4437c                ; now
+00010cd8  [0x58bac] = now - [0x57dac]
+00010ce4  clamp [0x58bac] to 1 .. 10
+```
+
+so `dt` is one to ten 60 Hz ticks, and then everything after it is done
+**once per tick**, not once per frame. The yaw comes first — `[0x6bed0+0x58]
++= [0x58b98]` a tick, masked to 0..255.99 — and its `Cos` and `Sin` are
+written into the camera's own basis at `+0x64`/`+0x68`. Then:
+
+```
+00010e08  r5 = MulSF16(Cos(yaw), [0x58b94])      ; the tick's step in X
+00010e18  r4 = MulSF16(Sin(yaw), [0x58b94])      ; and in Y
+00010eb8  if ([+0x78] & 0x10000): both >> 2
+00010ee8  per tick:  probe(x + dx, y) -> take x
+00010f24             probe(x, y + dy) -> take y
+```
+
+**`[0x58b94]` is not the speed.** `0x011e24` builds it a frame:
+
+```
+forward = MulSF16(stride[bob >> 22], [0x5803c]) >> 2
+```
+
+where `stride` is a **six-entry table in the image at `0x058274`** — 0.0703,
+0.125, 0.1875, 0.25, 0.15625, 0.09375 — and `bob` at `[0x58ba0]` advances by
+`speed * dt` and wraps at 382.0 (`0x011d84`). The walk *surges*: the same
+phase drives the head bob at `[0x582a4]`, and the stride is longest at the
+middle of the cycle and shortest at its ends.
+
+The mean of the six is 0.1471, so a tick carries `0.0368 * speed` world units
+and the top speed of 16.0 is about **35 units a second** — which is the
+number `native/view.c` had been calibrating by eye at 20.
+
+### The turn is a rate, not an angle
+
+`0x011c64`, called from `0x010d18` with the same `dt`. `[0x58b98]` is a
+*rate*, and the buttons ramp and brake it:
+
+| held | what happens |
+|---|---|
+| left, already turning right past 0.5 | `rate -= dt/4`, the hard brake |
+| left, at rest | `rate -= dt/64` |
+| left, otherwise, above −2.0 | `rate -= dt/16` |
+| neither | `rate` decays to zero by `dt/4` |
+
+clamped to ±2.0 — two 256ths of a turn a tick, **169 degrees a second** at the
+top, and about a third of a second of ramp to reach it.
+
+### And the collision is the radar map
+
+The two probes above are the whole of it. `0x011094` is the near `.Maps`
+lookup [13](13-hud-maps.md) reads, `0x00652c` is the world box, and between
+them they are every collision test the overworld does — **no wall geometry is
+consulted at any point**. X is offered first and Y second, each taken only if
+the map allows it, which is why running into a wall at an angle slides you
+along it and why nothing in the game ever needs to push you back out.
+
+`0x007658` gives a mover the identical two probes ([25](25-where-the-movers-are.md)),
+and both of them move a *point*: there is no body radius, no height test, no
+step-over.
 
 ## The camera's eye is six units off the ground
 

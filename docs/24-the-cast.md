@@ -137,13 +137,78 @@ with one adjustment: when bit 28 of the entry's flags is set it rewrites the
 mask's `ccb_PRE0` height field to **half** — the same squash the character
 gets in that state.
 
-What the mask is *for* is not settled here. Only 22% of its pixels land on a
+What the mask is *for* is still not settled — only 22% of its pixels land on a
 transparent or black pixel of the character, so it is not filling holes in the
-art, and the character is drawn over it — unless the character's own `ccb_PIXC`
-is one of the translucent values `0x017998` writes at `0x018280`
-(`0xe288e288` when a byte of the mover is zero, the neutral `0x1f001f00`
-otherwise). Reading that PPMPC properly is the next step, and it is the same
-question a port has to answer to get the 3DO's blend modes right.
+art. But the two things this section used to tie to it have both come apart
+from it, and both are read now.
+
+### Bit 28 is the lake, and it cuts the sprite off at the waterline
+
+`0x00bc80` is where the bit comes from: `MoverFrame` asks `OnLakeTile` about
+the mover's own position every frame and drops the answer into bit 28 of its
+flag word. Three things read it:
+
+| where | what it does |
+|---|---|
+| `0x0077ec` | the stride is taken at `>> 2` — a quarter speed through water |
+| `0x018010` | the **body** CCB's `ccb_PRE0` VCNT is halved |
+| `0x018180` | and the mask's, the same way |
+
+```
+00018014   r6 = 0x3ff                          ; the VCNT mask
+00018050   r0 = ccb_PRE0
+00018058   r0 = (r0 >> 6) & 0x3ff              ; VCNT, the source line count
+0001805c   r0 >>= 1
+00018068   PRE0 &= ~0x3fc0 & ~0xc000
+0001807c   PRE0 |= r0 << 6
+```
+
+and `0x0182c8` puts both back afterwards, because the CCB belongs to the
+shared animation record and the next rithm of the same shape would inherit it.
+Half the source lines at the same screen height is a sprite cut off at its
+middle: the rithm is standing in the water up to its waist, and wading at a
+quarter speed. The player gets the matching half of it — `0x012190` drops the
+eye from six units to two over tile 9 ([06](06-code-map.md)).
+
+### And the PPMPC is the Chameleon, and nothing else
+
+`0xe288e288` looked like a general translucency state. It is not: all three
+sites that write it are guarded by the character id being **12**, which is the
+Chameleon, and by bit 4 of the entry's flags being clear.
+
+```
+0001826c   teq r7, #0xc                        ; the character id
+00018270   ldreq r0, [r4]
+00018274   andeq r0, r0, #0x10
+00018278   teqeq r0, #0
+0001827c   bne #0x182a0                        ; anyone else: leave PIXC alone
+00018280   ldr r0, [sp]                        ; the mover
+00018284   ldrb r0, [r0, #0x76]
+0001828c   ldreq r1, = 0xe288e288              ; zero -> cloaked
+00018290   movne r1, = 0x1f001f00              ; non-zero -> plain
+0001829c   str r1, [ccb, #0x30]                ; ccb_PIXC
+```
+
+The same eight instructions appear at `0x002ca8` and `0x0033bc`, and both test
+character 12 first.
+
+Decoded on the same rule the ground's fade uses ([08](08-the-ground.md)) —
+MF at bits 12-10 plus one, SF at bits 9-8 — each half of `0xe288` is MF 1 over
+SF 4, with **bit 15 set**: the first source is *the pixel already in the frame
+buffer*, not the cel's own. So the Chameleon is drawn as a quarter of whatever
+is behind it. Its art contributes its shape and nothing of its colour. The
+neutral `0x1f001f00` is MF 8 over SF 8 — one times the source, the cel drawn
+as it is.
+
+And `+0x76` is a **hit count**. `ResolveHit` at `0x00c0a8` increments it, and
+`MoverThink` at `0x006330` clears it back to zero and expires the decision
+deadline in the same breath, so the Chameleon is invisible until you land a
+shot on it, visible for exactly as long as it takes to make its next decision,
+and gone again.
+
+That is a whole enemy design read out of one 32-bit constant, and it leaves
+the mask where it was: drawn for every character, behind the body, in grey,
+and still without a reason.
 
 ## Three recolours, and only Goner has them
 
@@ -216,12 +281,15 @@ time for the one sprite kind that draws every frame.
 
 ## What is not here
 
-- **Where the movers are.** They are not in the world file: `LoadStaticObjects`
-  clears the list and the game spawns rithms as you play, through `NewMover` at
-  `0x00a6b0`. A static viewer has nothing to place until that is read.
+- ~~**Where the movers are.**~~ Read in [25](25-where-the-movers-are.md):
+  `NewMover` at `0x00a6b0` and the three overworld spawners, and both renderers
+  run them.
 - **The rest of `0x017998`.** It is 2,400 bytes and this file covers the spine
-  of it. The branches left are the Perfect One's three forms, the stealth and
-  hit states, and the PPMPC question above.
+  of it. The branches left are the Perfect One's three forms and the hit
+  states; the stealth branch and the PPMPC are answered above, and the phase
+  is in [25](25-where-the-movers-are.md) — a *moving* rithm takes it from its
+  own step counter, not from the per-character constant this file used to
+  point at.
 - **Slots 0 and 3 and up.** Deaths, hits, defends and strikes are loaded by
   whoever runs the encounter, not by `LoadCharacterAnims`.
 

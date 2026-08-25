@@ -334,22 +334,45 @@ singles out with a remap of its own — view 2 to 6 mirrored, view 3 to 5
 mirrored, view 1 to −1, which `GetAnimCel` clamps to frame 0.
 `tools/movers.py --verify` checks all nineteen.
 
-### The phase is a constant, so a rithm does not walk
+### The phase is a constant only while the rithm is standing
 
-`sb` is bits 21-23 of the character block's word at `+0x20`, and `0x017d08`
-reads it for characters **2 to 6** and nobody else. `0x008258` is the only
-thing that writes it, once, out of `NewGame`, and it writes exactly those five:
+The constant is real. `sb` is bits 21-23 of the character block's word at
+`+0x20`, and `0x017d08` reads it for characters **2 to 6** and nobody else.
+`0x008258` is the only thing that writes it, once, out of `NewGame`, and it
+writes exactly those five:
 
 | character | 2 Tork | 3 Kilroy | 4 Venus | 5 David | 6 Medusa | everyone else |
 |---|---|---|---|---|---|---|
 | phase | 7 | 6 | 6 | 6 | 5 | 0 |
 
-So on the overworld a rithm is drawn at one fixed phase of its run, turning as
-you circle it but never moving its legs. That is not an omission in the
-reading: the 44-byte animation record is **per character**, not per mover, so
-every rithm of a shape shares one `ANIM` and one current-frame field, which
-`DrawMover` overwrites for each of them before each `GetAnimCel`. Per-mover
-animation is not something the structure can express.
+But it is not the phase a *moving* rithm draws at, and this document said it
+was. One instruction decides:
+
+```
+00017cfc   lsl r6, r6, #3                 ; view * 8
+00017d00   tst r0, #0x3000000             ; the gait bits
+00017d04   bne #0x17d60                   ; moving?  keep sb as it came in
+00017d08   cmp r7, #2 ... #6              ; standing: the per-character phase
+00017d60   orr r6, r6, sb                 ; frame = view * 8 + phase
+```
+
+and `sb` as it came in is set at the top of the function:
+
+```
+00017a18   ldrb lr, [r4, #0x1c]           ; the visible-list entry's +0x1c
+00017a24   lsl  sb, lr, #0x10
+```
+
+`CullMovers` puts `mover + 0x18` in the visible list (`0x012af0`), so that
+byte is the **mover's own `+0x34`** — and `MoverStep` counts it up once per
+stride and masks it to three bits (`0x00785c`, `0x007950`). It had been
+written down here as a field nothing writes; `0x007658` writes it, and it is
+the walk cycle.
+
+So a standing rithm holds one pose and a walking one cycles its legs, one
+frame per stride. The 44-byte animation record is still **per character** and
+still shared — but nothing per-mover is needed, because `DrawMover` writes the
+frame number into that shared record before every `GetAnimCel` anyway.
 
 What does animate is a **state**: the low nibble of the entry's flag word
 picks animation slot `nibble + 2`, and that path calls `GetAnimCel(anim,
@@ -357,6 +380,150 @@ picks animation slot `nibble + 2`, and that path calls `GetAnimCel(anim,
 (`0x017bd0`-`0x017c78`). The mask at the record's `+0x1c` gets the same frame
 written and the same call, which is [24](24-the-cast.md)'s mask offset
 confirmed from the drawing side.
+
+## And now they walk
+
+Placing them was half the answer. `MoverFrame` at `0x00bacc` runs the whole
+`CharacterList` once a frame, and five functions under it are the movement:
+
+| | |
+|---|---|
+| `0x00bacc` | **MoverFrame** — the bearing to the player, the gait's rate, then the three below |
+| `0x0062f8` | **MoverThink** — three deadlines: decide, aim, and `0x006128` |
+| `0x005fa0` | **MoverAim** — the target into a bearing |
+| `0x00a4a4` | **TurnMover** — the bearing into a heading, and the heading into a velocity |
+| `0x007658` | **MoverStep** — the velocity into two map probes |
+
+### The rate is a crowd's, the stride is an animation's
+
+Two numbers, from two different places, and it matters which is which.
+
+`0x00bc98` refreshes the mover's `+0x20` every frame from the **crowd record**
+the mover belongs to — bits 17-18 of its flag word pick one of the four at
+`0x089c90`, and `NewCrowds` writes both of that record's speeds by hand:
+
+```
+000085b8   [crowd + 0x18] = 0x3000        ; 0.1875
+000085c4   [crowd + 0x1c] = 0x6000        ; 0.375
+```
+
+The pair is chosen by the record's own play mode, and a crowd's is the first:
+**every overworld rithm moves at 0.1875 world units a tick**, before the gait.
+That block runs for character 0 and no one else (`0x00bbd0`), which is the
+whole crowd.
+
+The gait is **bits 24-25 of the mover's `+0x18`** — the two-bit field
+[20](20-p1e-the-final-encounter.md) left open as "three phases, and what
+they are is the question". They are speeds:
+
+| bits | rate | what sets it |
+|---|---|---|
+| 0 | 0 | standing |
+| 1 | `rate >> 1` | `0x005cb0`, the wander and most idles |
+| 2 | `rate` | `0x00bfd0`, when the pack notices you |
+| 3 | `rate + rate/2` | `0x005c48` and `0x0077ac`, the charge |
+
+and state `0x41` overrides them all with `rate << 2` at `0x00bee8`.
+
+Gait 2 and 3 drain **Agility** — the mover's `+0x60`, which is the third of
+the DOA triple `NewMover` rolls — by `rate >> 3` a frame, and when it reaches
+zero `0x00becc` drops the gait to 1. Standing regenerates it at 0x400 a frame
+and the half-speed walk refills it outright. Character 0 is exempt
+(`0x00be94`), so a crowd rithm never tires.
+
+The **stride** is a different number: the animation record's `+0x14`,
+[10](10-second-b3d-family.md)'s column 6, 0.8999939 for Goner's run. It is
+both how far one stride carries —
+
+```
+0000a5c0   [mover + 0x50] = MulSF16(step, Cos(heading))
+0000a5f4   [mover + 0x54] = MulSF16(step, Sin(heading))
+```
+
+— and what one costs out of the accumulator at `+0x4c`, which the rate pays
+into. So the *speed* is the crowd's and the *granularity* is the animation's:
+at the wander's gait a rithm covers 0.09375 units a tick, 5.6 a second, and
+takes a stride every 9.6 ticks. Eight strides is one turn of the legs, about
+a second and a quarter.
+
+### A stride is two probes
+
+`MoverStep` is the same rule `MovePlayer` uses ([06](06-code-map.md)), one
+axis at a time:
+
+```
+00007870   probe((x + dx) >> 16, y >> 16)      ; 0x011094
+00007898   and #1                              ; open ground or an encounter
+000078a4   0x00652c(x, y)                      ; and inside the world box
+000078b0   x += dx
+000078d4   probe(x >> 16, (y + dy) >> 16)      ; with the *new* x
+```
+
+The second probe uses the x the first one just took, so the corner is tested
+and a mover cannot cut diagonally into a wall. Each axis gives up
+independently, which is what makes a blocked rithm slide along a face instead
+of sticking to it. `& 1` passes the probe's 3 and its 1 — open ground and an
+encounter site — and rejects 0 and 2, solid and wall.
+
+And when an axis is refused, the mover turns:
+
+```
+00007968   quad = (vx < 0) + 2 * (vy < 0)
+00007994   y blocked:  quad 0 or 3 -> -8.0, else +8.0
+000079c0   x blocked:  quad 1 or 2 -> -8.0, else +8.0
+000079d0   both:       +32.0
+000079d8   and #0xff0000                        ; a whole 256th, no fraction
+```
+
+Eleven and a quarter degrees off a wall, forty-five out of a corner, and the
+heading truncated to a whole unit on the way out.
+
+### The wander is the state a viewer can run
+
+`MoverDecide` at `0x004ff8` is a weighted choice between fifteen states and is
+not transcribed. One of them is, end to end: **`0x40`**, and it is the one the
+overworld idles in.
+
+`MoverEnterState` gives it a destination where the mover already stands, an
+animation slot of `0x10`, and gait 1 (`0x005ee8` into `0x005cb0`). Then
+`MoverAim` refuses to aim:
+
+```
+00005fc0   ldrb r3, [r0, #0x74]
+00005fc4   teq  r3, #0x40
+00005fcc   mov  r0, #8
+00005fd0   bl   RandomBits                      ; a bearing out of nowhere
+```
+
+and `TurnMover` refuses to turn gradually — `0x00a510` sends state `0x40`
+straight to the snap — so a wandering rithm picks a fresh random heading every
+sixty ticks and is instantly facing it. A random walk at 5.6 units a second
+with a new leg every second: over ten seconds they cover 56 units of path and
+end six from where they started. They mill.
+
+### Both renderers walk them
+
+[`tools/spawns.py`](../tools/spawns.py)'s `Walk` is the transcription, in
+**integers**: the accumulator, the heading, the velocity and the phase are
+16.16 in the game and a floating copy would not reproduce them. `native/view.c`
+runs the same arithmetic in C, over the same quarter-wave sine table — the
+pack carries `p`'s own 4,097 words rather than calling `cos` — and the two
+agree **bit for bit**: the same 47 rithms at the same 16.16 coordinates, the
+same headings and the same phases, after 36,000 ticks of walking.
+
+```sh
+python tools/scenepack.py out/world.pack
+native/view.exe out/world.pack                       # they walk, live
+native/view.exe out/world.pack --ticks 1800 --shot out/t.bmp
+python tools/b3dview.py ... --ticks 1800
+python tools/packdiff.py --walk 36000                 # the state, not the pixels
+python tools/packdiff.py --sweep                     # the tick count is swept too
+```
+
+What the viewer does not run is `MoverDecide`, so nothing ever leaves the
+wander: no rithm chases you, and the gaits above 1 are in the pack's reach but
+never chosen. That is the next piece, and it is a weighting function rather
+than a mechanism.
 
 ## The city is populated
 
@@ -379,12 +546,14 @@ offset are three columns of `PerfectMovers.B3D` ([10](10-second-b3d-family.md))
 quantised once in `movers.mover_art` so that the pack's 12.4 and the Python
 renderer's floats round the same way.
 
-The eight frames are the eight the game would draw, resolved once in
-`movers.mover_art`: `frame_of` applies `view * 8 + phase` and the mirror rule,
-and hands back the mirrored pixels where the console would have negated
-`ccb_HDX`. So both renderers index the array with the view alone and neither
-needs a flip of its own — the Python side stays the authority on *what the
-frame is*, which is the same split the walls and the ground already use.
+The **sixty-four** frames are the sixty-four the game would draw, resolved
+once in `movers.mover_art`: `frame_of` applies `view * 8 + phase` and the
+mirror rule for all eight phases of all eight views, and hands back the
+mirrored pixels where the console would have negated `ccb_HDX`. So both
+renderers index the array with `phase * 8 + view` and neither needs a flip of
+its own — the Python side stays the authority on *what the frame is*, which is
+the same split the walls and the ground already use. (It was eight frames
+before the phase was found; the pack grew by 56 cels.)
 
 ```sh
 python tools/b3dview.py extracted/Perfect/CondensedPerfectWorld.B3D        out/movers.png --cels extracted/Perfect/PerfectWorld.CELS        --floor extracted/Perfect/Floor/AllFloor --assets extracted/Perfect        --eye -358.3 651.3 6 --yaw -45 --fov 26 --size 300 300
@@ -396,11 +565,13 @@ side-on. The view steps through all eight exactly once round the circle, and
 frames 8, 16 and 24 each appear twice — once plain and once mirrored.
 
 The check that both renderers still agree survives the addition, and the check
-itself got much stronger — `packdiff.py --sweep` now drives both over a grid of
-cameras and finds **no differing pixel anywhere**: 48 cameras and 4.8 million
-pixels by default, 60 and 8.6 million at `--eyes 16 --size 480 300`. Getting
-there took fixing two ties neither renderer had been asked the right question
-about — see [08](08-the-ground.md) and `tools/packdiff.py`.
+itself got much stronger — `packdiff.py --sweep` drives both over a grid of
+cameras **and a grid of mover tick counts**, and finds no differing pixel
+anywhere: 48 cameras and 4.8 million pixels by default. It no longer has to
+keep away from buildings either, now that `b3dview.py` clips against the near
+plane instead of dropping a straddling polygon whole. Getting there took
+fixing two ties neither renderer had been asked the right question about —
+see [08](08-the-ground.md) and `tools/packdiff.py`.
 
 The 47 rithms cost nothing measurable: 84.2 and 83.3 fps at 960 x 600 with
 them against 84.2 and 83.7 without, back to back.
@@ -426,7 +597,7 @@ a rithm, which is the same figure [13](13-hud-maps.md) measured from the art.
 their rithms in yellow, the entry burst in green and the shape cache's own in
 pink, and every one of them on the open half of the city.
 
-## Twelve functions named
+## Twenty-two functions named
 
 | Address | What it is | Identified by |
 |---|---|---|
@@ -442,3 +613,13 @@ pink, and every one of them on the open half of the city.
 | `0x0088ac` | `PopulateWorld` — the crowds in range, then 6..13 around the player | `RandomBits(2) + 10` |
 | `0x009544` | `SpawnNewShapes` — the shape cache's own spawner, on the streaming thread | `LoadWorldCels`'s only game call |
 | `0x006768` | `UpdateCrowds` — drift, retarget, fill and empty, once a frame | `AudioTicks() & 7` as a compass |
+| `0x00bacc` | `MoverFrame` — the per-frame pass over the whole `CharacterList` | the list anchor at `[0x60cdc+0xa544]` |
+| `0x0062f8` | `MoverThink(mover)` — the decide, aim and `0x006128` deadlines | `+0x80`, `+0x88`, `+0x84` |
+| `0x0058f0` | `MoverEnterState(mover)` — what each state sets up | the jump table at `0x005984` |
+| `0x005fa0` | `MoverAim(mover)` — the target into a bearing | `teq r3, #0x40` at `0x005fc4` |
+| `0x00a4a4` | `TurnMover(mover)` — the bearing into a heading, and into a velocity | `cmp r3, #0x58000` |
+| `0x00a600` | `SetMoverBearing(mover, angle)` — two instructions and a fall-through | `str r1, [r0, #0x7c]` |
+| `0x00a608` | `SetMoverHeading(mover, angle)` — both fields at once | `NewMover` ends on it |
+| `0x007658` | `MoverStep(mover)` — the stride, the two probes and the turn out | `0x0079d8`'s `and #0xff0000` |
+| `0x00652c` | `InsideWorld(x, y)` — `ClampToWorld` asked as a question | the same four words |
+| `0x00ac88` | `FreeMover(mover)` — unlink and release, 20 call sites | `EmptyCrowd` calls it |

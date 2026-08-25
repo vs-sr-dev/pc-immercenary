@@ -21,6 +21,13 @@ renderers compute lands exactly on a threshold, and a tie only shows up where
 the geometry puts it.
 
     python tools/packdiff.py --sweep
+
+`--walk N` is the other half of the same argument. Two renderers can agree on
+a frame while both have their movers in the wrong place, so this compares the
+mover state itself -- the 16.16 position, heading, velocity and step phase,
+after N ticks -- rather than the pixels it produces.
+
+    python tools/packdiff.py --walk 3600
 """
 import sys, os, struct, zlib, argparse, subprocess
 
@@ -97,12 +104,21 @@ def load(path):
 # a rithm -- on ground the radar probe calls open, `docs/25`.
 SWEEP_YAWS = (0, 45, 90, 180, -90, 213)
 SWEEP_PITCHES = (0, 2, -5)
+SWEEP_TICKS = (0, 37, 240, 601, 1800, 5400)   # of the mover walk
 SWEEP_STRIDE = 384          # world units between candidate eyes
 SWEEP_CLEAR = 12            # open ground wanted this far to either side
 
 
-def sweep_eyes(n, hud):
-    """`n` eyes on open ground, on a fixed lattice, in a fixed order."""
+def sweep_eyes(n, hud, clear=False):
+    """`n` eyes on a fixed lattice, in a fixed order.
+
+    `clear` used to be forced on.  The reference renderer dropped any polygon
+    that crossed the near plane whole, so an eye inside a building disagreed
+    with the native one by 71,201 pixels of a 400 x 250 frame and the sweep
+    had to keep away from walls -- which is exactly where a clipping bug would
+    hide.  b3dview.py has a Sutherland-Hodgman clipper of its own now, so the
+    lattice is taken as it falls, buildings included.
+    """
     import spawns
     probe = spawns.Probe(hud)
     out = []
@@ -111,13 +127,9 @@ def sweep_eyes(n, hud):
         y = spawns.MIN_Y + SWEEP_STRIDE
         while y < spawns.MAX_Y and len(out) < n:
             probe.look_from(x, y)
-            # Open under the eye is not enough: the probe is a ground-level
-            # test and the near plane is one unit in front of a lens twenty
-            # units up, so a low wall beside you still crosses it.  Ask for
-            # clearance all round.
-            if all(probe(x + dx, y + dy) == spawns.OPEN
-                   for dx in (-SWEEP_CLEAR, 0, SWEEP_CLEAR)
-                   for dy in (-SWEEP_CLEAR, 0, SWEEP_CLEAR)):
+            if not clear or all(probe(x + dx, y + dy) == spawns.OPEN
+                                for dx in (-SWEEP_CLEAR, 0, SWEEP_CLEAR)
+                                for dy in (-SWEEP_CLEAR, 0, SWEEP_CLEAR)):
                 out.append((x, y))
             y += SWEEP_STRIDE * 3
         x += SWEEP_STRIDE * 2
@@ -130,14 +142,21 @@ def sweep(o):
     if o.mingw:
         env['PATH'] = o.mingw + os.pathsep + env['PATH']
     cams = []
-    for i, (x, y) in enumerate(sweep_eyes(o.eyes, o.hud)):
+    for i, (x, y) in enumerate(sweep_eyes(o.eyes, o.hud, o.clear)):
         for j, yaw in enumerate(SWEEP_YAWS):
-            cams.append((x, y, o.z, yaw, SWEEP_PITCHES[(i + j) % 3]))
+            # A different mover tick per camera, so the sweep exercises the
+            # walk as well as the geometry: the rithms are somewhere else in
+            # every frame, and both renderers have to put them in the same
+            # somewhere.  0 is the spawn, which is what the pack froze.
+            cams.append((x, y, o.z, yaw, SWEEP_PITCHES[(i + j) % 3],
+                         SWEEP_TICKS[(i * len(SWEEP_YAWS) + j) %
+                                     len(SWEEP_TICKS)]))
     worst = (0, None)
     total = 0
-    for (x, y, z, yaw, pitch) in cams:
+    for (x, y, z, yaw, pitch, ticks) in cams:
         cam = ['--eye', str(x), str(y), str(z),
                '--yaw', str(yaw), '--pitch', str(pitch),
+               '--ticks', str(ticks),
                '--size', str(o.size[0]), str(o.size[1])]
         subprocess.run([os.path.abspath(o.native), o.pack] + cam +
                        ['--shot', o.tmp + '.bmp'], env=env, check=True,
@@ -155,9 +174,9 @@ def sweep(o):
                 or A[k * 4 + 2] != B[k * 4 + 2])
         total += n
         if n > worst[0]:
-            worst = (n, (x, y, z, yaw, pitch))
-        print('  %6d  eye %6d %6d %3d  yaw %4d  pitch %3d'
-              % (n, x, y, z, yaw, pitch))
+            worst = (n, (x, y, z, yaw, pitch, ticks))
+        print('  %6d  eye %6d %6d %3d  yaw %4d  pitch %3d  tick %5d'
+              % (n, x, y, z, yaw, pitch, ticks))
     print('%d cameras at %dx%d: %d differing pixels of %d'
           % (len(cams), o.size[0], o.size[1], total,
              len(cams) * o.size[0] * o.size[1]))
@@ -167,6 +186,53 @@ def sweep(o):
         if os.path.exists(o.tmp + ext):
             os.remove(o.tmp + ext)
     return 1 if total else 0
+
+
+
+def walkcheck(o):
+    """Hold the native walk against `spawns.Walk`, integer for integer.
+
+    The pixels are the end of the argument and this is the middle of it: two
+    renderers can agree on a frame while their movers are somewhere else, if
+    both are somewhere else the same way.  This compares the 16.16 state
+    itself -- position, heading, velocity and step phase -- so a divergence
+    shows up as the tick it started on rather than as a smear of pixels.
+    """
+    import spawns
+    import movers
+    from floor import Floor
+
+    env = dict(os.environ)
+    if o.mingw:
+        env['PATH'] = o.mingw + os.pathsep + env['PATH']
+    eye = o.walk_eye
+    out = subprocess.run(
+        [os.path.abspath(o.native), o.pack,
+         '--eye', str(eye[0]), str(eye[1]), '20',
+         '--ticks', str(o.walk), '--seed', str(o.seed), '--dump-movers'],
+        env=env, capture_output=True, text=True, check=True).stdout
+    native = [tuple(int(v) for v in l.split()[1:])
+              for l in out.splitlines() if l.startswith('mover ')]
+
+    pop = spawns.population(o.spawn_seed, tuple(eye), o.hud)
+    steps = movers.mover_steps(o.assets, {m.kind for m in pop})
+    ground = Floor(o.floor)
+    walk = spawns.Walk(pop, steps, hud=o.hud, seed=o.seed,
+                       lake=ground.tile_at_world)
+    walk.run(o.walk, tuple(eye))
+    ref = [(i, w.x, w.y, w.heading, w.vx, w.vy, w.phase)
+           for i, w in enumerate(walk.walkers)]
+
+    if len(native) != len(ref):
+        print('%d movers native, %d reference' % (len(native), len(ref)))
+        return 1
+    bad = [(a, b) for a, b in zip(native, ref) if a != b]
+    for a, b in bad[:5]:
+        print('  native %s' % (a,))
+        print('  ref    %s' % (b,))
+    print('%d movers after %d ticks: %d differ'
+          % (len(ref), o.walk, len(bad)))
+    return 1 if bad else 0
 
 
 def main():
@@ -192,9 +258,23 @@ def main():
     ap.add_argument('--eyes', type=int, default=8, help='sweep camera count')
     ap.add_argument('--hud', default='extracted/Perfect/HUD')
     ap.add_argument('--z', type=int, default=20, help='sweep eye height')
+    ap.add_argument('--clear', action='store_true',
+                    help='sweep only from open ground, as it had to before '
+                         'b3dview.py could clip')
     ap.add_argument('--tmp', default='out/_sweep')
+    ap.add_argument('--walk', type=int, metavar='TICKS',
+                    help='compare the two mover walks after N ticks, '
+                         'rather than two frames')
+    ap.add_argument('--walk-eye', type=int, nargs=2, default=[-279, 640],
+                    help='the eye the walk probes from')
+    ap.add_argument('--seed', type=int, default=1,
+                    help="the walk's own generator")
+    ap.add_argument('--spawn-seed', type=int, default=1,
+                    help='the seed the population was packed from')
     o = ap.parse_args()
 
+    if o.walk is not None:
+        return walkcheck(o)
     if o.sweep:
         return sweep(o)
     if not o.a or not o.b:

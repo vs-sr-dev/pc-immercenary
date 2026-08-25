@@ -99,6 +99,59 @@ The `P1E` pair has **no encounter sites at all**, and the `NoEncounter` pair
 keeps 0.31% — one landmark that is drawn in the encounter colour but is not an
 encounter, and does not change when the lieutenants fall.
 
+## These are not the radar. They are the collision.
+
+The name and the placement say "minimap", and that reading held for three
+sessions. It is the smaller half of what the files are for.
+
+`0x010ca8` moves the player and `0x007658` moves a rithm, and both of them do
+the same thing: offer the new X to `MapProbe` and take it only if the answer
+has bit 0 set, then offer the new Y separately.
+
+```
+00010ee8   probe((x + dx) >> 16, y >> 16)      ; the player
+00010f0c   ands r8, r0, #1
+00010f18   x += dx
+00010f24   probe(x >> 16, (y + dy) >> 16)      ; with the x it just took
+```
+
+**No wall geometry is consulted anywhere in the overworld.** The 8,463 quads
+of `CondensedPerfectWorld.B3D` are drawn and nothing else; what you can walk
+through is decided entirely by this raster, at two world units a pixel.
+
+Three consequences a port has to know:
+
+- **A walker is a point.** No radius, no capsule, no push-out. Run at a wall
+  and the axis that would enter it is simply not taken; the other still is,
+  which is the whole of the game's wall-sliding.
+- **`& 1` is the test, not `== 3`.** Value 1 is open ground and value 3 is an
+  encounter site, and both are passable — walking onto 3 is how an encounter
+  starts. The spawners ask `== 3` because they want *plain* open ground, which
+  is a different question and is why the two constants sit side by side in
+  `tools/spawns.py`.
+- **The resident pair is the player's cell's.** `0x01e908` overwrites the same
+  two buffers every time you cross a cell boundary, so the probe answers about
+  the tiles of *your* cell wherever the question is about — including about a
+  rithm two cells away. Adjacent tiles agree 99.99% of the time, so this is
+  nearly but not quite a single world-sized raster, and a port that stitches
+  one will differ from the console in about one pixel in ten thousand.
+
+### How well it agrees with the walls
+
+`native/view.exe --walktest 20000` walks the game's own rule for 480,000 ticks
+and holds the result against the wall quads, which were authored separately:
+
+```
+never ended a stride on a pixel the map calls closed: yes (0 of 20000)
+nearest wall quad ever 5.68; 1581 strides ended within a body width (12) of one
+3154 strides had an axis refused
+```
+
+So the map lets you within 5.68 units of a wall face and never inside one.
+`native/view.c` used to walk a circle of radius 12 against those quads and
+skip any quad shorter than 16 units as scenery; both numbers were guesses and
+neither survives — the map has no notion of either.
+
 ## Verification
 
 Two independent checks, both in `tools/hudmap.py`:

@@ -12,6 +12,11 @@ bank, and one world unit is one texture pixel.
 
 Angles are degrees; the eye is in world units (X east, Y north, Z up), and
 yaw 0 looks along +X.
+
+`--ticks N` runs the rithms N 60 Hz ticks of `spawns.Walk` before drawing, so
+a still frame can be taken of a city in motion; native/view.c runs the same
+integers from the same seed, and `tools/packdiff.py --sweep` sweeps the tick
+count as well as the camera.
 """
 import sys, os, math, argparse
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -208,6 +213,7 @@ FADE = tuple((((v >> 10) & 7) + 1) / _SF[(v >> 8) & 3] for v in FADE_PIXC)
 FADE_SHADE = tuple(min(1024, int(v * 256)) for v in FADE)
 
 NEAR_DETAIL = 52.0          # 0x340000 in 16.16, the compare at 0x10260
+NEARZ = 1.0                 # the near plane both renderers clip against
 
 
 def sincos(deg):
@@ -253,7 +259,7 @@ UV_FLOOR = ((0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0))
 
 def render(path, out, eye, yaw, pitch, fov=70.0, size=(800, 500), far=6000.0,
            cels=None, allfloor=None, floor_radius=40, assets=None, clock=0.0,
-           draw_props=True, spawn=None):
+           draw_props=True, spawn=None, ticks=0, seed=1, hud=None):
     b = B3D(path)
     recs, failed = b.walk()
     bank = Bank(cels) if cels else None
@@ -296,17 +302,62 @@ def render(path, out, eye, yaw, pitch, fov=70.0, size=(800, 500), far=6000.0,
     f = (W / 2) / math.tan(math.radians(fov) / 2)
     ex, ey, ez = eye
 
-    def project(v, uv):
+    def to_cam(v, uv):
+        """World to camera space: right, up, forward, and the texture pair."""
         x, y, z = v[0] - ex, v[1] - ey, v[2] - ez
         fx = x * cy + y * sy
-        rx = -x * sy + y * cy
-        fz = fx * cp + z * sp
-        uz = -fx * sp + z * cp
-        if fz <= 1.0:
+        return (-x * sy + y * cy, -fx * sp + z * cp, fx * cp + z * sp,
+                uv[0], uv[1])
+
+    def to_screen(q):
+        iz = 1.0 / q[2]
+        return (W / 2 - q[0] * f * iz, H / 2 - q[1] * f * iz, iz,
+                q[3] * iz, q[4] * iz)
+
+    def clip_near(poly):
+        """Sutherland-Hodgman against the near plane.
+
+        This renderer used to drop any polygon with a vertex behind the lens
+        whole.  From a fixed eye on open ground that is invisible, and it was
+        the last deliberate difference between the two renderers -- put the
+        eye inside a building and they disagreed by 71,201 pixels of a
+        400 x 250 frame.  native/view.c has clipped since it could walk;
+        this is the same routine, vertex for vertex.
+        """
+        out = []
+        n = len(poly)
+        for i in range(n):
+            a_, b_ = poly[i], poly[(i + 1) % n]
+            ain, bin_ = a_[2] >= NEARZ, b_[2] >= NEARZ
+            if ain:
+                out.append(a_)
+            if ain != bin_:
+                t = (NEARZ - a_[2]) / (b_[2] - a_[2])
+                out.append((a_[0] + t * (b_[0] - a_[0]),
+                            a_[1] + t * (b_[1] - a_[1]),
+                            NEARZ,
+                            a_[3] + t * (b_[3] - a_[3]),
+                            a_[4] + t * (b_[4] - a_[4])))
+        return out
+
+    def draw_poly(corners, uvs, shade, tex, flat):
+        """Clip, project and fan-triangulate one convex polygon."""
+        m = clip_near([to_cam(c, uvs[k]) for k, c in enumerate(corners)])
+        if len(m) < 3:
+            return 0
+        sv = [to_screen(q) for q in m]
+        for i in range(1, len(sv) - 1):
+            r._span(sv[0], sv[i], sv[i + 1], shade, tex, flat)
+        return 1
+
+    def project(v, uv):
+        """The old whole-polygon path, for the sprites: a screen-aligned
+        rectangle has one point and either it is in front of the lens or the
+        sprite is not drawn at all."""
+        q = to_cam(v, uv)
+        if q[2] <= NEARZ:
             return None
-        iz = 1.0 / fz
-        return (W / 2 - rx * f * iz, H / 2 - uz * f * iz, iz,
-                uv[0] * iz, uv[1] * iz)
+        return to_screen(q)
 
     nf = 0
     if ground:
@@ -326,18 +377,13 @@ def render(path, out, eye, yaw, pitch, fov=70.0, size=(800, 500), far=6000.0,
                     continue              # (floor.py already maps off-map to 13)
                 corners = ((x0, y0, 0), (x0 + TILE, y0, 0),
                            (x0 + TILE, y0 + TILE, 0), (x0, y0 + TILE, 0))
-                p = [project(c, UV_FLOOR[k]) for k, c in enumerate(corners)]
-                if any(q is None for q in p):
-                    continue
                 # camera-space depth and lateral offset of the quad centre
                 dx, dy = x0 + TILE / 2 - ex, y0 + TILE / 2 - ey
                 depth = (dx * cy + dy * sy) * cp - ez * sp
                 lateral = -dx * sy + dy * cy
                 tex = floor_tex(t, depth <= NEAR_DETAIL)
                 shade = min(1024, int(FADE[fade_level(depth, lateral)] * 256))
-                r._span(p[0], p[1], p[2], shade, tex, (60, 60, 60))
-                r._span(p[0], p[2], p[3], shade, tex, (60, 60, 60))
-                nf += 1
+                nf += draw_poly(corners, UV_FLOOR, shade, tex, (60, 60, 60))
 
     nq = 0
     for rec in recs:
@@ -346,18 +392,13 @@ def render(path, out, eye, yaw, pitch, fov=70.0, size=(800, 500), far=6000.0,
             cyy = sum(c[1] for c in corners) * 0.25
             if (cx - ex) ** 2 + (cyy - ey) ** 2 > far * far:
                 continue
-            p = [project(c, UV[k]) for k, c in enumerate(corners)]
-            if any(q is None for q in p):
-                continue
             lit = 1.0
             if ang is not None:
                 lit = 0.72 + 0.28 * math.cos(math.radians(ang * 360.0 / 256.0))
             tex = texture(tid)
             shade = max(0, min(256, int(lit * 256)))
             flat = tuple(min(255, int(v * lit)) for v in flat_hue(tid))
-            r._span(p[0], p[1], p[2], shade, tex, flat)
-            r._span(p[0], p[2], p[3], shade, tex, flat)
-            nq += 1
+            nq += draw_poly(corners, UV, shade, tex, flat)
 
     # The placed props: one cel each, drawn as a screen-aligned rectangle at
     # the depth of its base point. tools/props.py has every rule.
@@ -440,19 +481,33 @@ def render(path, out, eye, yaw, pitch, fov=70.0, size=(800, 500), far=6000.0,
     # a `sub = 3` turntable: eight views, `face` the heading NewMover rolled.
     nm_ = 0
     if draw_props and assets and spawn:
-        art = movermod.mover_art(assets, {m.kind for m in spawn})
+        art = movermod.mover_art(assets, {m.kind for m in spawn},
+                                 phases=movermod.VIEWS)
         mtex = {k: [Texture(im[0], im[1], im[2], im[3])
                     for im in v['frames']] for k, v in art.items()}
-        for m in spawn:
+        # And now they walk.  spawns.Walk is the transcription of 0x007658 and
+        # its neighbours; native/view.c runs the same integers, which is why
+        # `--ticks` can be swept as well as the camera.
+        steps = {k: v['step'] for k, v in art.items()}
+        walk = spawnmod.Walk(spawn, steps, seed=seed,
+                             hud=hud or spawnmod.HUD,
+                             lake=ground.tile_at_world if ground else None)
+        walk.run(ticks, (ex, ey))
+        for m, w in zip(walk.movers, walk.walkers):
             if m.kind not in art:
                 continue
-            if (m.x - ex) ** 2 + (m.y - ey) ** 2 > far * far:
+            mx, my = w.x >> 16, w.y >> 16
+            if (mx - ex) ** 2 + (my - ey) ** 2 > far * far:
                 continue
             a = art[m.kind]
             frames = mtex[m.kind]
-            tex = frames[propmod.view_frame(int(m.x - ex), int(m.y - ey),
-                                            m.face, len(frames), len(frames))]
-            x, y, z = m.x - ex, m.y - ey, a['z'] - ez
+            views = a['views']
+            # 0x017cfc and 0x017d60: `phase * views + view`, the phase being
+            # the mover's own step counter while its gait bits are set.
+            view = propmod.view_frame(int(mx - ex), int(my - ey),
+                                      (w.heading >> 16) & 0xff, views, views)
+            tex = frames[(w.phase * views + view) % len(frames)]
+            x, y, z = mx - ex, my - ey, a['z'] - ez
             fx = x * cy + y * sy
             rx = -x * sy + y * cy
             fz = fx * cp + z * sp
@@ -503,12 +558,16 @@ def main():
     ap.add_argument('--spawn-eye', type=int, nargs=2, default=[-279, 640])
     ap.add_argument('--crowds', choices=('all', 'inrange'), default='all')
     ap.add_argument('--crashes', type=int, default=20)
+    ap.add_argument('--ticks', type=int, default=0,
+                    help='60 Hz ticks of the mover walk to run first')
+    ap.add_argument('--seed', type=int, default=1,
+                    help="the walk's own generator; see tools/spawns.py")
     a = ap.parse_args()
     spawn = None if a.no_movers else spawnmod.population(
         a.spawn_seed, tuple(a.spawn_eye), a.hud, a.crowds, a.crashes)
     render(a.b3d, a.png, a.eye, a.yaw, a.pitch, a.fov, tuple(a.size), a.far,
            a.cels, a.floor, a.floor_radius, a.assets, a.time, not a.no_props,
-           spawn)
+           spawn, a.ticks, a.seed, a.hud)
 
 
 if __name__ == '__main__':

@@ -16,18 +16,28 @@ has to draw it.
 The format is little-endian and 4-byte aligned, i.e. what x86 C reads with a
 cast. Offsets are from the start of the file.
 
-    Header       96 bytes, see HEADER below
+    Header       128 bytes, see HEADER below
     Quad[]       32 bytes each: four i16 corners, texid, angle, flags
     TexEnt[]     8 bytes each, indexed by texture id; w == 0 means unused
     TexEnt[30]   the floor tiles: 0-14 far, 15-29 near
     map          256 x 256 bytes, one tile id per cell, row 0 at the north
     Prop[]       16 bytes each: a placed sprite, see tools/props.py and
-                 tools/items.py -- the props first, then the item spawns.
-                 Its ground offset, width and height are 12.4 fixed point,
-                 because a rolled tree's height is `h * 1.5`
+                 tools/items.py -- the props first, then the item spawns,
+                 then the movers.  Its ground offset, width and height are
+                 12.4 fixed point, because a rolled tree's height is `h * 1.5`
+    MoverEnt[]   12 bytes each, one per mover, in the same order as the last
+                 `nmover` Props: step length, base rate and gait, 16.16
     AnimEnt[]    4 bytes each: frame count and first frame, per `.anim`
     TexEnt[]     one per sprite frame, all the anims' frames end to end
+    sine         4,097 words: the quarter-wave table at `p` 0x0594fc, each
+                 entry already `>> 10`, which is how the game reads it
+    near         256 radar tiles, 256 x 256 at 2 bpp, 0x4000 bytes each
+    far          256 radar tiles, 160 x 160 at 1 bpp, 0x1000 bytes each
     texdata      ARGB8888 pixels, alpha 0 for the CEL's transparent index
+
+The two `.Maps` are in here because they are the game's collision: `0x010ca8`
+moves the player and `0x007658` moves a mover by probing the near map one
+axis at a time, and neither consults the wall geometry at all.
 
 The quads keep the game's own coordinates: X east, Y north, Z up, one world
 unit per texture pixel.
@@ -45,15 +55,20 @@ import movers as movermod
 import spawns as spawnmod
 
 MAGIC = b'IMPK'
-VERSION = 3
-HEADER = '<4sI 2I 2I 2I 2I I 3i 2I 2I 2I 16x'   # 96 bytes
+VERSION = 4
+HEADER = '<4sI 2I 2I 2I 2I I 3i 2I 2I 2I 2I 2I 4i I 12x'   # 128 bytes
 QUAD = '<12h hh HH'                       # 32 bytes
 TEXENT = '<HHI'                           # 8 bytes
 PROP = '<3h 3h 3B x'                      # 16 bytes
+MOVERENT = '<3i'                          # 12 bytes: step, rate, gait
 ANIMENT = '<HH'                           # 4 bytes
 
-# Every overworld animation is an eight-view turntable -- docs/24.
+# Every overworld animation is an eight-view turntable -- docs/24 -- and a
+# walking rithm cycles eight phases through it, `phase * 8 + view`, the phase
+# being the step counter at its own `+0x34` (docs/25).
 VIEWS = 8
+PHASES = 8
+GAIT = 1                        # the half-speed walk state 0x40 is given
 
 
 def u4(v):
@@ -66,6 +81,21 @@ def u4(v):
     n = int(round(v * 16))
     assert abs(n - v * 16) < 1e-9, v
     return n
+
+
+def sine_table(imagepath):
+    """The 4,097-entry quarter wave at `p` 0x0594fc, little-endian and
+    already shifted.
+
+    A mover's velocity is `MulSF16(step, Cos(heading))` and its heading is a
+    16.16 fraction of the turn, so a viewer that means to end up where the
+    console would has to interpolate the same table rather than call its own
+    `cos`.  `0x056ffc` reads each entry `>> 10`, so that is what goes in.
+    """
+    from armmath import Trig
+    d = open(imagepath, 'rb').read()
+    t = Trig(d)
+    return struct.pack('<4097I', *[t._t(i) for i in range(4097)])
 
 
 def flatten(im, bgnd=True):
@@ -100,7 +130,8 @@ def flatten(im, bgnd=True):
     return w, h, bytes(out)
 
 
-def pack(b3dpath, celpath, floorpath, assets, out, spawn=None):
+def pack(b3dpath, celpath, floorpath, assets, out, spawn=None,
+         hud=spawnmod.HUD, image=spawnmod.IMAGE):
     t0 = time.time()
     b = B3D(b3dpath)
     recs, failed = b.walk()
@@ -219,8 +250,10 @@ def pack(b3dpath, celpath, floorpath, assets, out, spawn=None):
     # the byte at the mover's `+0x34`, which is written somewhere this project
     # has not read yet.
     mlist = spawn or []
+    movers_bin = b''
     if mlist:
-        art = movermod.mover_art(assets, {m.kind for m in mlist}, views=VIEWS)
+        art = movermod.mover_art(assets, {m.kind for m in mlist},
+                                 views=VIEWS, phases=PHASES)
         mlist = [m for m in mlist if m.kind in art]
         midx = {}
         for kind in sorted(art):
@@ -236,8 +269,22 @@ def pack(b3dpath, celpath, floorpath, assets, out, spawn=None):
             props_bin += struct.pack(PROP, m.x, m.y, u4(a['z']),
                                      u4(a['w']), u4(a['h']),
                                      m.face, VIEWS, midx[m.kind], 8)
+            # What the walk needs and the art does not carry: how far one
+            # stride goes, the crowd's base rate and the gait the wander
+            # state is given.  docs/25 and tools/spawns.py are the authority.
+            movers_bin += struct.pack(MOVERENT, a['step'],
+                                      spawnmod.CROWD_RATE, GAIT)
 
     nprops = len(plist) + len(ilist) + len(mlist)
+
+    # The two radar tile sets, whole, and the sine table they are steered by.
+    # Both maps go in because the resident pair is the *player's* cell's and a
+    # viewer walks the whole city; and both because the probe falls through
+    # from the near tile to the far one wherever the near one does not reach
+    # (`0x0111a4`).
+    near_bin = open(os.path.join(hud, 'NearHUD.Maps'), 'rb').read()
+    far_bin = open(os.path.join(hud, 'FarHUD.Maps'), 'rb').read()
+    sine_bin = sine_table(image)
 
     hsz = struct.calcsize(HEADER)
     quads_off = hsz
@@ -245,9 +292,13 @@ def pack(b3dpath, celpath, floorpath, assets, out, spawn=None):
     floor_off = tex_off + ntex * struct.calcsize(TEXENT)
     map_off = floor_off + 30 * struct.calcsize(TEXENT)
     props_off = map_off + len(tmap)
-    anim_off = props_off + len(props_bin)
+    mover_off = props_off + len(props_bin)
+    anim_off = mover_off + len(movers_bin)
     spr_off = anim_off + len(anims) * struct.calcsize(ANIMENT)
-    texdata_off = spr_off + len(sents) * struct.calcsize(TEXENT)
+    sine_off = spr_off + len(sents) * struct.calcsize(TEXENT)
+    near_off = sine_off + len(sine_bin)
+    far_off = near_off + len(near_bin)
+    texdata_off = far_off + len(far_bin)
 
     with open(out, 'wb') as f:
         f.write(struct.pack(HEADER, MAGIC, VERSION,
@@ -259,7 +310,12 @@ def pack(b3dpath, celpath, floorpath, assets, out, spawn=None):
                             COL_BIAS, ROW_BIAS, TILE,
                             nprops, props_off,
                             len(sents), spr_off,
-                            len(anims), anim_off))
+                            len(anims), anim_off,
+                            len(mlist), mover_off,
+                            near_off, far_off,
+                            spawnmod.MIN_X, spawnmod.MAX_X,
+                            spawnmod.MIN_Y, spawnmod.MAX_Y,
+                            sine_off))
         f.write(b''.join(quads))
         for w, h, o in ents:
             f.write(struct.pack(TEXENT, w, h, o))
@@ -267,18 +323,23 @@ def pack(b3dpath, celpath, floorpath, assets, out, spawn=None):
             f.write(struct.pack(TEXENT, w, h, o))
         f.write(tmap)
         f.write(props_bin)
+        f.write(movers_bin)
         for n, first in anims:
             f.write(struct.pack(ANIMENT, n, first))
         for w, h, o in sents:
             f.write(struct.pack(TEXENT, w, h, o))
+        f.write(sine_bin)
+        f.write(near_bin)
+        f.write(far_bin)
         for blob in blobs:
             f.write(blob)
 
     print("%s: %d quads, %d of %d textures, %d floor cels, %d props, "
-          "%d item spawns and %d movers in %d anims (%d frames), %.1f MB, "
-          "%.1fs"
+          "%d item spawns and %d movers in %d anims (%d frames), "
+          "%d MB of radar maps, %.1f MB, %.1fs"
           % (os.path.basename(out), len(quads), len(used), ntex, 30,
              len(plist), len(ilist), len(mlist), len(anims), len(sents),
+             (len(near_bin) + len(far_bin)) // 1048576,
              os.path.getsize(out) / 1048576.0, time.time() - t0))
     if failed:
         print("  %d unwalked ranges" % len(failed))
@@ -293,7 +354,9 @@ def main():
     ap.add_argument('--assets', default='extracted/Perfect',
                     help="where the props' .anim files live")
     ap.add_argument('--hud', default=spawnmod.HUD,
-                    help='the .Maps the spawner probes')
+                    help='the .Maps the spawner probes, and the pack carries')
+    ap.add_argument('--image', default=spawnmod.IMAGE,
+                    help='the ARM image the sine table is copied from')
     ap.add_argument('--spawn-seed', type=int, default=1,
                     help='the seed the population is rolled from')
     ap.add_argument('--spawn-eye', type=int, nargs=2, default=[-279, 640],
@@ -308,7 +371,8 @@ def main():
     a = ap.parse_args()
     pack(a.b3d, a.cels, a.floor, a.assets, a.out,
          None if a.no_movers else spawnmod.population(
-             a.spawn_seed, tuple(a.spawn_eye), a.hud, a.crowds, a.crashes))
+             a.spawn_seed, tuple(a.spawn_eye), a.hud, a.crowds, a.crashes),
+         a.hud, a.image)
 
 
 if __name__ == '__main__':

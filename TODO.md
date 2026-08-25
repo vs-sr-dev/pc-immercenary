@@ -3,6 +3,52 @@
 Everything below has a concrete starting address or file. Nothing here is
 open-ended research.
 
+## Done in session 17
+
+- **The rithms walk, and the whole chain is read.** `MoverFrame` at `0x00bacc`
+  down through `MoverThink` `0x0062f8`, `MoverAim` `0x005fa0`, `TurnMover`
+  `0x00a4a4` and `MoverStep` `0x007658`. The rate is the *crowd's* — `0x3000`,
+  0.1875 units a tick, written by hand in `NewCrowds` — and the stride is the
+  *animation's*, `PerfectMovers.B3D` column 6. The two-bit field at `+0x18`
+  bits 24-25 that [20](docs/20-p1e-the-final-encounter.md) left open as "three
+  phases, and what they are is the question" is the **gait**: 0, a half, one,
+  one and a half, and Agility pays for the top two.
+- **And `docs/25` had the phase wrong.** "The phase is a constant, so a rithm
+  does not walk" is true only while it stands. `0x017d00` tests the gait bits
+  first, and a *moving* rithm keeps the phase the visible-list entry arrived
+  with — which `CullMovers` takes from the mover's `+0x34`, the byte
+  `MoverStep` counts up once a stride. It had been written down as a field
+  nothing writes.
+- **The collision was never geometric.** `0x010ca8` moves the player and
+  `0x007658` moves a rithm by the same rule: one probe of the near `.Maps` per
+  axis per 60 Hz tick, take the axis if the map allows it. No wall geometry is
+  consulted anywhere in the overworld, and a walker is a **point** — no radius,
+  no height test, no push-out. `native/view.c`'s `BODY_RADIUS` and `STEP_OVER`
+  were both guesses and both are gone; the pack carries all 256 tiles of both
+  maps (5 MB) and the viewer probes them.
+- **The last calibrated constant in `native/view.c` is read.** `0x010ca8` is
+  the position update nobody had found, because it holds the camera in a
+  register. A tick carries `MulSF16(Cos(yaw), stride[bob] * speed / 4)`, the
+  stride being a six-entry table at `0x058274` indexed by the head-bob phase —
+  so the walk *surges*, and the top speed of 16.0 is about 35 world units a
+  second against the 20 this viewer had calibrated by eye. The turn at
+  `0x011c64` is a rate, ramped and braked, clamped to 169 degrees a second.
+- **`b3dview.py` clips against the near plane now**, so the last deliberate
+  difference between the two renderers is gone: an eye inside a building used
+  to disagree by 71,201 pixels and agrees to the pixel. `packdiff.py --sweep`
+  no longer has to keep away from walls, and it sweeps the **mover tick count**
+  as well as the camera: 48 cameras and 4.8 million pixels, 96 and 13.8 million
+  at `--eyes 16 --size 480 300`, **zero differing**. The two walks agree bit
+  for bit — same 16.16 coordinates, headings and phases after 36,000 ticks.
+- **The PPMPC is the Chameleon.** `0xe288e288` is written by three sites and
+  all three test `charid == 12` first. Decoded, it is MF 1 over SF 4 with the
+  first-source bit set: the sprite is drawn as a quarter of *what is already
+  behind it*. `+0x76` is a hit count — `ResolveHit` raises it, `MoverThink`
+  clears it — so the Chameleon is invisible until you hit it and fades back on
+  its next decision. And bit 28 of a mover's flags is the **lake**: quarter
+  speed, and both CCBs' `ccb_PRE0` line count halved, which cuts the sprite off
+  at the waterline.
+
 ## Done in session 16, third pass
 
 - **The two renderers now agree at every camera, not one.** The 20 pixels the
@@ -921,9 +967,9 @@ open-ended research.
 
 ## 1. The interactive viewer  *(the one real artefact)*
 
-**It exists, it walks, and the props, the item spawns and the rithms are in
-it.** `native/view.c` at ~84 fps with 1,594 sprites, pixel-identical to
-`tools/b3dview.py` over a swept grid of cameras, collision included.
+**It exists, it walks, the city walks back, and the collision is the game's
+own.** `native/view.c` at ~84 fps with 1,594 sprites, pixel-identical to
+`tools/b3dview.py` over a swept grid of cameras *and* mover tick counts.
 
 ```sh
 python tools/scenepack.py out/world.pack
@@ -932,51 +978,46 @@ native/view.exe out/world.pack
 ```
 
 `--shot FILE.bmp` renders one frame headless, `--time SECONDS` fixes the phase
-of the clock-animated props so that shot is reproducible, `--bench N` times N
-frames and `--walktest N` wanders the city checking the walker never ends up
-inside a wall. `tools/packdiff.py out/ref.png out/native.bmp` is the check that
-the two renderers still agree; run it after touching either, and pass
-`--assets extracted/Perfect` to `b3dview.py` or its props will be missing.
+of the clock-animated props and `--ticks N` fixes how far the rithms have
+walked, so that shot is reproducible; `--bench N` times N frames,
+`--dump-movers` prints the walk for `tools/spawns.py` to check against, and
+`--walktest N` wanders the city the game's own way and holds the radar map
+against the wall geometry. `tools/packdiff.py out/ref.png out/native.bmp` is
+the check that the two renderers still agree and `--walk N` is the check that
+their *movers* do, comparing the 16.16 state rather than the pixels; run both
+after touching either renderer, and pass `--assets extracted/Perfect` to
+`b3dview.py` or its props will be missing.
 
 What is still missing:
 
-- **The movers stand still, and the game's own drawer is why** — the phase is
-  a per-character constant and the `ANIM` is shared, so nothing more is to be
-  found on the drawing side ([25](docs/25-where-the-movers-are.md)). What is
-  left is **movement**: `MoverDecide` at `0x004ff8` is read, `0x00a608` turns a
-  heading into `Cos`/`Sin` times an animation column, and `0x00bacc` is the
-  per-frame pass that would apply it. A walking mover needs the same
-  circle-versus-segment collision the camera already has, and then the viewer
-  would show a live city instead of a snapshot. Two smaller pieces sit beside
-  it: the rest of `DrawMover`'s 2,400 bytes (the Perfect One's three forms,
-  the stealth and hit states) and the PPMPC question — `0x018280` writes
-  `0xe288e288` for one state and the neutral `0x1f001f00` for the other, and
-  decoding that word is also what settles what the `.mask` is for. Goner's
-  three spare palettes are unused too: the byte at `+0x1e` picks one, and the
-  pack carries no PLUT variants.
+- **`MoverDecide`, `0x004ff8`, is the last piece of the movers.** Everything
+  under it is transcribed and running — the gait, the rate, the stride, the
+  two probes, the turn out of a wall, the eight-phase walk cycle — but nothing
+  ever *leaves* the wander, because the weighted choice between the fifteen
+  states `MoverEnterState` sets up is not written down. It is read
+  ([20](docs/20-p1e-the-final-encounter.md)) but not transcribed: three
+  current/max DOA pairs through `0x004810`, compared against yours, folded
+  with `PlayerTier` and the distance, and a `RandomBelow` over the weights.
+  Transcribe it and rithms start chasing you.
+- **The rest of `DrawMover`'s 2,400 bytes.** The Perfect One's three forms and
+  the hit states. The stealth branch and the PPMPC are answered
+  ([24](docs/24-the-cast.md)). Goner's three spare palettes are still unused:
+  the byte at `+0x1e` picks one, and the pack carries no PLUT variants.
 - **The radar.** `tools/hudmap.py` gives the tile, the world-to-pixel
-  transform and the rotation the CCB applies. A viewer can draw the real HUD
-  map with no further reversing. `tools/armmath.py` now gives the exact
+  transform and the rotation the CCB applies, and the pack now carries all 256
+  tiles of both maps — so a viewer can draw the real HUD map with no further
+  reversing and no new file to read. `tools/armmath.py` gives the exact
   `Sin`/`Cos`/`MulSF16` the game rotates it with, half-pixel slip included.
-- **Walking is geometric, and the `.Maps` are the better authority.** The
-  circle-versus-segment solver knows nothing about the near radar maps, where
-  value 1 is open ground at two units a pixel and
-  [13](docs/13-hud-maps.md) has them agreeing with the geometry to within a
-  pixel. `spawns.Probe` is now the reader, transcribed from `0x011094`, and
-  `UnstickCamera` at `0x0219f0` shows the game itself walking the camera back
-  two units a step until that probe answers 3 — so the pack has only to carry
-  the two tiles. That would settle the disagreements the game settles that way,
-  and `STEP_OVER`, the height below which a quad is scenery rather than a wall,
-  is a guess of 16 units until it does.
-- **The pixel-for-pixel check is a grid now, and it is clean.**
-  `python tools/packdiff.py --sweep` — 48 cameras on open ground, 4.8 million
-  pixels, zero differing; `--eyes 16 --size 480 300` is 60 and 8.6 million,
-  also zero. Both of the ties that used to break it are fixed and
-  written down ([08](docs/08-the-ground.md), `tools/packdiff.py`). The one
-  remaining divergence is **deliberate**: the native viewer clips polygons
-  against the near plane and `b3dview.py` drops them whole, so the two do not
-  agree with the eye inside a wall. Giving the reference a Sutherland-Hodgman
-  clipper of its own would close that too, and is the only thing left.
+- **The lake is read and not drawn.** Bit 28 quarters a mover's stride and
+  halves both its CCBs' source line count, cutting the sprite off at the
+  waterline ([24](docs/24-the-cast.md)); neither renderer does the cut yet,
+  and the player's own eye drop from six units to two is in `view.c` already.
+- **The pixel-for-pixel check is a grid, it covers the walk, and it is
+  clean.** `python tools/packdiff.py --sweep` — 48 cameras, 4.8 million
+  pixels, zero differing; `--eyes 16 --size 480 300` is 96 cameras and 13.8
+  million, also zero. The cameras are no longer kept away from buildings, and
+  six different mover tick counts are swept with them. There is **no known
+  divergence left** between the two renderers.
 
 ## 2. Small unread call sites
 
@@ -1054,15 +1095,34 @@ What is still missing:
   small one first — that is what worked on `0x004ff8`.
 - **`p1e` `0x01aa40`, 2,876 bytes, one caller**, is now the largest unread
   function in either image, and `0x01a1a4`, `0x01a4f8` and `0x0194b4` sit
-  beside it in the Perfect One's behaviour band. The two-bit phase at mover
-  `+0x18` bits 24-25 takes three values and `0x01b9d8` moves the mover on each
-  change; what the three phases *are* is the question.
+  beside it in the Perfect One's behaviour band. ~~The two-bit phase at mover
+  `+0x18` bits 24-25~~ is answered: it is the **gait**, and `0x00bdf0` spends
+  0, a half, one or one and a half of the mover's base rate on it
+  ([25](docs/25-where-the-movers-are.md)). So `0x01b9d8` moving the mover on
+  each change is the Perfect One changing pace, not changing phase.
 - **The three per-form constants** `0x88b87`, `0xafc87`, `0xd6d87` and the
   eight-byte table at `p1e` `0x065b84` beside them. `p` `0x03f658` packs one
   of them into a request word at `[0x58f74 + 0x50]`; nothing says yet what
   consumes it.
 
 ## Notes to self
+
+- **"Nothing writes this field" is a claim about your grep, not about the
+  game.** `docs/25` said the mover's `+0x34` was written only by `NewMover`,
+  which zeroes it, and built a conclusion on it — that a rithm cannot animate.
+  `MoverStep` writes it, one instruction, in a function nobody had read.
+  Before writing *nothing writes X*, grep the whole disassembly for the store
+  by offset, not the functions you think are involved.
+- **Truncation is not flooring, and half the world has a negative
+  coordinate.** `(int)x` and `x >> 16` agree on the whole right-hand half of
+  Perfect and differ by one unit on the left. It cost 379 of 20,000 walk-test
+  strides looking like a collision bug that was not there. The game floors
+  everywhere, because ARM has no truncating shift.
+- **A constant that looks like a state pair may belong to one character.**
+  `0xe288e288` against `0x1f001f00` read for three sessions as "the mover's
+  two translucency states". Both are written under `teq r7, #0xc` — the
+  Chameleon and nobody else. Read the branch *above* the interesting store
+  before naming what it is for.
 
 - **A filename generator run backwards names the dead files.** The rule in
   `LoadCharacterAnims` produces 67 names and all 67 are on the disc; asking

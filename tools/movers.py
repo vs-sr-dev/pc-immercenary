@@ -203,7 +203,7 @@ def flip(im):
     return ([list(reversed(r)) for r in rows], bpp, plut, bgnd)
 
 
-def mover_art(assets, kinds, slot=RUN_SLOT, views=VIEWS):
+def mover_art(assets, kinds, slot=RUN_SLOT, views=VIEWS, phases=None):
     """Everything a renderer needs to draw a spawned mover, per character.
 
     The three sizes are columns of `PerfectMovers.B3D` and are not whole
@@ -215,6 +215,16 @@ def mover_art(assets, kinds, slot=RUN_SLOT, views=VIEWS):
     `frames` is one image per view, already through `frame_of` and already
     mirrored where the game would have mirrored it -- so a renderer indexes it
     with the view alone and needs no flip of its own.
+
+    `phases` asks for the whole run instead of one row of it: `phases=8` gives
+    `phase * views + view`, which is what a *walking* rithm needs.  `0x017d00`
+    is the reason there are two shapes here -- a mover whose gait bits are set
+    takes its phase from its own `+0x34`, the step counter, and only a
+    standing one falls through to the fixed per-character phase.
+
+    `step` is the animation record's `+0x14`: how far one stride carries, and
+    equally what a stride costs out of the step accumulator (`0x00a608` and
+    `0x007658` read the same word for both).
     """
     disc = Disc(assets)
     rows = {(r['char'], r['slot']): r
@@ -228,13 +238,27 @@ def mover_art(assets, kinds, slot=RUN_SLOT, views=VIEWS):
         fr = frames(r['animpath'])
         q = lambda v: round(v / 65536.0 * 16) / 16.0
         pick = []
-        for v in range(views):
-            i, mirror = frame_of(k, v)
-            im = fr[i] if i < len(fr) else fr[0]
-            pick.append(flip(im) if mirror else im)
+        for ph in (range(phases) if phases else (None,)):
+            for v in range(views):
+                i, mirror = frame_of(k, v, ph)
+                im = fr[i] if i < len(fr) else fr[0]
+                pick.append(flip(im) if mirror else im)
         out[k] = dict(w=q(c['width']), h=q(c['height']), z=q(c['ground']),
-                      frames=pick, row=r)
+                      frames=pick, row=r, views=views, phases=phases or 1,
+                      step=c['rate'], speed=c['speed'])
     return out
+
+
+def mover_steps(assets, kinds, slot=RUN_SLOT):
+    """`{character: step}` in 16.16, without decoding a single pixel.
+
+    The walk in `tools/spawns.py` needs this and nothing else out of the art,
+    so it is worth a reader that does not open sixty-four cels to get it."""
+    disc = Disc(assets)
+    rows = {(r['char'], r['slot']): r
+            for r in cast(os.path.join(assets, 'PerfectMovers.B3D'), disc)}
+    return {k: rows[(k, slot)]['cols']['rate']
+            for k in kinds if (k, slot) in rows}
 
 
 class Disc(object):

@@ -29,6 +29,13 @@ and 0 for the inside of a building -- and the two tiles' footprints are
 complementary to the unit, so inside the streaming window there is always
 exactly one of them to ask.
 
+And once they are placed they walk.  `Walk` below is the transcription of
+`0x00bacc` and the four routines under it -- the gait, the step accumulator,
+the turn and the two map probes a stride is made of -- in the integers the
+game keeps them in.  The same map probe is the collision: `0x010ca8` moves the
+player by exactly the same rule, and no wall geometry is consulted anywhere in
+the overworld.
+
 See docs/25.
 
     python tools/spawns.py --verify
@@ -437,6 +444,211 @@ def populate(rng, probe, zones, **kw):
 
 
 # ---------------------------------------------------------------------------
+# Walking.  `0x007658` is the mover's step, `0x00a4a4` its turn, `0x00a608`
+# the routine that turns a heading into a velocity, and the rate block of
+# `0x00bacc` is what feeds all three.  Every number below is 16.16, because
+# the game's is: the accumulator, the heading and the velocity are integers,
+# and a floating transcription would not reproduce them tick for tick.
+#
+# What is *not* here is `MoverDecide`, `0x004ff8` -- the weighted choice
+# between the states `0x0058f0` sets up.  A viewer runs the one state whose
+# whole chain is read: `0x40`, the wander, which `0x0058f0` gives a half-speed
+# gait and which `0x005fa0` short-circuits at its first instruction, handing
+# `0x00a600` a fresh `RandomBits(8)` instead of a bearing to anything.
+# ---------------------------------------------------------------------------
+WANDER = 0x40                   # the state; 0x005ee8 sets it up
+CROWD_RATE = 0x3000             # 0x0085b8: every crowd's own +0x18, 0.1875
+TURN_BASE = 0x10000             # 0x00a4d8: 1.0 a tick, plus Agility/32
+TURN_DEAD = 0x8000              # 0x00a4f0: inside half a sector, do nothing
+TURN_SNAP = 0x58000             # 0x00a504: inside 5.5 sectors, go straight there
+AIM_MOVING, AIM_STILL = 0x3c, 0x1e      # 0x006460 and 0x006468, in ticks
+LAKE_TILE = 9                   # 0x00f9e4, and the quarter speed at 0x0077ec
+
+
+def _s32(v):
+    v &= 0xffffffff
+    return v - (1 << 32) if v & 0x80000000 else v
+
+
+def mulsf16(a, b):
+    """Operamath's `MulSF16`, `0x04cce8`.  Asymmetric: see tools/armmath.py."""
+    return _s32(((_s32(a) >> 16) * b + (_s32((a & 0xffff) * b) >> 16))
+                & 0xffffffff)
+
+
+def inside(x, y):
+    """`0x00652c`: the world box again, asked as a question rather than
+    applied.  The same four words `ClampToWorld` reads."""
+    return MIN_X <= x <= MAX_X and MIN_Y <= y <= MAX_Y
+
+
+class Walker:
+    """One mover between two ticks.
+
+    The fields are the mover's own, at the offsets `0x00bacc` reads them:
+    position is its slot of the shared point table, `heading` is `+0x24`,
+    `want` is `+0x7c`, the velocity pair is `+0x50`/`+0x54`, the step
+    accumulator is `+0x4c`, and `phase` is `+0x34` -- the byte `0x007658`
+    counts up once a step and masks to three bits, which `DrawMover` reads
+    back through the visible-list entry's `+0x1c`.
+    """
+
+    __slots__ = ('x', 'y', 'heading', 'want', 'vx', 'vy', 'acc', 'phase',
+                 'step', 'rate', 'gait', 'agility', 'aim_at', 'slow',
+                 'state')
+
+    def __init__(self, mover, step, rate=CROWD_RATE, gait=1, agility=0):
+        self.x, self.y = mover.x << 16, mover.y << 16
+        self.heading = self.want = mover.face << 16      # 0x00ac10
+        self.vx = self.vy = 0
+        self.acc = 0
+        self.phase = 0
+        self.step = step                # the animation record's +0x14
+        self.rate = rate                # the mover's +0x20
+        self.gait = gait                # +0x18 bits 24-25
+        self.agility = agility          # +0x60, which is also the turn rate
+        self.aim_at = 0                 # +0x88
+        self.slow = False               # +0x18 bit 28
+        self.state = WANDER             # +0x74
+
+    @property
+    def pos(self):
+        return self.x >> 16, self.y >> 16
+
+
+class Walk:
+    """The three overworld spawners' output, walking.
+
+    One `Rng` of its own: the console draws every one of these bits from the
+    single generator the whole frame shares, so a viewer cannot continue that
+    stream past the spawn.  It can only run the same rule from the same seed,
+    which is what lets two renderers agree on where a rithm has got to.
+    """
+
+    def __init__(self, movers, steps, image=IMAGE, hud=HUD, seed=1,
+                 lake=None, gait=1):
+        from armmath import Trig
+        self.trig = Trig(open(image, 'rb').read())
+        self.probe = Probe(hud)
+        self.rng = Rng(seed)
+        self.lake = lake
+        self.now = 0
+        self.movers = [m for m in movers if m.kind in steps]
+        self.walkers = [Walker(m, steps[m.kind], gait=gait) for m in self.movers]
+
+    # -- 0x00a4a4, which 0x00a608 and 0x00a600 both fall into ---------------
+    def velocity(self, w):
+        """`0x00a590`: the heading's cosine and sine times the step length.
+
+        The multiply's argument order is the code's -- `MulSF16(step, cos)`
+        and not the other way round -- because `MulSF16` is not symmetric.
+        """
+        w.vx = mulsf16(w.step, self.trig.Cos(w.heading))
+        w.vy = mulsf16(w.step, self.trig.Sin(w.heading))
+
+    def set_heading(self, w, heading):
+        """`0x00a608`: both fields at once, and then the velocity."""
+        w.want = w.heading = heading & 0xffffff
+        self.velocity(w)
+
+    def turn(self, w, dt=1):
+        """`0x00a4a4`.
+
+        A wanderer never takes the gradual arm: `0x00a510` sends state `0x40`
+        straight to the snap, so the branch below is the code's shape rather
+        than something this viewer exercises.
+        """
+        d = _s32(w.heading - w.want)
+        if abs(d) < TURN_DEAD:                   # 0x00a4f0, no velocity either
+            return
+        if abs(d) < TURN_SNAP or w.state == WANDER:
+            w.heading = w.want                   # 0x00a518
+        else:
+            rate = TURN_BASE + (w.agility >> 5)  # 0x00a4d8
+            for _ in range(dt):
+                w.heading += -rate if d >= 0 else rate
+            w.heading &= 0xffffff                # 0x00a588
+        self.velocity(w)
+
+    # -- 0x00bdf0, the gait's share of the base rate ------------------------
+    @staticmethod
+    def gait_rate(w):
+        if w.gait == 0:
+            return 0
+        if w.gait == 1:
+            return w.rate >> 1
+        if w.gait == 2:
+            return w.rate
+        return w.rate + (w.rate >> 1)
+
+    # -- 0x007658 -----------------------------------------------------------
+    def step(self, w):
+        """The step loop, and the rule it turns by when the map says no.
+
+        Two probes a step, one per axis, and each axis gives up on its own --
+        which is what lets a rithm slide along a wall instead of sticking to
+        it.  `0x00652c` is asked about the *candidate* point, not the one the
+        mover is standing on.
+        """
+        dx, dy = w.vx, w.vy
+        if w.slow:                               # 0x0077ec
+            dx, dy = _s32(dx) >> 2, _s32(dy) >> 2
+        okx = oky = True
+        while w.step <= w.acc:
+            w.acc -= w.step
+            w.phase += 1                         # 0x00785c
+            if okx:
+                nx, ny = (w.x + dx) >> 16, w.y >> 16
+                if self.probe(nx, ny) & 1 and inside(nx, ny):
+                    w.x += dx
+                else:
+                    okx = False
+            if oky:
+                nx, ny = w.x >> 16, (w.y + dy) >> 16
+                if self.probe(nx, ny) & 1 and inside(nx, ny):
+                    w.y += dy
+                else:
+                    oky = False
+        w.phase &= 7                             # 0x007950
+        if okx and oky:
+            return
+        # 0x00795c: which way out, by the sign of the velocity it was denied
+        quad = (1 if _s32(w.vx) < 0 else 0) + (2 if _s32(w.vy) < 0 else 0)
+        if okx:                                  # only y is blocked
+            h = w.heading - 0x80000 if quad in (0, 3) else w.heading + 0x80000
+        elif oky:                                # only x is blocked
+            h = w.heading - 0x80000 if quad in (1, 2) else w.heading + 0x80000
+        else:                                    # 0x0079d0: a quarter turn
+            h = w.heading + 0x200000
+        self.set_heading(w, h & 0xff0000)        # 0x0079d8 keeps whole units
+
+    # -- one tick of 0x00bacc, for every mover ------------------------------
+    def tick(self, eye):
+        """`eye` is the player: it decides which pair of radar tiles is
+        resident, and the probe answers about those and no others."""
+        # floor, not truncate: the game's is `asr #16` and a negative
+        # coordinate rounds the other way from Python's int()
+        self.probe.look_from(int(eye[0] // 1), int(eye[1] // 1))
+        for w in self.walkers:
+            if self.lake is not None:            # 0x00bc80
+                w.slow = self.lake(w.x >> 16, w.y >> 16) == LAKE_TILE
+            w.acc += self.gait_rate(w)           # 0x00bef0, with dt = 1
+            if self.now >= w.aim_at:             # 0x006438 -> 0x005fa0
+                w.want = self.rng.bits(8) << 16  # 0x005fcc, state 0x40
+                w.aim_at = self.now + (AIM_MOVING if w.gait else AIM_STILL)
+                self.turn(w)                     # 0x00a600's tail
+            self.turn(w)                         # 0x00bf14
+            if w.step <= w.acc:                  # 0x00bf2c
+                self.step(w)
+        self.now += 1
+
+    def run(self, ticks, eye):
+        for _ in range(ticks):
+            self.tick(eye)
+        return self.walkers
+
+
+# ---------------------------------------------------------------------------
 # Verification
 # ---------------------------------------------------------------------------
 def verify(args):
@@ -560,6 +772,32 @@ def verify(args):
     check('open ground is the same 74% docs/13 measured',
           0.73 < hit / tot < 0.75, '   (%.2f%% of %d px)'
           % (100.0 * hit / tot, tot))
+
+    print('== the walk, 0x007658 and its neighbours')
+    import movers as movermod
+    eye = tuple(args.eye)
+    pop = population(1, eye, args.hud)
+    steps = movermod.mover_steps('extracted/Perfect', {m.kind for m in pop})
+    check('every crowd rithm has a stride length',
+          set(steps) >= {m.kind for m in pop},
+          '   ' + repr({k: round(v / 65536.0, 4) for k, v in steps.items()}))
+    walk = Walk(pop, steps, hud=args.hud)
+    walk.run(1800, eye)
+    wp = Probe(args.hud)
+    wp.look_from(int(eye[0] // 1), int(eye[1] // 1))
+    off = sum(1 for w in walk.walkers if not wp(w.x >> 16, w.y >> 16) & 1)
+    check('after 1,800 ticks none of them is on a pixel the map refuses',
+          off == 0, '   (%d of %d)' % (off, len(walk.walkers)))
+    out = sum(1 for w in walk.walkers if not inside(w.x >> 16, w.y >> 16))
+    check('and none of them has left the world box', out == 0,
+          '   (%d of %d)' % (out, len(walk.walkers)))
+    moved = sum(1 for m, w in zip(walk.movers, walk.walkers)
+                if (w.x >> 16, w.y >> 16) != (m.x, m.y))
+    check('and all of them have moved', moved == len(walk.walkers),
+          '   (%d of %d)' % (moved, len(walk.walkers)))
+    phases = {w.phase for w in walk.walkers}
+    check('the step phase stays inside the three bits DrawMover reads',
+          phases <= set(range(8)), '   ' + repr(sorted(phases)))
 
     print('\n%d ok, %d failed' % (ok, fail))
     return 1 if fail else 0

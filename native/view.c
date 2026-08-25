@@ -39,7 +39,11 @@ typedef struct {
     uint32_t nprops, props_off;
     uint32_t nspr, spr_off;
     uint32_t nanim, anim_off;
-    uint32_t reserved[4];
+    uint32_t nmover, mover_off;
+    uint32_t near_off, far_off;
+    int32_t  min_x, max_x, min_y, max_y;
+    uint32_t sine_off;
+    uint32_t reserved[3];
 } Header;
 
 typedef struct { int16_t v[4][3]; int16_t texid, angle; uint16_t flags, pad; } Quad;
@@ -55,6 +59,8 @@ typedef struct {
                                        bit 2 near/far by depth */
 } Prop;
 typedef struct { uint16_t n, first; } AnimEnt;
+/* what the walk needs of a mover that the art does not carry, all 16.16 */
+typedef struct { int32_t step, rate, gait; } MoverEnt;
 #pragma pack(pop)
 
 typedef struct {
@@ -66,6 +72,9 @@ typedef struct {
     const AnimEnt  *anim;
     const uint8_t  *map;
     const uint32_t *texdata;
+    const MoverEnt *movers;
+    const uint8_t  *nearmap, *farmap;
+    const uint32_t *sine;
 } Pack;
 
 static int pack_open(Pack *p, const char *path)
@@ -81,8 +90,8 @@ static int pack_open(Pack *p, const char *path)
     }
     fclose(f);
     p->h = (const Header *)p->blob;
-    if (memcmp(p->h->magic, "IMPK", 4) || p->h->version != 3) {
-        fprintf(stderr, "%s: not a v3 scene pack\n", path); return 0;
+    if (memcmp(p->h->magic, "IMPK", 4) || p->h->version != 4) {
+        fprintf(stderr, "%s: not a v4 scene pack\n", path); return 0;
     }
     p->quads   = (const Quad *)(p->blob + p->h->quads_off);
     p->tex     = (const TexEnt *)(p->blob + p->h->tex_off);
@@ -92,10 +101,14 @@ static int pack_open(Pack *p, const char *path)
     p->anim    = (const AnimEnt *)(p->blob + p->h->anim_off);
     p->spr     = (const TexEnt *)(p->blob + p->h->spr_off);
     p->texdata = (const uint32_t *)(p->blob + p->h->texdata_off);
+    p->movers  = (const MoverEnt *)(p->blob + p->h->mover_off);
+    p->nearmap = p->blob + p->h->near_off;
+    p->farmap  = p->blob + p->h->far_off;
+    p->sine    = (const uint32_t *)(p->blob + p->h->sine_off);
     printf("%s: %u quads, %u texture slots, %u floor cels, %u props in %u "
-           "anims, %.1f MB of pixels\n",
+           "anims, %u movers, %.1f MB of pixels\n",
            path, p->h->nquads, p->h->ntex, p->h->nfloor, p->h->nprops,
-           p->h->nanim, p->h->texdata_len / 1048576.0);
+           p->h->nanim, p->h->nmover, p->h->texdata_len / 1048576.0);
     return 1;
 }
 
@@ -107,6 +120,306 @@ static int tile_at_world(const Pack *p, float x, float y)
     int row = p->h->row_bias - (int)floorf(y / p->h->tile);
     if (col < 0 || col > 255 || row < 0 || row > 255) return 13;  /* OUTSIDE */
     return p->map[row * 256 + col];
+}
+
+/* ------------------------------------------------------------- the collision
+ *
+ * The game has no wall-geometry collision at all.  `0x010ca8` moves the
+ * player and `0x007658` moves a mover by exactly the same rule: once per 60 Hz
+ * tick, offer the new X to the *radar map* and take it only if the map calls
+ * that pixel passable, then offer the new Y separately.  Two independent
+ * probes, which is what lets either of them slide along a wall instead of
+ * sticking to it, and why neither ever needs a push-out.
+ *
+ * The near map is 2 bpp at two world units a pixel and the far one 1 bpp at
+ * eight, one 256 x 256 tile and one 160 x 160 tile per cell of the 16 x 16
+ * grid, and only the tiles of the *player's* cell are resident -- so the
+ * probe's answer depends on where the player is standing, not only on where
+ * the question is about.  docs/13 has the format and tools/spawns.py the
+ * reader this is transcribed from.
+ */
+
+#define PR_SOLID 0
+#define PR_ENCOUNTER 1
+#define PR_WALL 2
+#define PR_OPEN 3
+
+/* 0x01114c: the file's four values are not the four the caller sees */
+static const int PROBE_OF_RAW[4] = { PR_SOLID, PR_OPEN, PR_WALL, PR_ENCOUNTER };
+
+typedef struct { const Pack *p; int cx, cy; } Probe;
+
+/* 0x01170c: X is numbered from the east */
+static void probe_look_from(Probe *pr, int x, int y)
+{
+    pr->cx = (15 - ((x - pr->p->h->min_x) >> 8)) & 15;
+    pr->cy = ((y - pr->p->h->min_y) >> 8) & 15;
+}
+
+/* 0x011094 falling through to 0x011180: the near tile first, the far one
+ * where the near one does not reach, and open beyond both (0x011220). */
+static int probe_at(const Probe *pr, int x, int y)
+{
+    const Header *h = pr->p->h;
+    int ox = h->max_x - ((pr->cx + 1) * 256 + 128);      /* 0x01ea18 */
+    int oy = h->min_y + ((pr->cy + 1) * 256 + 128);
+    int px = (((x - ox + 1) >> 1) - 1), py = (((oy - y + 1) >> 1) - 2);
+    if (px >= 0 && px < 256 && py >= 0 && py < 256) {
+        const uint8_t *t = pr->p->nearmap + (pr->cy + (pr->cx << 4)) * 0x4000;
+        int b = t[py * 64 + (px >> 2)];
+        return PROBE_OF_RAW[(b >> (6 - 2 * (px & 3))) & 3];
+    }
+    ox = h->max_x - (pr->cx + 3) * 256;                  /* 0x01eb14 */
+    oy = h->min_y + (pr->cy + 3) * 256;
+    px = (x - ox + 4) >> 3; py = (oy - y + 4) >> 3;
+    if (px >= 0 && px < 160 && py >= 0 && py < 160) {
+        const uint8_t *t = pr->p->farmap + (pr->cy + (pr->cx << 4)) * 0x1000;
+        return ((t[py * 20 + (px >> 3)] >> (7 - (px & 7))) & 1) ? PR_SOLID
+                                                                : PR_OPEN;
+    }
+    return PR_OPEN;
+}
+
+/* `0x00652c`: the world box, asked as a question.  Both movers check it on
+ * the candidate point, not the one they are standing on. */
+static int inside_world(const Pack *p, int x, int y)
+{
+    return x >= p->h->min_x && x <= p->h->max_x &&
+           y >= p->h->min_y && y <= p->h->max_y;
+}
+
+/* 0x010ee8: one tick of the player's own step -- X offered to the map, then
+ * Y, each taken only if the probe allows it.  The same two probes 0x007658
+ * gives a mover, which is why neither needs a push-out. */
+static void walker_move(const Pack *p, const Probe *pr, double *x, double *y,
+                        double dx, double dy, int *okx, int *oky)
+{
+    if (*okx) {
+        int nx = (int)floor(*x + dx), ny = (int)floor(*y);
+        if ((probe_at(pr, nx, ny) & 1) && inside_world(p, nx, ny)) *x += dx;
+        else *okx = 0;
+    }
+    if (*oky) {
+        int nx = (int)floor(*x), ny = (int)floor(*y + dy);
+        if ((probe_at(pr, nx, ny) & 1) && inside_world(p, nx, ny)) *y += dy;
+        else *oky = 0;
+    }
+}
+
+/* ------------------------------------------------------------------- 16.16
+ *
+ * A mover's heading is a 16.16 fraction of the turn and its velocity is
+ * `MulSF16(step, Cos(heading))`, so a viewer that means to end up where the
+ * console would has to interpolate the game's own quarter-wave table and use
+ * the game's own asymmetric multiply.  The table is in the pack.
+ */
+
+/* Operamath's MulSF16, 0x04cce8: the fraction of `a` times the whole of `b`
+ * in one 32-bit multiply, which is exact while |b| is small. */
+static int32_t mulsf16(int32_t a, int32_t b)
+{
+    return (int32_t)((uint32_t)((a >> 16) * b) +
+                     (uint32_t)(((int32_t)((uint32_t)(a & 0xffff) *
+                                           (uint32_t)b)) >> 16));
+}
+
+/* 0x056ffc.  A full turn is 0x1000000; entry i is sin(i * pi/8192) scaled,
+ * linearly interpolated on the low ten bits of the folded angle. */
+static int32_t trig_sin(const Pack *p, uint32_t a)
+{
+    if (a & 0x400000) a = 0x800000 - a;
+    a &= 0x00ffffff;
+    int neg = a >= 0x800000;
+    if (neg) a -= 0x800000;
+    uint32_t i = a >> 10, f = a & 0x3ff;
+    int32_t r = (int32_t)((p->sine[i] * (0x400 - f) + p->sine[i + 1] * f) >> 15);
+    return neg ? -r : r;
+}
+
+static int32_t trig_cos(const Pack *p, uint32_t a)   /* 0x056ff8 */
+{
+    return trig_sin(p, a + 0x400000);
+}
+
+/* --------------------------------------------------------------- the movers
+ *
+ * A rithm walks.  `0x00bacc` runs this list once a frame: it adds the gait's
+ * share of the mover's base rate to a step accumulator, lets `0x0062f8` pick
+ * a new bearing when the mover's own deadline is up, steers towards it in
+ * `0x00a4a4`, and calls `0x007658` whenever the accumulator has paid for a
+ * stride.  The stride itself is two map probes, one per axis; a blocked axis
+ * turns the mover 11.25 degrees, both blocked turn it 45.
+ *
+ * The state simulated is `0x40`, the wander -- the one whose whole chain is
+ * read.  `0x0058f0` gives it a half-speed gait and `0x005fa0` short-circuits
+ * on its first instruction, handing `0x00a600` a fresh `RandomBits(8)`
+ * instead of a bearing to anything.  What is *not* here is `MoverDecide`,
+ * `0x004ff8`, the weighted choice between states.  tools/spawns.py runs the
+ * identical arithmetic in Python, which is how the two renderers can be held
+ * against each other with the city in motion.
+ */
+
+#define WANDER      0x40
+#define TURN_DEAD   0x8000      /* 0x00a4f0 */
+#define TURN_SNAP   0x58000     /* 0x00a504 */
+#define AIM_MOVING  0x3c        /* 0x006460, ticks */
+#define AIM_STILL   0x1e        /* 0x006468 */
+#define LAKE_TILE   9           /* 0x00f9e4, and the quarter speed at 0x0077ec */
+
+/* The game's own generator, 0x04e448 and 0x04e4a8: a 54-word additive lagged
+ * Fibonacci over Knuth's 69069 LCG.  See tools/spawns.py. */
+typedef struct { uint32_t t[54]; int a, b; } Rng;
+
+static void rng_srand(Rng *r, uint32_t seed)
+{
+    uint32_t x = seed;
+    for (int i = 0; i < 54; i++) {
+        x = x * 69069u + 0x66d619e1u;
+        r->t[i] = x + (x >> 16);
+    }
+    r->a = 0x17; r->b = 0;
+}
+
+static uint32_t rng_bits(Rng *r, int k)      /* 0x038c40 */
+{
+    r->a = r->a == 0 ? 53 : r->a - 1;
+    r->b = r->b == 0 ? 53 : r->b - 1;
+    r->t[r->b] += r->t[r->a];
+    uint32_t v = 2u * (r->t[r->b] & 0x7fffffffu);
+    return (uint32_t)(((uint64_t)v << k) >> 32);
+}
+
+typedef struct {
+    int32_t x, y;           /* the shared point table's slot, 16.16 */
+    int32_t heading;        /* +0x24 */
+    int32_t want;           /* +0x7c */
+    int32_t vx, vy;         /* +0x50, +0x54 */
+    int32_t acc;            /* +0x4c, the step accumulator */
+    int32_t step, rate;     /* the animation record's +0x14, and +0x20 */
+    int     gait;           /* +0x18 bits 24-25 */
+    int     phase;          /* +0x34, what DrawMover reads back */
+    int     slow;           /* +0x18 bit 28: in the lake */
+    int     aim_at;         /* +0x88 */
+} Mover;
+
+typedef struct {
+    Mover  *w;
+    uint32_t n, first;      /* the movers are the last `n` props */
+    Rng      rng;
+    Probe    probe;
+    int      now;
+} Sim;
+
+static void sim_velocity(const Pack *p, Mover *w)   /* 0x00a590 */
+{
+    w->vx = mulsf16(w->step, trig_cos(p, (uint32_t)w->heading));
+    w->vy = mulsf16(w->step, trig_sin(p, (uint32_t)w->heading));
+}
+
+static void sim_set_heading(const Pack *p, Mover *w, int32_t h)  /* 0x00a608 */
+{
+    w->want = w->heading = h & 0xffffff;
+    sim_velocity(p, w);
+}
+
+/* 0x00a4a4.  State 0x40 always takes the snap at 0x00a518. */
+static void sim_turn(const Pack *p, Mover *w)
+{
+    int32_t d = w->heading - w->want;
+    int32_t ad = d < 0 ? -d : d;
+    if (ad < TURN_DEAD) return;
+    w->heading = w->want;
+    sim_velocity(p, w);
+}
+
+static int32_t sim_gait_rate(const Mover *w)        /* 0x00bdf0 */
+{
+    switch (w->gait) {
+    case 0:  return 0;
+    case 1:  return w->rate >> 1;
+    case 2:  return w->rate;
+    default: return w->rate + (w->rate >> 1);
+    }
+}
+
+/* 0x007658: the step loop, and the turn it takes when the map says no. */
+static void sim_step(const Pack *p, const Probe *pr, Mover *w)
+{
+    int32_t dx = w->vx, dy = w->vy;
+    if (w->slow) { dx >>= 2; dy >>= 2; }             /* 0x0077ec */
+    int okx = 1, oky = 1;
+    while (w->step <= w->acc) {
+        w->acc -= w->step;
+        w->phase++;                                  /* 0x00785c */
+        if (okx) {
+            int nx = (int)((w->x + dx) >> 16), ny = (int)(w->y >> 16);
+            if ((probe_at(pr, nx, ny) & 1) && inside_world(p, nx, ny))
+                w->x += dx;
+            else okx = 0;
+        }
+        if (oky) {
+            int nx = (int)(w->x >> 16), ny = (int)((w->y + dy) >> 16);
+            if ((probe_at(pr, nx, ny) & 1) && inside_world(p, nx, ny))
+                w->y += dy;
+            else oky = 0;
+        }
+    }
+    w->phase &= 7;                                   /* 0x007950 */
+    if (okx && oky) return;
+    int quad = (w->vx < 0 ? 1 : 0) + (w->vy < 0 ? 2 : 0);
+    int32_t h;
+    if (okx)                                         /* only y is blocked */
+        h = (quad == 0 || quad == 3) ? w->heading - 0x80000
+                                     : w->heading + 0x80000;
+    else if (oky)                                    /* only x is blocked */
+        h = (quad == 1 || quad == 2) ? w->heading - 0x80000
+                                     : w->heading + 0x80000;
+    else
+        h = w->heading + 0x200000;                   /* 0x0079d0 */
+    sim_set_heading(p, w, h & 0xff0000);             /* whole units only */
+}
+
+static void sim_init(Sim *s, const Pack *p, uint32_t seed)
+{
+    s->n = p->h->nmover;
+    s->first = p->h->nprops - s->n;
+    s->w = s->n ? (Mover *)calloc(s->n, sizeof(Mover)) : NULL;
+    s->probe.p = p;
+    s->now = 0;
+    rng_srand(&s->rng, seed);
+    for (uint32_t i = 0; i < s->n; i++) {
+        const Prop *pr = &p->props[s->first + i];
+        const MoverEnt *m = &p->movers[i];
+        Mover *w = &s->w[i];
+        w->x = (int32_t)pr->x << 16;
+        w->y = (int32_t)pr->y << 16;
+        w->heading = w->want = (int32_t)pr->face << 16;   /* 0x00ac10 */
+        w->step = m->step;
+        w->rate = m->rate;
+        w->gait = m->gait;
+    }
+}
+
+/* One tick of 0x00bacc, for every mover.  `ex, ey` is the player: it decides
+ * which pair of radar tiles is resident, and the probe answers about those. */
+static void sim_tick(Sim *s, const Pack *p, double ex, double ey)
+{
+    probe_look_from(&s->probe, (int)floor(ex), (int)floor(ey));
+    for (uint32_t i = 0; i < s->n; i++) {
+        Mover *w = &s->w[i];
+        w->slow = tile_at_world(p, (float)(w->x >> 16),
+                                (float)(w->y >> 16)) == LAKE_TILE;
+        w->acc += sim_gait_rate(w);                  /* 0x00bef0, dt = 1 */
+        if (s->now >= w->aim_at) {                   /* 0x006438 -> 0x005fa0 */
+            w->want = (int32_t)(rng_bits(&s->rng, 8) << 16);
+            w->aim_at = s->now + (w->gait ? AIM_MOVING : AIM_STILL);
+            sim_turn(p, w);                          /* 0x00a600's tail */
+        }
+        sim_turn(p, w);                              /* 0x00bf14 */
+        if (w->step <= w->acc)                       /* 0x00bf2c */
+            sim_step(p, &s->probe, w);
+    }
+    s->now++;
 }
 
 /* ------------------------------------------------------------ the ground's
@@ -379,11 +692,16 @@ static int depth_shade(double depth)
 }
 
 static int draw_prop(Raster *r, const Cam *c, const Pack *p, const Prop *pr,
-                     double t, int textured)
+                     const Mover *mv, double t, int textured)
 {
     const AnimEnt *a = &p->anim[pr->anim];
     if (!a->n) return 0;
-    CV b = to_cam(c, pr->x, pr->y, pr->z * U4, 0.0, 0.0);
+    /* a mover carries its own position and its own heading: the record in the
+     * pack is only where the spawner put it on tick zero */
+    double wx = mv ? (double)(mv->x >> 16) : (double)pr->x;
+    double wy = mv ? (double)(mv->y >> 16) : (double)pr->y;
+    int face = mv ? (int)((mv->heading >> 16) & 0xff) : pr->face;
+    CV b = to_cam(c, wx, wy, pr->z * U4, 0.0, 0.0);
     if (b.z < NEARZ) return 0;
 
     int frame;
@@ -396,9 +714,12 @@ static int draw_prop(Raster *r, const Cam *c, const Pack *p, const Prop *pr,
         frame = (int)(t * 59.94 * (0x2222 / 65536.0)) % a->n;
     } else {                           /* k views, `face` naming view zero */
         int sector = pr->k ? 256 / pr->k : 256;
-        int ang = (atan2_3do((int)(pr->x - c->ex), (int)(pr->y - c->ey))
-                   - (pr->face - sector / 2) + 128) & 0xff;
-        frame = (ang / sector) % a->n;
+        int ang = (atan2_3do((int)(wx - c->ex), (int)(wy - c->ey))
+                   - (face - sector / 2) + 128) & 0xff;
+        int view = ang / sector;
+        /* 0x017cfc and 0x017d60: `frame = phase * views + view`, and the
+         * phase of a *moving* rithm is its own step counter (0x017d00). */
+        frame = (mv ? mv->phase * pr->k + view : view) % a->n;
     }
     const TexEnt *e = &p->spr[a->first + frame];
     if (!e->w || !e->h) return 0;
@@ -457,7 +778,8 @@ static int draw_prop(Raster *r, const Cam *c, const Pack *p, const Prop *pr,
 }
 
 static void draw_scene(Raster *r, const Cam *c, const Pack *p, const Opts *o,
-                       double t, int *out_quads, int *out_tiles, int *out_props)
+                       const Sim *s, double t,
+                       int *out_quads, int *out_tiles, int *out_props)
 {
     int nq = 0, nt = 0;
     float far2 = c->far_ * c->far_;
@@ -537,9 +859,13 @@ static void draw_scene(Raster *r, const Cam *c, const Pack *p, const Opts *o,
     if (o->props) {
         for (uint32_t i = 0; i < p->h->nprops; i++) {
             const Prop *pr = &p->props[i];
-            float dx = pr->x - c->ex, dy = pr->y - c->ey;
+            const Mover *mv = (s && s->n && i >= s->first) ? &s->w[i - s->first]
+                                                            : NULL;
+            float px = mv ? (float)(mv->x >> 16) : (float)pr->x;
+            float py = mv ? (float)(mv->y >> 16) : (float)pr->y;
+            float dx = px - c->ex, dy = py - c->ey;
             if (dx * dx + dy * dy > far2) continue;
-            np += draw_prop(r, c, p, pr, t, o->textured);
+            np += draw_prop(r, c, p, pr, mv, t, o->textured);
         }
     }
     *out_quads = nq;
@@ -547,23 +873,26 @@ static void draw_scene(Raster *r, const Cam *c, const Pack *p, const Opts *o,
     *out_props = np;
 }
 
-/* ------------------------------------------------------------------ walking
+/* ---------------------------------------------------------- the wall index
+ *
+ * This is no longer the collision -- the radar map above is, because that is
+ * what the game asks -- but it is still the only *independent* opinion about
+ * where the walls are, and `--walktest` holds one against the other.
  *
  * In plan view a wall quad is a segment: its corners come out of the parser as
  * (far top, near top, near bottom, far bottom), so corner 0 and corner 3 share
  * an (x, y) and so do corners 1 and 2 -- 8,108 of the overworld's 8,463 quads
- * exactly, and for the other 355 the midpoints do.  So walking is a circle
- * sliding along a set of segments, and the only index it needs is a uniform
- * grid over the world.
+ * exactly, and for the other 355 the midpoints do.  A uniform grid over the
+ * world is the whole index it needs.
  *
- * The near `.Maps` are a second opinion this does not use yet: value 1 is open
- * ground at two world units a pixel, and docs/13 has them agreeing with the
- * geometry to within a pixel.  Where the two disagree, the map is the one the
- * game itself consults.
+ * `BODY_RADIUS` and `STEP_OVER` were this file's two guesses about the shape
+ * of a walker, and neither survived: `0x010ca8` moves the player as a *point*
+ * against a raster, with no radius, no height test and no push-out.  They are
+ * kept here as the yardstick `--walktest` measures the map against.
  */
 
-#define BODY_RADIUS  12.0   /* how wide the walker is */
-#define STEP_OVER    16.0   /* shorter than this is scenery, not a wall */
+#define BODY_RADIUS  12.0   /* what a walker was assumed to be, for the test */
+#define STEP_OVER    16.0   /* and how tall a quad had to be to count */
 #define CELL         128.0  /* grid cell, world units */
 
 typedef struct {
@@ -633,54 +962,6 @@ static void walls_build(Walls *W, const Pack *p)
            W->nseg, W->gx, W->gy, W->start[nc]);
 }
 
-/* Push a circle out of every segment it overlaps.  More than one pass, because
- * a corner is two segments and a single pass slides out of the first straight
- * back into the second.
- *
- * It does not converge everywhere and it does not need to.  `--walktest 20000`
- * ends 6 of its 20,000 steps closer to a wall than the body is wide, and each
- * of the 6 has between four and eight walls within a body width of it: a
- * squeeze, not a tunnel.  Raising the pass count does not move that number,
- * because no number of passes fits a walker into a gap thinner than itself. */
-static void walls_resolve(const Walls *W, double *x, double *y, double radius)
-{
-    for (int pass = 0; pass < 6; pass++) {
-        int moved = 0;
-        int cx0 = (int)((*x - radius - W->ox) / CELL);
-        int cx1 = (int)((*x + radius - W->ox) / CELL);
-        int cy0 = (int)((*y - radius - W->oy) / CELL);
-        int cy1 = (int)((*y + radius - W->oy) / CELL);
-        for (int cy = cy0; cy <= cy1; cy++) {
-            if (cy < 0 || cy >= W->gy) continue;
-            for (int cx = cx0; cx <= cx1; cx++) {
-                if (cx < 0 || cx >= W->gx) continue;
-                int c = cy * W->gx + cx;
-                for (int k = W->start[c]; k < W->start[c + 1]; k++) {
-                    const float *s = W->seg + W->item[k] * 4;
-                    double ax = s[0], ay = s[1], bx = s[2], by = s[3];
-                    double dx = bx - ax, dy = by - ay;
-                    double len2 = dx * dx + dy * dy;
-                    double t = len2 > 0 ? ((*x - ax) * dx + (*y - ay) * dy) / len2 : 0;
-                    if (t < 0) t = 0; else if (t > 1) t = 1;
-                    double px = ax + t * dx, py = ay + t * dy;
-                    double nx = *x - px, ny = *y - py;
-                    double d2 = nx * nx + ny * ny;
-                    if (d2 >= radius * radius) continue;
-                    double d = sqrt(d2);
-                    if (d < 1e-6) {           /* dead centre: leave sideways */
-                        nx = -dy; ny = dx; d = sqrt(len2);
-                        if (d < 1e-6) continue;
-                    }
-                    *x = px + nx / d * radius;
-                    *y = py + ny / d * radius;
-                    moved = 1;
-                }
-            }
-        }
-        if (!moved) break;
-    }
-}
-
 /* The distance from a point to the nearest wall segment.  Only the self-test
  * needs it, and it is worth the brute force: a bug in the grid would hide
  * itself if the check used the same index. */
@@ -700,53 +981,50 @@ static double walls_nearest(const Walls *W, double x, double y)
     return best;
 }
 
-/* Walk a deterministic wander and check the walker never ends a step inside a
- * wall.  The point is that a solver can look right and still tunnel: the check
- * is against every segment in the world, not the ones the grid offered. */
-static int walk_test(const Walls *W, double x, double y, int steps)
+/* Walk a deterministic wander the *game's* way -- one probe per axis per
+ * tick -- and hold the answer against the wall geometry.
+ *
+ * The two authorities were authored separately: the near map is a raster
+ * somebody painted and the quads are the model somebody built, and docs/13
+ * has them agreeing to within a pixel.  So this reports both numbers at once:
+ * how often the map lets the walker inside a wall quad, and how often the
+ * quads would have blocked a step the map allows.  Where they differ the map
+ * wins, because the map is what the console asks.
+ */
+static int walk_test(const Pack *p, const Walls *W, double x, double y,
+                     int steps)
 {
+    Probe pr; pr.p = p;
     uint32_t seed = 12345;
-    double dir = 0.0, worst = 1e30;
-    int bad = 0, blocked = 0, squeezed = 0;
-    double wx = x, wy = y;
+    double dir = 0.0, worst = 1e30, wx = x, wy = y;
+    int inwall = 0, blocked = 0, offmap = 0;
+    long ticks = 0;
     for (int i = 0; i < steps; i++) {
         seed = seed * 1103515245u + 12345u;
         dir += ((int)((seed >> 16) & 0xff) - 128) * 0.02;
         double sx = cos(dir), sy = sin(dir);
-        double px = wx, py = wy;
-        double dist = 40.0;                    /* a brisk stride */
-        while (dist > 0) {
-            double step = dist > BODY_RADIUS ? BODY_RADIUS : dist;
-            wx += sx * step; wy += sy * step;
-            walls_resolve(W, &wx, &wy, BODY_RADIUS);
-            dist -= step;
+        int okx = 1, oky = 1;
+        for (int t = 0; t < 24; t++) {         /* a brisk stride, in ticks */
+            probe_look_from(&pr, (int)floor(wx), (int)floor(wy));
+            walker_move(p, &pr, &wx, &wy, sx * 0.6, sy * 0.6, &okx, &oky);
+            ticks++;
         }
+        if (!okx || !oky) blocked++;
+        probe_look_from(&pr, (int)floor(wx), (int)floor(wy));
+        if (!(probe_at(&pr, (int)floor(wx), (int)floor(wy)) & 1)) offmap++;
         double d = walls_nearest(W, wx, wy);
         if (d < worst) worst = d;
-        if (d < BODY_RADIUS - 0.5) {
-            bad++;
-            /* a squeeze or a tunnel?  count the walls within a body width */
-            int near = 0;
-            for (int j = 0; j < W->nseg; j++) {
-                const float *t = W->seg + j * 4;
-                double ex = t[2] - t[0], ey = t[3] - t[1];
-                double l2 = ex * ex + ey * ey;
-                double u = l2 > 0 ? ((wx - t[0]) * ex + (wy - t[1]) * ey) / l2 : 0;
-                if (u < 0) u = 0; else if (u > 1) u = 1;
-                double qx = t[0] + u * ex - wx, qy = t[1] + u * ey - wy;
-                if (qx * qx + qy * qy < 4 * BODY_RADIUS * BODY_RADIUS) near++;
-            }
-            if (near > 1) squeezed++;
-            printf("  step %d at (%.1f, %.1f): %.2f from a wall, "
-                   "%d walls within a body width\n", i, wx, wy, d, near);
-        }
-        if (fabs(wx - px) + fabs(wy - py) < 0.5) blocked++;
+        if (d < BODY_RADIUS) inwall++;
     }
-    printf("walk test: %d steps from (%.0f, %.0f), nearest wall ever %.2f "
-           "(body %.0f), %d steps inside a wall (%d squeezed between two), "
-           "%d fully blocked\n",
-           steps, x, y, worst, BODY_RADIUS, bad, squeezed, blocked);
-    return bad ? 1 : 0;
+    printf("walk test: %d strides (%ld ticks) from (%.0f, %.0f)\n"
+           "  never ended a stride on a pixel the map calls closed: %s"
+           " (%d of %d)\n"
+           "  nearest wall quad ever %.2f; %d strides ended within a body"
+           " width (%.0f) of one\n"
+           "  %d strides had an axis refused\n",
+           steps, ticks, x, y, offmap ? "NO" : "yes", offmap, steps,
+           worst, inwall, BODY_RADIUS, blocked);
+    return offmap ? 1 : 0;
 }
 
 /* ---------------------------------------------------------------------- main */
@@ -789,9 +1067,24 @@ static int walk_test(const Walls *W, double x, double y, int steps)
  * `dt` is `[0x58bac]`, the frame's length in 60 Hz ticks: `GameTick` adds it
  * to the combat timer that docs/18 has ticking at 60 Hz.
  *
- * What is *not* read yet is the scale that turns that 16.16 speed into world
- * units, and the turn rate.  UNITS_PER_SPEED below is calibrated, not
- * derived -- see the note on it.
+ * **And how far that carries.**  `0x010ca8` is the position update, and it
+ * had been missing.  Per tick the player moves `MulSF16(Cos(yaw), forward)`
+ * with
+ *
+ *     forward = MulSF16(stride[bob >> 22], speed) >> 2
+ *
+ * where `stride` is a six-entry table at `[0x58274]` -- 0.0703, 0.125,
+ * 0.1875, 0.25, 0.15625, 0.09375 -- and `bob` at `[0x58ba0]` advances by
+ * `speed * dt` and wraps at 382.0 (`0x011d84`).  So the walk *surges*: it is
+ * the head bob, and the stride is fastest at the middle of the cycle.  The
+ * mean of the six is 0.1471, which puts the top speed of 16.0 at about 35
+ * world units a second -- and settles the constant this file used to
+ * calibrate by eye at 20.
+ *
+ * The turn rate is read too, at `0x011c64`: `[0x58b98]` is a rate rather than
+ * an angle, ramped by `dt/16` a tick while the button is down, braked by
+ * `dt/4` when you press the other way or let go, and clamped to +-2.0 -- two
+ * 256ths of a turn a tick, 169 degrees a second.
  */
 
 #define EYE_HEIGHT      6.0     /* 0x012190: mvn r0, #5 */
@@ -809,21 +1102,54 @@ static int walk_test(const Walls *W, double x, double y, int steps)
 #define SPD_SNAP        1.0     /* under this, straight to nothing */
 #define AGILITY         0.0     /* a fresh player; 0 .. 128.0 */
 
-/* The one number here that is calibrated rather than read.  The game's speed
- * is 16.16 and its maximum is 16.0, but nothing found so far says how many
- * world units that is a second.  The ground's fade gives the scale: it steps
- * down every six units and is spent by seventy-two (docs/08), so the lit
- * ground around you is about 72 units across, and crossing it should take a
- * few seconds at a run.  1.25 units a second per unit of speed puts the top
- * at 20 units a second -- three and a half seconds.  Replace this the day the
- * position update is found. */
-#define UNITS_PER_SPEED 1.25
+/* `[0x58274]`, six words, and `[0x58ba0]` the phase that indexes it. */
+static const double STRIDE[6] = { 4608 / 65536.0, 8192 / 65536.0,
+                                  12288 / 65536.0, 16384 / 65536.0,
+                                  10240 / 65536.0, 6144 / 65536.0 };
+#define BOB_WRAP     382.0      /* 0x011d90: 0x17e0000 */
+#define BOB_BAND     64.0       /* 0x011de8: `asr #0x16` */
+#define TURN_MAX     2.0        /* 0x011ce8: 256ths of a turn per tick */
+#define TURN_RAMP  (4096 / 65536.0)     /* 0x011c80: dt << 12 */
+#define TURN_BRAKE (16384 / 65536.0)    /* 0x011c84: dt << 14 */
+#define DT_MAX       10         /* 0x010cf4 clamps the frame to ten ticks */
 
 typedef struct {
     double speed;       /* the game's 16.16 accumulator, as a double */
     double held_fwd;    /* ticks the accelerator has been down */
     double held_rev;
+    double bob;         /* [0x58ba0], the stride phase */
+    double turn;        /* [0x58b98], the yaw rate in 256ths a tick */
+    double tickacc;     /* whole 60 Hz ticks owed to the simulation */
 } Walker;
+
+/* How far one tick carries, in world units: 0x011e24 and 0x010e08. */
+static double walker_forward(const Walker *w)
+{
+    int band = (int)(w->bob / BOB_BAND);
+    if (band < 0) band = 0; else if (band > 5) band = 5;
+    return STRIDE[band] * w->speed * 0.25;
+}
+
+/* 0x011c64: the turn is a *rate*, not an angle.  Left and right ramp it, and
+ * pressing neither -- or pressing the other way -- brakes it. */
+static void walker_turn(Walker *w, int left, int right, double ticks)
+{
+    double ramp = TURN_RAMP * ticks, brake = TURN_BRAKE * ticks;
+    if (left) {
+        if (w->turn > 0.5) w->turn -= brake;            /* 0x011ca0 */
+        else if (w->turn > -TURN_MAX) w->turn -= w->turn == 0.0 ? ramp * 0.25
+                                                               : ramp;
+    } else if (right) {
+        if (w->turn < -0.5) w->turn += brake;
+        else if (w->turn < TURN_MAX) w->turn += w->turn == 0.0 ? ramp * 0.25
+                                                               : ramp;
+    } else {                                            /* 0x011d0c */
+        if (w->turn > 0) w->turn = w->turn <= brake ? 0 : w->turn - brake;
+        else if (w->turn < 0) w->turn = w->turn >= -brake ? 0 : w->turn + brake;
+    }
+    if (w->turn > TURN_MAX) w->turn = TURN_MAX;
+    if (w->turn < -TURN_MAX) w->turn = -TURN_MAX;
+}
 
 /* One frame of ControlFrame's speed arithmetic. */
 static void walker_step(Walker *w, int fwd, int rev, double ticks)
@@ -892,8 +1218,11 @@ int main(int argc, char **argv)
     const char *packpath = NULL, *shot = NULL;
     int W = 960, H = 600, fly = 0, bench = 0, noclip = 0, walktest = 0;
     double shot_t = 0.0;
+    int ticks = 0;                 /* mover ticks to run before drawing */
+    int dump = 0;                  /* the walk, for tools/spawns.py to check */
+    uint32_t seed = 1;
     Cam c = { -279.0, 640.0, EYE_HEIGHT, 90.0, 0.0, 70.0, 6000.0, 0,0,0,0,0 };
-    Walker walk = { 0, 0, 0 };
+    Walker walk = { 0, 0, 0, 0, 0, 0 };
     Opts o = { 1, 1, 1, 1, 40 };
 
     for (int i = 1; i < argc; i++) {
@@ -918,6 +1247,12 @@ int main(int argc, char **argv)
             o.props = 0;
         } else if (!strcmp(argv[i], "--time") && i + 1 < argc) {
             shot_t = atof(argv[++i]);
+        } else if (!strcmp(argv[i], "--ticks") && i + 1 < argc) {
+            ticks = atoi(argv[++i]);
+        } else if (!strcmp(argv[i], "--seed") && i + 1 < argc) {
+            seed = (uint32_t)strtoul(argv[++i], NULL, 0);
+        } else if (!strcmp(argv[i], "--dump-movers")) {
+            dump = 1;
         } else if (!strcmp(argv[i], "--bench") && i + 1 < argc) {
             bench = atoi(argv[++i]);
         } else if (!strcmp(argv[i], "--walktest") && i + 1 < argc) {
@@ -928,7 +1263,8 @@ int main(int argc, char **argv)
             fprintf(stderr,
               "usage: view PACK [--size W H] [--eye X Y Z] [--yaw D] [--pitch D]\n"
               "            [--fov D] [--far D] [--radius N] [--shot FILE.bmp]\n"
-              "            [--bench FRAMES] [--walktest STEPS]\n");
+              "            [--bench FRAMES] [--walktest STEPS]\n"
+              "            [--time SECONDS] [--ticks N] [--seed N] [--dump-movers]\n");
             return 2;
         }
     }
@@ -942,13 +1278,24 @@ int main(int argc, char **argv)
     fade_init();
     Walls walls;
     walls_build(&walls, &p);
+    Sim sim;
+    sim_init(&sim, &p, seed);
+    for (int i = 0; i < ticks; i++) sim_tick(&sim, &p, c.ex, c.ey);
+    if (dump) {
+        for (uint32_t i = 0; i < sim.n; i++) {
+            const Mover *w = &sim.w[i];
+            printf("mover %u %d %d %d %d %d %d\n", i, w->x, w->y,
+                   w->heading, w->vx, w->vy, w->phase);
+        }
+        return 0;
+    }
 
     Raster r;
     r.w = W; r.h = H;
     r.col = (uint32_t *)malloc((size_t)W * H * 4);
     r.z = (double *)malloc((size_t)W * H * sizeof(double));
 
-    if (walktest) return walk_test(&walls, c.ex, c.ey, walktest);
+    if (walktest) return walk_test(&p, &walls, c.ex, c.ey, walktest);
 
     if (bench) {                               /* n frames, no window */
         cam_update(&c, W);
@@ -958,7 +1305,7 @@ int main(int argc, char **argv)
             c.yaw = 90.0 + i * (360.0 / bench);
             cam_update(&c, W);
             raster_clear(&r, 0xff181a28, 0xff1e1c1a);
-            draw_scene(&r, &c, &p, &o, i / 60.0, &nq, &nt, &np);
+            draw_scene(&r, &c, &p, &o, &sim, i / 60.0, &nq, &nt, &np);
         }
         double sec = (double)(clock() - t0) / CLOCKS_PER_SEC;
         printf("%d frames at %dx%d in %.2fs = %.1f fps (%.1f ms a frame)\n",
@@ -970,7 +1317,7 @@ int main(int argc, char **argv)
         cam_update(&c, W);
         raster_clear(&r, 0xff181a28, 0xff1e1c1a);
         int nq, nt, np;
-        draw_scene(&r, &c, &p, &o, shot_t, &nq, &nt, &np);
+        draw_scene(&r, &c, &p, &o, &sim, shot_t, &nq, &nt, &np);
         printf("%d wall quads, %d floor tiles, %d props from (%.0f,%.0f,%.0f) "
                "yaw=%g pitch=%g\n", nq, nt, np, c.ex, c.ey, c.ez, c.yaw, c.pitch);
         write_bmp(shot, &r);
@@ -987,7 +1334,7 @@ int main(int argc, char **argv)
                                         SDL_TEXTUREACCESS_STREAMING, W, H);
     SDL_SetRelativeMouseMode(SDL_TRUE);
 
-    printf("W A S D move, mouse look, Shift run, Space/C up-down, "
+    printf("W/S accelerate, A/D turn, mouse look, Space/C up-down, "
            "Tab walk/fly, N noclip, T textures, G ground, B walls, "
            "F10 shot, Esc quit\n");
 
@@ -1045,46 +1392,54 @@ int main(int argc, char **argv)
             if (k[SDL_SCANCODE_SPACE]) c.ez += v;
             if (k[SDL_SCANCODE_C])     c.ez -= v;
         } else {
-            /* walking: ControlFrame's accumulator, W and S being Up and Down */
-            walker_step(&walk, k[SDL_SCANCODE_W], k[SDL_SCANCODE_S], dt * 60.0);
-            double v = walk.speed * UNITS_PER_SPEED * dt;
-            mx = fx; my = fy;
-            if (v < 0) { mx = -fx; my = -fy; v = -v; }
-            dist = v;
-            /* strafing is the viewer's, not the game's: the original turns */
-            if (k[SDL_SCANCODE_A] || k[SDL_SCANCODE_D]) {
-                double s = 60.0 * dt * (k[SDL_SCANCODE_D] ? 1 : -1);
-                c.ex += fy * s;
-                c.ey -= fx * s;
-                if (!noclip) walls_resolve(&walls, &c.ex, &c.ey, BODY_RADIUS);
+            /* Walking, the game's way.  0x010cc4 measures the frame in 60 Hz
+             * ticks and clamps it to ten; this keeps the remainder instead of
+             * rounding up, so the motion is the same at any frame rate. */
+            walk.tickacc += dt * 60.0;
+            int nt = (int)walk.tickacc;
+            walk.tickacc -= nt;
+            if (nt > DT_MAX) nt = DT_MAX;
+            int okx = 1, oky = 1;
+            for (int i = 0; i < nt; i++) {
+                walker_turn(&walk, k[SDL_SCANCODE_A], k[SDL_SCANCODE_D], 1.0);
+                walker_step(&walk, k[SDL_SCANCODE_W], k[SDL_SCANCODE_S], 1.0);
+                c.yaw -= walk.turn * (360.0 / 256.0);   /* 0x010d48 */
+                walk.bob += walk.speed;                 /* 0x011d74 */
+                while (walk.bob > BOB_WRAP) walk.bob -= BOB_WRAP;
+                while (walk.bob < 0) walk.bob += BOB_WRAP;
+                ry = c.yaw * M_PI / 180.0;
+                fx = cos(ry); fy = sin(ry);
+                double f = walker_forward(&walk);
+                if (noclip) { c.ex += fx * f; c.ey += fy * f; }
+                else {
+                    probe_look_from(&sim.probe, (int)floor(c.ex),
+                                    (int)floor(c.ey));
+                    walker_move(&p, &sim.probe, &c.ex, &c.ey,
+                                fx * f, fy * f, &okx, &oky);
+                }
+                sim_tick(&sim, &p, c.ex, c.ey);         /* and the city walks */
             }
             int tile = tile_at_world(&p, c.ex, c.ey);
             c.ez = tile == LAKE_TILE ? EYE_HEIGHT_LAKE : EYE_HEIGHT;
         }
 
-        if (dist > 0) {
-            /* Step in slices no longer than the body, or a fast move steps
-             * clean through a wall between two frames. */
-            while (dist > 0) {
-                double step = dist > BODY_RADIUS ? BODY_RADIUS : dist;
-                c.ex += mx * step;
-                c.ey += my * step;
-                if (!fly && !noclip) {
-                    double bx = c.ex, by = c.ey;
-                    walls_resolve(&walls, &c.ex, &c.ey, BODY_RADIUS);
-                    /* run into a wall head on and the speed should go, or you
-                     * stand there grinding at sixteen units a second */
-                    if (fabs(c.ex - bx) + fabs(c.ey - by) > step * 0.9)
-                        walk.speed *= 0.5;
-                }
-                dist -= step;
-            }
+        if (dist > 0) {                        /* free flight only */
+            c.ex += mx * dist;
+            c.ey += my * dist;
+        }
+        if (fly) {                             /* the city keeps walking */
+            walk.tickacc += dt * 60.0;
+            int ft = (int)walk.tickacc;
+            walk.tickacc -= ft;
+            if (ft > DT_MAX) ft = DT_MAX;
+            for (int i = 0; i < ft; i++) sim_tick(&sim, &p, c.ex, c.ey);
         }
 
         cam_update(&c, W);
         raster_clear(&r, 0xff181a28, 0xff1e1c1a);
         int nq, nt, np;
-        draw_scene(&r, &c, &p, &o, SDL_GetTicks() / 1000.0, &nq, &nt, &np);
+        draw_scene(&r, &c, &p, &o, &sim, SDL_GetTicks() / 1000.0,
+                   &nq, &nt, &np);
 
         SDL_UpdateTexture(fb, NULL, r.col, W * 4);
         SDL_RenderCopy(ren, fb, NULL, NULL);

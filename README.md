@@ -15,8 +15,8 @@ only shipping build is the 3DO ARM6 executable on the retail CD.
 
 | Path | Contents |
 |---|---|
-| `native/` | A walkable viewer of the overworld, props, item spawns and rithms included: SDL2, a software span rasteriser, ~84 fps at 960x600 with 1,594 sprites in the world, and pixel-identical to the Python reference renderer over a swept grid of cameras |
-| `tools/` | Opera (3DO) filesystem reader, CEL/anim decoder, CEL bank reader, B3D world parser, ground tile map reader, OBJ exporter, textured software renderer, font decoder, DataStream demuxer with Cinepak and SDX2 decoders, HUD radar map decoder, ARM cross-referencer and call-graph reader, symbol-file builder, OS-surface scanner, DSP instrument reader, library-versus-game classifier, the hand-written ARM math module reimplemented and self-checking, the 512-byte game state read out of the code, a function-level pairing of the two game executables, a reachability pass over the call graph, the placed-prop reader, a reimplementation of the three mover spawners and the radar-map probe they place against, a scene packer for the native viewer and a frame differ |
+| `native/` | A walkable viewer of the overworld, props, item spawns and *walking* rithms included: SDL2, a software span rasteriser, ~84 fps at 960x600 with 1,594 sprites in the world, the game's own radar-map collision, and pixel-identical to the Python reference renderer over a swept grid of cameras and mover tick counts |
+| `tools/` | Opera (3DO) filesystem reader, CEL/anim decoder, CEL bank reader, B3D world parser, ground tile map reader, OBJ exporter, textured software renderer, font decoder, DataStream demuxer with Cinepak and SDX2 decoders, HUD radar map decoder, ARM cross-referencer and call-graph reader, symbol-file builder, OS-surface scanner, DSP instrument reader, library-versus-game classifier, the hand-written ARM math module reimplemented and self-checking, the 512-byte game state read out of the code, a function-level pairing of the two game executables, a reachability pass over the call graph, the placed-prop reader, a reimplementation of the three mover spawners, the radar-map probe they place against and the walk they then do, a scene packer for the native viewer and a frame differ |
 | `docs/` | Findings: disc layout, file formats, executables, roadmap, B3D format, code map, CEL banks, the ground, the OS surface, the second B3D family, the fonts, the DataStream, the HUD maps, the DSP instruments, library versus game code, the DOA system and its lip sync, the front end, the save game, the DOAsys spire, the final encounter, the call graph, the props, the item spawns, the cast, where the movers are |
 
 ## Quick start
@@ -246,6 +246,38 @@ Early, but moving. Nothing is playable yet.
   the record's own easting, the canopy widened by a second roll. It had been
   written down as a random weapon spawn on the strength of an off-by-one in
   `RandomBelow`. [23](docs/23-the-item-spawns.md).
+- **The rithms walk, and the collision was never geometric.** `MoverFrame` at
+  `0x00bacc` runs the whole character list once a frame, and the five routines
+  under it are the movement: the gait — the two-bit field at `+0x18` bits
+  24-25, which turns out to be 0, a half, one or one and a half of a base rate
+  — spends into a step accumulator, and each time it has paid for one stride
+  the mover takes it. The rate is the *crowd's* (0.1875 world units a tick,
+  written by hand in `NewCrowds`) and the stride length is the *animation's*
+  (`PerfectMovers.B3D`'s last column), and the step counter it advances is the
+  walk cycle: `0x017d00` reads the per-character constant phase only while the
+  gait bits are clear, so a standing rithm holds a pose and a walking one
+  moves its legs. And a stride is **two probes of the radar map**, one per
+  axis — which is also, exactly, how `0x010ca8` moves the *player*. No wall
+  geometry is consulted anywhere in the overworld; a walker is a point with no
+  radius, no height test and no push-out, and taking one axis and refusing the
+  other is the whole of the game's wall-sliding. `0x010ca8` also settles the
+  last calibrated number in the native viewer: a tick carries
+  `stride[bob] * speed / 4` world units, the stride being a six-entry table
+  indexed by the head-bob phase, so the walk surges and the top speed is about
+  35 units a second. Both renderers run the walk in the same integers and
+  agree bit for bit after 36,000 ticks; the pixel sweep covers the tick count
+  as well as the camera and finds nothing.
+  [25](docs/25-where-the-movers-are.md), [13](docs/13-hud-maps.md).
+- **And one 32-bit constant was a whole enemy.** `0xe288e288`, the PPMPC
+  `DrawMover` writes for one state and not another, is written by three sites
+  and every one of them tests the character id for **12** first — the
+  Chameleon. Decoded it is one quarter, with the first-source bit set: the
+  sprite is drawn as a quarter of *what is already behind it*, contributing
+  its shape and none of its colour. The byte that switches it off is a hit
+  count, raised by `ResolveHit` and cleared by the mover's next decision. Bit
+  28 of the same flag word is the lake, and it quarters the stride and halves
+  both CCBs' source line count — the rithm wades at a quarter speed, cut off
+  at the waterline. [24](docs/24-the-cast.md).
 - **The city's population is not on the disc, and now it is in the viewer.**
   Nothing in the world file places a rithm: `LoadStaticObjects` clears the
   character list and the game makes every mover at run time through
