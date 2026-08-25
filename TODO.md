@@ -3,6 +3,54 @@
 Everything below has a concrete starting address or file. Nothing here is
 open-ended research.
 
+## Done in session 19
+
+- **`0x006128` is read, and it is the trigger.** `MoverThink`'s third
+  deadline is **`MoverShoot`**: no Offense at `+0x5c` or no target at `+0x70`
+  and it refuses; the range is *half the draw distance + 4 × cid* — 79 units
+  for a Goner, 111 for Loki — and the score is 0x40, or 0x60 in an encounter
+  and for Silva, plus **sixteen a unit of arc** inside six units of aim, plus
+  50 when the last shot connected, minus 0x40 outside states 6-9, quartered
+  for a named character escorting somebody. Then `RandomBits(8)`, `0x2000` of
+  Offense and `SpawnShot` `0x0447fc`: **kind 2** at 2.0 units a tick carrying
+  `1.0 + maxOffense/16`. `p1e` `0x0198f4` was read first and everything it
+  drops is a special case. `+0x77` is the feedback byte — bit 7 a shot in
+  flight, the low seven a hit `ResolveHit` credits to the *shooter* — and
+  nine instructions in `p` are the whole field.
+- **`MoverEnterState` and `MoverStateDone` are transcribed**, not just
+  tabulated: all fifteen arms of each, plus `PickDestination` `0x0048c0`,
+  `PickCompanion` `0x006c00` and `NearestMover` `0x0049b8`.
+  `behave.py --arms` runs every arm and holds it against `docs/26`'s table;
+  all fifteen agree.
+- **And `docs/26` had three rows wrong.**
+  - **The patrol is a rectangle.** Legs 2 and 4 swap the **X** of the
+    destination pair with the saved pair and legs 1 and 3 swap the **Y**, so
+    four arrivals walk four corners — and the arm **never reports done**, so
+    the sixty-tick deadline is the only thing that takes a rithm off patrol.
+  - **State 5 does not aim at you.** *Mark* writes **0** into `+0x70`, which
+    `MoverAim` reads as the world origin; only *watch* writes −1. The two
+    stores are one instruction apart.
+  - **`0x060170` is a spire, not a rectangle.** Nothing in
+    `PerfectMovers.B3D` reaches it: `SetHomeBoxes` `0x0226f0` writes nine
+    thirty-unit boxes into the BSS in hand-assembled constants, one per
+    lieutenant behind bits 3-11 of the render flags. Eight of the nine
+    centres do fall inside that character's rectangle, which is why the guess
+    looked right; the ninth is Loki, whose rectangle is the 5000 sentinel.
+- **The DOA economy closes.** `DrinkFromField` `0x01175c`, `GainDOA`
+  `0x011938` and `SpendCharge` `0x01a5ec` are transcribed beside the two
+  switches. Sixteen shots empty a Goner's Offense; *feed O* then wins the
+  vote and sends it to a source. `--live` shows the cycle. Three things fell
+  out of the reading: **the field carries no Agility at all** (`GainDOA` has
+  three arms and they are D, O and both), **the DOAsys ring heals without
+  spending a charge**, and **standing off the grid or over a drain costs
+  *you* all three stats a frame and costs a rithm nothing**.
+- **A lieutenant always escorts.** The escort probability is 5, 10, 15, 20,
+  25 for the five crowd shapes and **30 for every named character**, against
+  a `RandomBelow(31)`. And there is no distance term in `PickCompanion`: a
+  candidate is dropped when its distance beats a fresh `RandomBits(8)`.
+- [28](docs/28-what-a-decision-does.md) is the read;
+  [`tools/behave.py`](tools/behave.py) now runs **123 checks** against `p`.
+
 ## Done in session 18
 
 - **`MoverDecide` is read, and `docs/25` had the state wrong.** `0x004ff8` is
@@ -1046,29 +1094,31 @@ after touching either renderer, and pass `--assets extracted/Perfect` to
 
 What is still missing:
 
-- **The rithms still run state `0x40`, and that is now a known wrong state.**
-  `MoverDecide` is read and transcribed ([26](docs/26-the-decision.md),
-  [`tools/behave.py`](tools/behave.py)), but a decision needs somewhere to go.
-  Two routines stand between here and a rithm that chases you, and §4 and §5
-  of `docs/26` are the specification for both:
-  - **`MoverEnterState`'s other fourteen arms**, `0x0058f0`, 1,712 bytes.
-    Thirteen of the fifteen are tabulated already — destination, target,
-    arrival radius, gait — and every one of them reaches `PickDestination`
-    `0x0048c0`, `PickCompanion` `0x006c00` or `NearestMover` `0x0049b8`, all
-    three of which are read. Only states 2 and 3 need something unread, and
-    they are held at −128 outside a warp.
-  - **`MoverStateDone`, `0x004a88`**, 1,392 bytes, read but not transcribed:
-    a fifteen-arm switch on the same state byte that forces an early
-    re-decide.
-  - **The DOA field itself** — `field_seed`, `field_off`, `field_on` and
-    `nearest_source` are in `behave.py` already, so states 2 and 3 need only
-    `DrinkFromField` beside them to close.
-  - Then `MoverAim`'s target arm (`0x00607c`, four cases on `+0x70`), which is
-    read, and `TurnMover`'s gradual arm, which is already in both renderers
-    and has never been exercised.
+- **The rithms still run state `0x40`, and everything above it is now
+  transcribed.** `MoverDecide`, `MoverEnterState`, `MoverStateDone`,
+  `PickDestination`, `PickCompanion`, `NearestMover`, `NearestSource` and the
+  drink are all in [`tools/behave.py`](tools/behave.py) and all verified
+  ([26](docs/26-the-decision.md), [27](docs/27-the-doa-field.md),
+  [28](docs/28-what-a-decision-does.md)). One routine stands between here and
+  a rithm that chases you:
+  - **`MoverAim`'s target arm**, `0x00607c` — four cases on `+0x70`: −1 the
+    player, 1 the destination pair, 0 the **world origin**, otherwise another
+    mover. Read, four lines of Python, and blocked on one thing: it turns the
+    answer into a bearing with **Operamath's `ATan2` at `0x04cd00`**, a
+    table-driven routine over `0x0590f4` reached through the divide at
+    `0x04cca0` — *not* the octant ramp at `0x0184b4` that `MoverFrame` uses
+    for the bearing byte and that `behave.atan2_units` already has. Two
+    different arctangents in one frame. Transcribe `0x04cd00` into
+    [`tools/armmath.py`](tools/armmath.py) beside `Sin`/`Cos`/`MulSF16` — it
+    is the same shape of job and the table is in the image.
+  - Then wire `Body`'s new fields into `spawns.Walker`, drive the walk from
+    the states instead of from the scramble, and only then port to
+    `native/view.c`. `TurnMover`'s gradual arm is in both renderers already
+    and has never been exercised; it will be, the moment a rithm has a
+    destination it did not snap to.
 
-  Do it in Python first — `behave.py` is the authority and `packdiff --walk`
-  is the check — and port to `native/view.c` after, exactly as the walk went.
+  `behave.py` is the authority and `packdiff --walk` is the check, exactly as
+  the walk went.
 - **The rest of `DrawMover`'s 2,400 bytes.** The Perfect One's three forms and
   the hit states. The stealth branch and the PPMPC are answered
   ([24](docs/24-the-cast.md)). Goner's three spare palettes are still unused:
@@ -1159,10 +1209,11 @@ What is still missing:
   arguments, and the shell treats its result as six coin flips
   ([docs/09](docs/09-os-surface.md)). Everything about it says random source
   and nothing proves it.
-- **`0x006128`, `MoverThink`'s third deadline**, 464 bytes, is now the last
-  unread routine of the mover loop. `p1e` `0x0198f4` is its 296-byte
-  counterpart at similarity 0.60 — read the small one first, which is what
-  worked on `0x004ff8` and what was *not* available for `0x006de8`.
+- ~~**`0x006128`, `MoverThink`'s third deadline**~~ is read: it is
+  `MoverShoot`, and reading `p1e` `0x0198f4` first is what made it quick, for
+  the third time running. **There is no unread routine left in the mover
+  loop.** What is left in the *shot* is `0x006ac8`, `SpawnShot`'s other
+  caller, and `ResolveHit`'s thirteen arms at `0x00bff0`.
 - **`Floor/SpirePad.Cel`, loaded at `0x03238c`**, and `0x01a9c4`, called from
   `DrawItemSpawn`, are the *drawn* half of the DOA field
   ([27](docs/27-the-doa-field.md)): floor tile 13 is the pad and `0x01a9c4`
@@ -1184,6 +1235,24 @@ What is still missing:
   consumes it.
 
 ## Notes to self
+
+- **Tabulating a switch is not transcribing it.** `docs/26` §4 and §5 read
+  all thirty arms of `MoverEnterState` and `MoverStateDone` and wrote them
+  down as two tables. Fifteen of the fifteen rows in §4 survived being
+  executed; three of §5's did not, and every one of the three failed the same
+  way — two arms that *look* like one line of prose turned out to be four
+  instructions apart. The patrol swaps one axis a leg and not the pair; state
+  5 stores the `r0` that was zeroed at the top of the routine and state 12
+  stores the `mvn r0, #0` one instruction above the shared store. Reading a
+  jump table tells you which arms exist. Only running them tells you what
+  they write.
+- **A table in the BSS has a writer somewhere, and it is worth ten minutes
+  to find it.** `0x060170` was written down as "the patrol rectangle out of
+  `PerfectMovers.B3D`" because the numbers it *would* hold were plausible and
+  the file was right there. `armxref -a` says three sites touch it and none
+  of them writes it — which is the whole clue: the writer reaches it through
+  a base register, and `litrefs` on the neighbourhood finds it in one query.
+  It turned out to be 128 hand-assembled constants behind nine flag bits.
 
 - **A state the transcription never leaves is a state the game may never
   enter.** `docs/25` found that `MoverAim`, `TurnMover` and `MoverEnterState`

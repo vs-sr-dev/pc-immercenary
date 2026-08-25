@@ -7,7 +7,8 @@ the walk that came out of it is a state the game reaches only when you shoot
 something at it.
 
 This is that routine read, the routine it feeds read with it, and three
-corrections.
+corrections. The two routines §4 and §5 only *tabulate* are transcribed in
+[28](28-what-a-decision-does.md), which corrects three rows of those tables.
 
 The transcription is [`tools/behave.py`](../tools/behave.py), which checks
 thirty-eight claims against `p` itself:
@@ -350,8 +351,12 @@ runs. **Only three of the fifteen move a rithm at more than half speed**:
 *rush*, *chase* and *home*.
 
 `0x41`'s destination comes from a sixteen-byte-per-character table at
-`0x060170` indexed by `cid - 6` — the midpoint of the patrol rectangle
-[10](10-second-b3d-family.md) read out of `PerfectMovers.B3D`.
+`0x060170` indexed by `cid - 6`. ~~The midpoint of the patrol rectangle
+[10](10-second-b3d-family.md) read out of `PerfectMovers.B3D`.~~ **Corrected
+in [28](28-what-a-decision-does.md) §4:** nothing in that file reaches
+`0x060170`. `0x0226f0` writes nine hand-assembled boxes into it, one per
+lieutenant behind one bit of the render-flag word, and each is a thirty-unit
+spire footprint that happens to sit inside the rectangle.
 
 ### The picker every arm shares
 
@@ -384,14 +389,19 @@ it says yes.
 * **2, 3** — the DOA the state is about has come back over 190/255; the gait
   is refreshed to 2 while it is still far.
 * **4** — Agility back over 190/255.
-* **5, 12** — with `+0x16` zero: immediately, dropping the gait to 0 and
-  aiming at you.
+* **5, 12** — with `+0x16` zero: immediately, dropping the gait to 0.
+  ~~And aiming at you.~~ **Corrected in [28](28-what-a-decision-does.md)
+  §4:** only 12 aims at you. State 5 writes **0** into `+0x70`, which
+  `MoverAim` reads as the world origin.
 * **6, 9** — within `+0x75` of the *mover* at `+0x70`.
 * **7** — you are more than **256 units** away. That is the only way out of a
   chase, and with gait 2 against your own speed it is a long one.
-* **10** — arrived, and then the counter at `+0x40` steps 1→2→3→4→1, swapping
-  the destination pair with the saved one at `+0x48` on 2 and on 4. A
-  two-point patrol.
+* **10** — arrived, and then the counter at `+0x40` steps 1→2→3→4→1.
+  ~~Swapping the destination pair with the saved one at `+0x48` on 2 and on
+  4. A two-point patrol.~~ **Corrected in [28](28-what-a-decision-does.md)
+  §4:** legs 2 and 4 swap the **X** of the two pairs and legs 1 and 3 swap
+  the **Y**, so four arrivals walk the four corners of a rectangle — and the
+  arm never reports done.
 * **`0x40`** — never. The scramble runs until something else clears it.
 * **`0x41`** — arrived, and then `+0x18` swaps bit 5 for bit 4.
 

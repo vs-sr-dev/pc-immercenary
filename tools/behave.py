@@ -38,12 +38,26 @@ Three things this reading corrects.
   copies its partner's.  Every mover placed after the first one was in the
   wrong place.
 
-See docs/26.
+`MoverDecide` is only the middle of three routines, and the other two are
+here as well: `MoverStateDone` at `0x004a88` says whether the state a rithm
+is already in has finished, `MoverEnterState` at `0x0058f0` writes what a new
+one means, and `0x006128` -- `MoverThink`'s third deadline -- is the
+**shot**.  Transcribing the two switches corrected three more rows of
+`docs/26`: the patrol is a rectangle, the *mark* state aims at the world
+origin rather than at you, and state `0x41`'s home is a hand-written spire
+box and not the rectangle in `PerfectMovers.B3D`.  With `DrinkFromField`
+beside them the overworld closes: a rithm spends Offense a shot at a time and
+walks to the city's field to get it back.
+
+See docs/26, docs/27 and docs/28.
 
     python tools/behave.py --verify
     python tools/behave.py --table          # the weights, by character
     python tools/behave.py --states         # the fifteen arms of 0x0058f0
+    python tools/behave.py --arms           # and all fifteen of them run
     python tools/behave.py --poll           # sample the vote at five ranges
+    python tools/behave.py --field          # the DOA field states 2 and 3 walk to
+    python tools/behave.py --live           # drive the whole loop for a minute
 """
 import os
 import re
@@ -634,6 +648,101 @@ def cell_point(row, col, box):
             (max_y >> 8 << 8) - ((15 - row) << 8))
 
 
+DOASYS_RADIUS = 0x870000        # `0x0117fc`, 135.0 from the origin
+PAD_HALF = 0x100000             # `0x01182c`, sixteen units either side
+PAD_SPAN = 0x200000             # and so a 32-unit square at each corner
+DRINK_BASE = 0x800              # `0x011770`, an eighth of a unit a frame
+HEAL = 0x4000                   # `0x011808`, a quarter inside the ring
+
+
+def gain_doa(m, pl, kind, amount):
+    """`GainDOA`, `0x011938(who, kind, amount)`.  `m` of `None` is you.
+
+    Returns **1 when there was nothing to give** -- which is the whole point
+    of the return value: it is what tells `DrinkFromField` not to spend one
+    of the cell's charges on a rithm that is already full.  Agility is not in
+    it anywhere; the field feeds Defense and Offense and nothing else.
+    """
+    who = pl if m is None else m
+    if kind == FEEDS_BOTH:
+        if who.d >= who.dmax and who.o >= who.omax:
+            return 1                            # 0x011ac0
+        who.d = min(who.dmax, who.d + amount)
+        who.o = min(who.omax, who.o + amount)
+    elif kind == FEEDS_D:
+        if who.d >= who.dmax:
+            return 1
+        who.d = min(who.dmax, who.d + amount)
+    elif kind == FEEDS_O:
+        if who.o >= who.omax:
+            return 1
+        who.o = min(who.omax, who.o + amount)
+    return 0                                    # 0x011b0c
+
+
+def drink_from_field(m, pl, field, box):
+    """`DrinkFromField`, `0x01175c` -- once a frame, for every mover and for
+    you.  `m` of `None` is you.
+
+    An eighth of a unit plus a thousandth of the drinker's own Defense
+    ceiling, so the bigger the rithm the faster it fills.  Three places it
+    can be standing:
+
+    * inside 135 units of the origin, which is the DOAsys' own ring: a flat
+      quarter of a unit into both D and O, and **no charge is spent** -- the
+      spire heals whatever the city is doing;
+    * within sixteen units of a 256-unit lattice corner, which is where the
+      pads are: the cell's own word decides, half rate if it feeds both;
+    * anywhere else: nothing, and for **you** it is worse than nothing --
+      off the grid or over a drained cell you lose the same amount out of all
+      three at once.
+
+    A cell is only debited when the drinker actually took something, so a
+    full rithm standing on a pad costs the city nothing.
+
+    Returns 1 if it was already full, 0 if it drank, -1 if there was nothing
+    to drink.
+    """
+    who = pl if m is None else m
+    if m is not None and m.parked:              # 0x0117a8, `+0x18` bit 4
+        return -1
+    rate = DRINK_BASE + (who.dmax >> 10)
+    x, y = who.x, who.y
+    if oct_dist(0, 0, x, y) <= DOASYS_RADIUS:   # 0x0117fc
+        return 1 if gain_doa(m, pl, FEEDS_BOTH, HEAL) else 0
+
+    def drain():
+        """0x0118b4: only you can be punished for standing in the wrong
+        place, and it costs all three stats at once."""
+        if m is not None:
+            return 0
+        pl.d -= rate
+        pl.o -= rate
+        pl.a -= rate
+        return 0
+
+    ax = (abs(s32(x)) + PAD_HALF) & 0xffffff    # 0x01182c, and then mod 256
+    ay = (abs(s32(y)) + PAD_HALF) & 0xffffff
+    if ax >= PAD_SPAN and ay >= PAD_SPAN:
+        return 0
+    row = ((s32(y) >> 16) - box[3]) >> 8        # 0x011854, minY
+    col = (box[2] - (s32(x) >> 16)) >> 8        # 0x011864, maxX
+    if row & ~0xf or col & ~0xf:                # 0x011874, off the grid
+        return drain()
+    cell = field[row * GRID + col]
+    if cell is None:                            # 0x01189c, bit 15 clear
+        return -1
+    if cell[0] == DRAINS:                       # 0x0118ac
+        return drain()
+    if cell[1] <= 0:                            # 0x0118f0, nine bits of charge
+        return -1
+    amount = rate >> 1 if cell[0] == FEEDS_BOTH else rate
+    if gain_doa(m, pl, cell[0], amount):
+        return 1
+    cell[1] -= 1                                # `SpendCharge`, 0x01a5ec
+    return 0
+
+
 def nearest_source(m, want, field, box, image=IMAGE):
     """`0x006de8(mover, kind)`, the overworld arm, and the whole of what
     states 2 and 3 mean.
@@ -675,6 +784,467 @@ def nearest_source(m, want, field, box, image=IMAGE):
     if pick and (not buckets[0] or pick[0][0] < buckets[0][0][0]):
         return pick[0][1]
     return buckets[0][0][1] if buckets[0] else (ox, oy)
+
+# ---------------------------------------------------------------------------
+# What a decision sets up, and when it is over
+#
+# `MoverThink` calls three routines and `MoverDecide` is only the middle one.
+# `0x004a88` runs first and says whether the state the mover is already in has
+# finished; `0x0058f0` runs last and writes what the new state means.  Both
+# are fifteen-arm switches on the same byte at `+0x74`, and between them they
+# are every destination a rithm ever walks to.
+# ---------------------------------------------------------------------------
+HOME_FILLER = 0x0226f0          # the nine boxes it writes into `0x060170`
+HOME_TABLE = 0x060170           # sixteen bytes a lieutenant, `cid - 6`
+PICK_TRIES = 64                 # `0x004984`, which is a clock: see below
+PICK_WIDEN = 0x14               # `0x004954`, twenty units per failed candidate
+FED = 0xbe                      # `0x004cf4`, 190 of 255 is fed enough
+CHASE_GIVE_UP = 0x1000000       # `0x004e10`, 256 units and the chase is over
+
+
+def s8(v):
+    v &= 0xff
+    return v - 0x100 if v & 0x80 else v
+
+
+def s16(v):
+    """The destination pair is two bytes each, stored high then low."""
+    v &= 0xffff
+    return v - 0x10000 if v & 0x8000 else v
+
+
+def home_boxes(image=IMAGE):
+    """`0x0226f0`, decoded out of its own immediates.
+
+    `docs/26` said `0x060170` held the midpoint of the patrol rectangle
+    `PerfectMovers.B3D` carries.  It does not, and nothing in that file
+    reaches it: the table lives in the BSS and exactly one routine writes it,
+    in hand-assembled constants, one sixteen-byte box per lieutenant behind
+    one bit of the render-flag word -- bit 3 for `cid` 6 up to bit 11 for
+    `cid` 14.  A lieutenant who has not been placed yet has a box of zeroes,
+    and so does Raven, who has no entry at all.
+
+    Returns nine `(x0, y0, x1, y1)` in 16.16.
+    """
+    from armxref import Image
+    im = Image(image)
+    out, val = {}, 0
+    for a in range(HOME_FILLER, HOME_FILLER + 0x1f0, 4):
+        i = im.insns.get(a)
+        if i is None:
+            break
+        if i.mnemonic == 'mov' and i.op_str.startswith(('r0, #', 'r2, #')):
+            val = int(i.op_str.split('#')[1], 0)
+        elif i.mnemonic == 'add' and ', #' in i.op_str:
+            val = (val + int(i.op_str.split('#')[1], 0)) & M32
+        elif i.mnemonic == 'str' and '[r1' in i.op_str:
+            off = i.op_str.split('#')[1].rstrip(']!') if '#' in i.op_str else '0'
+            out[int(off, 0)] = s32(val)
+    return [tuple(out.get(i * 16 + k, 0) for k in (0, 4, 8, 12))
+            for i in range(9)]
+
+
+class World:
+    """Everything the fifteen arms reach that is not the mover itself.
+
+    `tries` stands in for `0x004984`, which retries one candidate at a time
+    until `AudioTicks()` passes a deadline three ticks out.  `spawns.Placer`
+    has the same hole for the same reason and picks the same number.
+    """
+
+    def __init__(self, rng, probe, movers=(), field=None, box=None,
+                 image=IMAGE, movers_b3d=MOVERS_B3D, now=0,
+                 tries=PICK_TRIES):
+        self.rng, self.probe = rng, probe
+        self.movers = list(movers)
+        self.field, self.box = field, box
+        self.image, self.now, self.tries = image, now, tries
+        self.records = character_records(movers_b3d)
+        self.homes = home_boxes(image)
+
+
+def set_gait(m, g):
+    """`bic #0x3000000` and then `orr`: the two bits at `+0x18` 24-25."""
+    m.gait = g
+
+
+def clamp_to_world(x, y):
+    """`ClampToWorld`, `0x0065a4`, over the four words at `0x058434`."""
+    import spawns
+    return spawns.clamp(x, y)
+
+
+def pick_destination(m, ax, ay, base, spread, w):
+    """`PickDestination`, `0x0048c0(mover, x, y, base, spread)` -- the only
+    place a state's destination comes from.
+
+    One candidate at a time: a magnitude `RandomBelow(spread) + base` and a
+    sign of its own per axis, clamped into the world box and put to the map
+    probe.  Every candidate the map refuses widens the spread by twenty, so a
+    rithm boxed into a courtyard walks out of it rather than giving up where
+    it stands.  When the clock runs out the anchor itself is the destination.
+
+    Returns 1 if the map said yes and 0 if it gave up.
+    """
+    for _ in range(w.tries):
+        r = w.rng.below(spread) + base
+        x = ax + r if w.rng.below(2) & 1 else ax - r
+        r = w.rng.below(spread) + base
+        y = ay + r if w.rng.below(2) & 1 else ay - r
+        x, y = clamp_to_world(x, y)
+        if w.probe(x, y) & 1:                       # 0x004950, bit 0
+            m.dest = (s16(x), s16(y))
+            return 1
+        spread += PICK_WIDEN
+    m.dest = (s16(ax), s16(ay))                     # 0x004990
+    return 0
+
+
+def nearest_mover(m, far, w):
+    """`NearestMover`, `0x0049b8(mover, far)`.
+
+    With `far` clear it is the nearest other mover, full stop.  With `far`
+    set the search starts from the distance to **you** rather than from
+    infinity -- so it answers only when someone is closer to it than you are
+    -- and it refuses outright when you are inside 16.0.
+    """
+    if far:
+        best, pick = s32(m.dist), -1
+        if best < 0x100000:                         # 0x0049fc
+            return -1
+    else:
+        best, pick = 0x7fffffff, 0
+    for o in w.movers:
+        if o is m:
+            continue
+        d = oct_dist(m.x, m.y, o.x, o.y)
+        if d < best:
+            best, pick = d, o
+    return pick
+
+
+def pick_companion(m, w):
+    """`PickCompanion`, `0x006c00` -- the escort arm's own picker, and it
+    writes the state byte itself.
+
+    A Goner never escorts.  Everyone else rolls `RandomBelow(31)` against the
+    0..127 escort probability in bits 24-30 of its character record, then
+    walks the whole cast: a candidate is dropped when its distance in whole
+    units beats a fresh `RandomBits(8)` -- which makes the choice fall off
+    with range with no distance term in it anywhere -- and dropped again when
+    it is *junior* to the picker and of the same shape.
+
+    Writes state 6, the companion into `+0x70` and its point index into
+    `+0x40`, and returns 1.
+    """
+    if m.cid == 0:                                  # 0x006c54
+        return 0
+    rec = w.records[m.cid - 1]
+    if w.rng.below(0x1f) > rec['escort']:           # 0x006c68
+        return 0
+    ox, oy = s32(m.x) >> 16, s32(m.y) >> 16
+    best, pick = 0x1388, None                       # 0x006c28, 5000
+    for o in w.movers:
+        if o is m:
+            continue
+        d = oct_dist(ox, oy, s32(o.x) >> 16, s32(o.y) >> 16)
+        if d > w.rng.bits(8):                       # 0x006d40
+            continue
+        if o.prio < m.prio and o.cid == m.cid:      # 0x006d58
+            continue
+        if d < best:
+            best, pick = d, o
+    if pick is None:
+        return 0
+    m.state = 6
+    m.target = pick
+    m.leg = w.movers.index(pick)                    # `+0x40`, its point index
+    return 1
+
+
+def enter_state(m, pl, w):
+    """`MoverEnterState`, `0x0058f0`.
+
+    Four things come out of every arm -- the destination pair at
+    `+0x44`/`+0x46`, what to aim at at `+0x70`, the arrival radius at `+0x75`
+    and the gait at `+0x18` 24-25 -- and `STATES` above is this routine
+    tabulated.  Two arms can fail and both fall back on the wander with the
+    state byte forced to 0: *escort* when nobody will have it, *follow* when
+    it is alone in the world.
+    """
+    st = m.state & 0xff
+    sx, sy = s32(m.x) >> 16, s32(m.y) >> 16         # 0x005944, whole units
+    px, py = s32(pl.x) >> 16, s32(pl.y) >> 16
+    loki = False
+
+    if st == 7:                                     # chase: no destination
+        m.target, m.radius = -1, 0x20
+        set_gait(m, 2)
+    elif st == 0:                                   # wander
+        pick_destination(m, sx, sy, 0xfa, 0x64, w)
+        m.target, m.radius = 1, 0x10
+        set_gait(m, 1)
+    elif st in (1, 5):                              # rush and mark, one body
+        ax, ay = clamp_to_world(
+            px + (0x100 if w.rng.bits(1) else -0x100),
+            py + (0x100 if w.rng.bits(1) else -0x100))
+        pick_destination(m, ax, ay, 0, 0x64, w)
+        m.target, m.radius = 1, 0x10
+        if st == 1:
+            m.gait |= 3                             # 0x005b80: `orr`, no `bic`
+        else:
+            set_gait(m, 1 if m.flag16 else 0)
+        loki = True
+    elif st == 2:                                   # feed D
+        m.dest = nearest_source(m, 1, w.field, w.box, w.image)
+        m.target, m.radius = 1, 0x0e
+        m.gait |= 3                                 # 0x005c4c: `orr`, no `bic`
+    elif st == 3:                                   # feed O
+        m.dest = nearest_source(m, 2, w.field, w.box, w.image)
+        m.target, m.radius = 1, 0x0e
+        set_gait(m, 2)
+    elif st == 4:                                   # halt
+        m.dest = (s16(sx), s16(sy))
+        m.target, m.radius = 1, 0x10
+        set_gait(m, 0)
+    elif st == 6:                                   # escort
+        if pick_companion(m, w):
+            m.radius = 0x20
+            set_gait(m, 1)
+        else:
+            m.state = 0                             # 0x005d1c, and wander
+            pick_destination(m, sx, sy, 0xfa, 0x64, w)
+            m.target, m.radius = 1, 0x10
+            set_gait(m, 1)
+    elif st == 8:                                   # rejoin
+        if m.cid != 4:                              # 0x005cd4: never shape 4
+            m.target, m.radius = m.mate, 0x20
+            set_gait(m, 2)
+            m.mate = 0                              # 0x005cf8, spent
+    elif st == 9:                                   # follow
+        m.target = nearest_mover(m, 0, w)
+        if m.target:
+            m.radius = 0x20
+            set_gait(m, 1)
+        else:
+            m.state = 0
+            pick_destination(m, sx, sy, 0xfa, 0x64, w)
+            m.target, m.radius = 1, 0x10
+            set_gait(m, 1)
+    elif st == 10:                                  # patrol
+        pick_destination(m, sx, sy, 0, 0x64, w)     # the near corner
+        m.save = m.dest                             # 0x0059f4, into `+0x48`
+        pick_destination(m, sx, sy, 0xfa, 0x64, w)  # and the far one
+        m.leg = 1
+        m.target, m.radius = 1, 0x10
+        set_gait(m, 1)
+    elif st == 11:                                  # circle
+        ax, ay = clamp_to_world(
+            px + (0x32 if w.rng.bits(1) else -0x32),
+            py + (0x32 if w.rng.bits(1) else -0x32))
+        pick_destination(m, ax, ay, 0, 0x64, w)
+        m.target, m.radius = 1, 0x10
+        set_gait(m, 1)
+    elif st == 12:                                  # watch
+        m.radius = 0x10
+        if not m.flag16 and s32(m.dist) < CHASE_GIVE_UP:
+            set_gait(m, 0)
+            m.target = -1
+        else:
+            ax, ay = clamp_to_world(
+                px + (0x100 if w.rng.bits(1) else -0x100),
+                py + (0x100 if w.rng.bits(1) else -0x100))
+            pick_destination(m, ax, ay, 0, 0x64, w)
+            m.target = 1
+            set_gait(m, 1)
+        loki = True
+    elif st == 0x40:                                # scramble
+        m.dest = (s16(sx), s16(sy))
+        m.target, m.radius = 1, 0x10
+        set_gait(m, 1)
+    elif st == 0x41:                                # home
+        if m.cid >= 0x10:                           # 0x005a88, the three forms
+            m.dest, m.radius = (0, 0), 0x87         # the DOAsys' own 135
+        else:
+            x0, y0, x1, y1 = w.homes[m.cid - 6]
+            m.dest = (s32(x1 + x0) >> 1 >> 16, s32(y1 + y0) >> 1 >> 16)
+            m.radius = 0x20
+        m.target = 1
+        set_gait(m, 2)
+
+    # 0x005ba0 and 0x005e54: Loki in the encounter, standing on his own mark
+    # for five seconds.  Two arms carry it and nothing in the overworld does.
+    if loki and pl.flags & 0x20000000 and m.cid == 0xe and pl.raven & 1:
+        m.dest = (s16(sx), s16(sy))
+        m.target, m.radius = 1, 0x10
+        set_gait(m, 0)
+        m.until = w.now + 0x12c
+        pl.raven |= 2
+    # 0x005f54, the trailer every arm falls through
+    if pl.flags & 0x20000000 and m.cid == 0xe and m.gait == 0:
+        pl.raven |= 2
+    return 1
+
+
+def state_done(m, pl, w):
+    """`MoverStateDone`, `0x004a88`: has this state finished?
+
+    `MoverThink` calls it first thing every frame and drops the decision
+    deadline to *now* when it says yes, so a state that runs out early is
+    re-decided early.  Four of the fifteen arms are the plain arrival test --
+    the octagonal distance to the destination pair against `+0x75` -- and the
+    rest are the interesting ones.
+    """
+    st = m.state & 0xff
+    done = 0
+    dist = oct_dist(m.x, m.y, m.dest[0] << 16, m.dest[1] << 16)
+    rad = m.radius << 16
+    encounter = pl.flags & 0x20000000
+
+    if st == 7:                                     # chase
+        done = 1 if s32(m.dist) > CHASE_GIVE_UP else 0
+    elif st in (0, 1, 8, 11):                       # arrived
+        done = 1 if dist <= rad else 0
+        if encounter and m.cid == 0xe:
+            done = _loki_wait(m, pl, w, done)
+    elif st == 2:                                   # feed D
+        set_gait(m, 2 if dist > rad else 0)         # 0x004cd8, while still far
+        done = 1 if doa_fraction(m.d, m.dmax) >= FED else city_power_off(pl)
+    elif st == 3:                                   # feed O
+        set_gait(m, 2 if dist > rad else 0)
+        done = 1 if doa_fraction(m.o, m.omax) >= FED else city_power_off(pl)
+    elif st == 4:                                   # halt
+        set_gait(m, 0)
+        done = 1 if doa_fraction(m.a, m.amax) >= FED else 0
+    elif st == 5:                                   # mark
+        if encounter and m.cid == 0xe:
+            done = _loki_wait(m, pl, w, 1)
+        elif not m.flag16:
+            set_gait(m, 0)
+            m.target = 0                            # 0x004ed0, and r0 is 0
+            done = 1
+        else:
+            done = 1 if dist <= rad else 0
+    elif st in (6, 9):                              # escort and follow
+        done = 1 if oct_dist(m.x, m.y, m.target.x, m.target.y) <= rad else 0
+    elif st == 10:                                  # patrol
+        if dist <= rad:
+            m.leg = 1 if m.leg + 1 > 4 else m.leg + 1
+            if m.leg & 1:                           # 0x004e1c, the Y pair
+                m.dest, m.save = ((m.dest[0], m.save[1]),
+                                  (m.save[0], m.dest[1]))
+            else:                                   # 0x004c00, the X pair
+                m.dest, m.save = ((m.save[0], m.dest[1]),
+                                  (m.dest[0], m.save[1]))
+    elif st == 12:                                  # watch
+        if encounter and m.cid == 0xe:
+            done = _loki_wait(m, pl, w, 0)
+        elif not m.flag16:
+            set_gait(m, 0)
+            m.target = -1                           # 0x004ecc, and this is -1
+            done = 1
+        elif m.gait:
+            done = 1 if dist <= rad else 0
+        elif s32(m.dist) < CHASE_GIVE_UP and not line_blocked(
+                w.probe, m.x, m.y, pl.x, pl.y, 0):
+            m.target, m.radius = -1, 0x20           # 0x004f38, turn and look
+            set_gait(m, 1)
+    elif st == 0x41:                                # home
+        if dist <= rad:
+            m.parked = 1                            # 0x004c58, bit 5 for bit 4
+            m.until = 0
+            done = 1
+    # 0x40 is never done: a scramble runs until something else clears it.
+
+    # 0x004f68, the trailer, and the same five stores `0x0058f0` ends on
+    if encounter and m.cid == 0xe and m.gait == 0:
+        m.dest = (s16(s32(m.x) >> 16), s16(s32(m.y) >> 16))
+        m.target, m.radius = 1, 0x10
+        m.until = w.now + 0x12c
+        pl.raven |= 2
+    return done
+
+
+def _loki_wait(m, pl, w, done):
+    """`0x004ea0`: the five seconds `0x0058f0` put on the clock at `+0x28`."""
+    if not pl.raven & 1:
+        return done
+    if w.now >= m.until:
+        pl.raven = 1
+        return done
+    return 0
+
+
+def city_power_off(pl):
+    """`CityPowerOff`, `0x021ad4`: bits 28-31 of `[0x058bb4]` at zero.
+
+    This is the other way states 2 and 3 finish, and it is the one that
+    matters.  A rithm that walks to a Defense source and finds the city dark
+    stops walking rather than standing over it: with every source inverted
+    into a drain ([27](../docs/27-the-doa-field.md)) there is nothing to feed
+    on, and the vote is free to send it somewhere else.
+    """
+    return 1 if pl.power == 0 else 0
+
+
+def mover_shoot(m, pl, rng, probe, w=None):
+    """`0x006128`, `MoverThink`'s third deadline -- and it is the trigger.
+
+    A rithm with something to aim at and any Offense left rolls
+    `RandomBits(8)` against a score, and under it the shot goes off: an
+    eighth of a unit out of `+0x5c` and a kind-2 projectile at 2.0 units a
+    tick, carrying `1.0 + max Offense / 16` of damage.  The score starts at
+    0x40, or 0x60 inside an encounter and for Silva anywhere, and then
+
+    * how well it is facing what it is shooting at: sixteen a unit inside six
+      units of arc, and a plain subtraction outside it;
+    * plus 50 when its last shot **connected**, which `ResolveHit` records in
+      the low bits of `+0x77` and this routine clears;
+    * minus 0x40 outright unless the state is one of 6 to 9 -- the four with
+      something other than the ground to aim at;
+    * and quartered for a named character in the overworld that has a
+      companion at `+0x8c`.
+
+    Range is the reason it is not simply a probability: half the draw
+    distance plus four units a character id, which at the overworld's 150 is
+    79 units for a Goner and 111 for Loki.  `MoverThink` throws the answer
+    away -- it is the shot that matters, not the return value.
+
+    Returns 1 if the target was in range at all, 0 if not.
+    """
+    if not m.o:                                     # 0x006144, out of Offense
+        return 0
+    if not m.target or (m.state & 0xff) == 0x40:    # 0x006150
+        return 0
+    reach = ((pl.sight >> 1) + m.cid * 4) << 16     # 0x006180
+    score = 0x60 if (pl.flags & 0x20000000 or m.cid == 9) else 0x40
+    if m.target == -1:
+        if s32(m.dist) > reach:
+            return 0
+    elif m.target != 1:
+        if oct_dist(m.x, m.y, m.target.x, m.target.y) > reach:
+            return 0
+
+    st = s8(m.state)
+    if 6 <= st <= 9:                                # 0x00621c
+        want = (m.face_player << 16) if m.target == -1 else m.aim
+        off = abs(s32(m.heading - want)) >> 16
+        score += (6 - off) * 16 if off < 6 else -off
+    else:
+        score -= 0x40
+    if m.hitmark & 0x7f:                            # 0x006274
+        score += 0x32
+        m.hitmark &= 0x80
+    roll = rng.bits(8)
+    if (m.cid > 5 and m.cid != 9 and not pl.flags & 0x20000000
+            and m.mate != -1):                      # 0x0062b8, `+0x8c`
+        score >>= 2
+    if roll < score:
+        m.o = max(0, m.o - 0x2000)                  # an eighth of a unit
+        m.hitmark |= 0x80                           # 0x0448a0, one in flight
+        m.shots += 1
+    return 1
+
 
 # ---------------------------------------------------------------------------
 # Verification
@@ -940,6 +1510,300 @@ def verify(args):
     check('and it always names a point, over a swept grid of standing places',
           ok_all)
 
+    print('== 0x0058f0, the fifteen arms')
+    check('seven of them come off one jump table on `state`',
+          text(0x00597c) == 'addls pc, pc, r8, lsl #2' and
+          text(0x005978) == 'cmp r8, #6')
+    check('and the other eight off a chain of teq: 8, 9, 10, 11, 12, '
+          '0x40, 0x41, with 7 taken before either',
+          [text(a) for a in (0x0059bc, 0x0059c4, 0x0059cc, 0x0059b0,
+                             0x005a58, 0x005a60, 0x005a68, 0x005964)] ==
+          ['teq r8, #8', 'teq r8, #9', 'teq r8, #0xa', 'cmp r8, #0xb',
+           'teq r8, #0xc', 'teq r8, #0x40', 'teq r8, #0x41', 'cmp r8, #7'])
+    check('rush and mark are the same eleven instructions, and only rush '
+          'has the gait 3 -- an `orr` with no `bic` under it',
+          text(0x005b78) == 'teq r8, #1' and
+          text(0x005b80) == 'orreq r2, r2, #0x3000000' and
+          text(0x005b88) == 'ldrb r2, [r4, #0x16]')
+    check('feed D does the same, so a rithm walking to a source runs',
+          text(0x005c4c) == 'orr r0, r0, #0x3000000')
+    check('chase writes the target and the radius and no destination at all',
+          text(0x005968) == 'streq r0, [r4, #0x70]' and
+          text(0x00596c) == 'strbeq r7, [r4, #0x75]' and
+          text(0x005970) == 'beq #0x5f44')
+    check('patrol picks twice, near then far, and starts on leg 1',
+          text(0x0059d4) == 'mov r3, #0x64' and text(0x0059e4) == 'mov r3, #0' and
+          text(0x005a34) == 'mov r3, #0xfa' and text(0x005a44) == 'mov r0, #1')
+    check('escort and follow both fall back on the wander with the state '
+          'byte forced to 0',
+          text(0x005d18) == 'mov r0, #0' and
+          text(0x005d1c) == 'strb r0, [r4, #0x74]' and
+          text(0x005d20) == 'b #0x5ae0')
+    check('rejoin spends the mate it used',
+          text(0x005cf4) == 'mov r0, #0' and text(0x005cf8) == 'str r0, [r4, #0x8c]')
+    check("and shape 4 never rejoins at all",
+          text(0x005cd0) == 'teq r0, #4' and text(0x005cd4) == 'beq #0x5f54')
+    check('home gives the three Perfect One forms the DOAsys ring, 135',
+          text(0x005a84) == 'cmp r1, #0x10' and text(0x005f34) == 'mov r0, #0x87')
+
+    print('== 0x060170 is not the patrol rectangle')
+    boxes = home_boxes(args.image)
+    check('nothing in the image reaches it but 0x0058f0 and two readers',
+          sorted(im.func_of(s) for s in im.litrefs[HOME_TABLE]) ==
+          [0x0058f0, 0x0223ec, 0x0226f0])
+    check('0x0226f0 writes nine boxes behind bits 3 to 11 of the render flags',
+          [text(0x0226f8 + i) for i in (0, 0x34, 0x6c)] ==
+          ['tst r0, #8', 'tst r0, #0x10', 'tst r0, #0x20'] and
+          text(0x0228a4) == 'tst r0, #0x800' and len(boxes) == 9)
+    homes = [((b[2] + b[0]) >> 1 >> 16, (b[3] + b[1]) >> 1 >> 16) for b in boxes]
+    try:
+        recs = character_records(args.movers)
+        inside_rect = [i for i, (hx, hy) in enumerate(homes)
+                       if recs[i + 5]['rect'][0] <= hx <= recs[i + 5]['rect'][2]
+                       and recs[i + 5]['rect'][3] <= hy <= recs[i + 5]['rect'][1]]
+        check('eight of the nine centres fall inside that lieutenant own '
+              'rectangle in PerfectMovers.B3D -- so it is a spire, not the '
+              'rectangle itself',
+              len(inside_rect) == 8, '   %s' % [NAMES[i + 6] for i in inside_rect])
+        check('and the one that does not is Loki, whose rectangle is the '
+              '5000 sentinel',
+              8 not in inside_rect and recs[13]['rect'] == (5000, 5000, 5000, 5000))
+    except Exception as e:
+        print('  --    (no mover file: %s)' % e)
+
+    print('== 0x0048c0, the destination picker')
+    check('a magnitude and a sign per axis, twice',
+          text(0x0048f4) == 'bl #0x38c00' and text(0x0048f8) == 'add r7, r0, r4' and
+          text(0x004900) == 'bl #0x38c00' and text(0x004904) == 'tst r0, #1')
+    check('every candidate the map refuses widens the spread by twenty',
+          text(0x004950) == 'tst r0, #1' and
+          text(0x004954) == 'addeq r6, r6, #0x14')
+    check('and it gives up three ticks after it started',
+          text(0x0048ec) == 'add r8, r0, #3' and text(0x00498c) == 'bls #0x48f0')
+
+    print('== 0x004a88, when a state is over')
+    check('0, 1, 8 and 11 share the plain arrival arm',
+          [text(a) for a in (0x004b4c, 0x004b50, 0x004b78, 0x004b6c)] ==
+          ['b #0x4c7c', 'b #0x4c7c', 'beq #0x4c7c', 'beq #0x4c7c'] and
+          text(0x004c7c) == 'cmp r8, r7' and text(0x004c80) == 'movle r6, #1')
+    check('the octagonal distance is to the destination pair, against +0x75',
+          text(0x004b14) == 'bl #0x4890' and text(0x004b1c) == 'ldrb r0, [r4, #0x75]')
+    check('2 and 3 end at 190 of 255, or when the city goes dark',
+          text(0x004cf0) == 'bl #0x4810' and text(0x004cf4) == 'cmp r0, #0xbe' and
+          text(0x004cfc) == 'bl #0x21ad4' and text(0x004d34) == 'bl #0x21ad4')
+    check('and they run at gait 2 while they are still far from the source',
+          text(0x004cd4) == 'cmp r8, r7' and
+          text(0x004ce0) == 'orrgt r0, r0, #0x2000000')
+    check('4 is Agility, and it is the only arm with no city test',
+          text(0x004d50) == 'ldr r0, [r4, #0x60]' and
+          text(0x004d54) == 'ldr r1, [r4, #0x6c]' and text(0x004d5c) == 'cmp r0, #0xbe')
+    check('the only way out of a chase is 256 units',
+          text(0x004e0c) == 'ldr r0, [r4, #0x38]' and
+          text(0x004e10) == 'cmp r0, #0x1000000')
+    check('mark clears +0x70 and watch sets it to -1: docs/26 had them the same',
+          text(0x004ecc) == 'mvn r0, #0' and text(0x004ed0) == 'str r0, [r4, #0x70]' and
+          text(0x004dcc) == 'beq #0x4ed0' and text(0x004b38) == 'mov r0, #0')
+    check('the scramble has an arm and the arm is a fall-through: never done',
+          text(0x004c40) == 'teq r1, #0x40' and text(0x004c44) == 'beq #0x4f68')
+
+    print('== the patrol is a rectangle, not two points')
+    check('the leg counter at +0x40 steps 1..4 and wraps',
+          text(0x004ba0) == 'add r1, r1, #1' and text(0x004bc0) == 'cmp r1, #4' and
+          text(0x004bc4) == 'movgt r1, #1')
+    check('legs 1 and 3 swap the Y of the pair with the Y of the saved pair',
+          [text(a) for a in (0x004be0, 0x004bf0)] == ['teq r0, #1', 'teq r0, #3'] and
+          text(0x004e1c) == 'ldrb ip, [r5, #0x2e]' and
+          text(0x004e2c) == 'ldrb ip, [r5, #0x32]')
+    check('legs 2 and 4 swap the X -- so four arrivals walk a rectangle',
+          [text(a) for a in (0x004be8, 0x004bf8)] == ['teq r0, #2', 'teq r0, #4'] and
+          text(0x004c00) == 'ldrb ip, [r5, #0x2c]' and
+          text(0x004c10) == 'ldrb ip, [r5, #0x30]')
+    check('and it never says done: the state keeps its own destination',
+          text(0x004c34) == 'b #0x4f68' and text(0x004e50) == 'b #0x4f68')
+
+    print('== 0x006c00, who will escort whom')
+    check('a Goner never escorts',
+          text(0x006c54) == 'teq r0, #0' and text(0x006c5c) == 'mov r0, #0')
+    check('RandomBelow(31) against bits 24-30 of the character record',
+          text(0x006c64) == 'mov r0, #0x1f' and
+          text(0x006c84) == 'and r1, r1, r2, asr #24' and
+          text(0x006c8c) == 'bhi #0x6c5c')
+    try:
+        esc = [r['escort'] for r in character_records(args.movers)]
+        check('which is 5, 10, 15, 20, 25 for the crowd and 30 for every '
+              'named character -- so a lieutenant always escorts',
+              esc[:5] == [5, 10, 15, 20, 25] and set(esc[5:]) == {30},
+              '   %s' % esc[:6])
+    except Exception as e:
+        print('  --    (no mover file: %s)' % e)
+    check('distance is not a term: it is a straight roll against RandomBits(8)',
+          text(0x006d30) == 'bl #0x4870' and text(0x006d38) == 'mov r0, #8' and
+          text(0x006d40) == 'cmp r6, r0' and text(0x006d44) == 'bgt #0x6d90')
+    check('and it writes state 6 itself',
+          text(0x006db4) == 'mov r0, #6' and text(0x006dbc) == 'strb r0, [r1, #0x74]')
+
+    print('== 0x0049b8, and what `far` does to it')
+    check('with far set the search starts from the distance to you',
+          text(0x0049f8) == 'ldr r6, [r4, #0x38]' and
+          text(0x0049fc) == 'cmp r6, #0x100000' and
+          text(0x004a0c) == 'mvn r6, #0x80000000')
+
+    print('== 0x006128, MoverThink third deadline: it is the trigger')
+    check('a rithm with no Offense left cannot shoot',
+          text(0x006140) == 'ldr r0, [r0, #0x5c]' and text(0x006144) == 'teq r0, #0')
+    check('nor one with nothing at +0x70, nor a scrambled one',
+          text(0x00614c) == 'ldr r0, [r4, #0x70]' and
+          text(0x006158) == 'teqne r1, #0x40')
+    check('the range is half the draw distance plus four units a character id',
+          text(0x006168) == 'asr r2, r1, #1' and
+          text(0x00617c) == 'add r2, r2, r1, lsl #2' and
+          text(0x006180) == 'lsl r7, r2, #0x10')
+    check('the score starts at 0x60 in an encounter or for Silva, 0x40 else',
+          text(0x006194) == 'teq r1, #9' and text(0x00619c) == 'mov r5, #0x60' and
+          text(0x0061a4) == 'mov r5, #0x40')
+    check('sixteen a unit of arc inside six, and a plain subtraction outside',
+          text(0x006250) == 'cmp r0, #6' and text(0x006254) == 'subge r5, r5, r0' and
+          text(0x00625c) == 'addlt r5, r5, r0, lsl #4')
+    check('minus 0x40 outright unless the state is one of 6 to 9',
+          text(0x00621c) == 'cmp r0, #6' and text(0x006224) == 'cmp r0, #9' and
+          text(0x006264) == 'sub r5, r5, #0x40')
+    check('plus 50 when the last shot connected, and the mark is cleared',
+          text(0x006274) == 'tst r0, #0x7f' and
+          text(0x006278) == 'addne r5, r5, #0x32' and
+          text(0x00627c) == 'andne r0, r0, #0x80')
+    check('and quartered for a named character escorting somebody outside '
+          'an encounter',
+          text(0x0062b8) == 'ldr r1, [r4, #0x8c]' and
+          text(0x0062bc) == 'cmn r1, #1' and text(0x0062c0) == 'asrne r5, r5, #2')
+    check('the shot costs an eighth of a unit of Offense',
+          text(0x0062d0) == 'sub r0, r0, #0x2000' and
+          text(0x0062dc) == 'bl #0x447fc')
+
+    print('== 0x0447fc, the shot itself')
+    check('a free slot of the 64-entry, 92-byte table at 0x08a1ec',
+          text(0x04481c) == 'rsb r2, r0, r0, lsl #3' and
+          text(0x044820) == 'add r2, r2, r0, lsl #4' and
+          text(0x0449c0) == 'cmp r0, #0x40')
+    check('kind 2, at 2.0 units a tick along the mover heading',
+          text(0x044944) == 'mov r0, #2' and text(0x044948) == 'strb r0, [r5, #0x15]' and
+          text(0x044920) == 'mov r0, #0x20000' and text(0x044918) == 'bl #0x56ff8')
+    check('carrying 1.0 plus a sixteenth of the shooter maximum Offense',
+          text(0x044950) == 'mov r1, #0x10000' and
+          text(0x044954) == 'ldr r0, [r6, #0x68]' and
+          text(0x044958) == 'add r0, r1, r0, asr #4')
+    check('and it marks the shooter +0x77 bit 7',
+          text(0x04489c) == 'orr r0, r0, #0x80' and
+          text(0x0448a0) == 'strb r0, [r6, #0x77]')
+    marks = sorted(i.address for i in im.insns.values()
+                   if i.mnemonic.startswith(('ldrb', 'strb')) and '#0x77]' in i.op_str)
+    check('nine instructions in `p` touch +0x77 and that is the whole field',
+          marks == [0x006268, 0x006280, 0x00ad88, 0x00ad90, 0x00c148,
+                    0x00c150, 0x019e38, 0x044898, 0x0448a0],
+          '   %d' % len(marks))
+    check('ResolveHit sets bit 0 on the shooter, and a crash clears the low '
+          'seven on the crasher',
+          text(0x00c14c) == 'orr r1, r1, #1' and text(0x00ad8c) == 'and r2, r2, #0x80')
+    check('and being hit lets the victim shoot back on the next tick',
+          text(0x00c124) == 'movne r0, #0' and text(0x00c128) == 'strne r0, [r4, #0x84]')
+
+    print('== MoverThink deadlines')
+    check('sixty ticks between decisions, thirty or sixty between aims',
+          text(0x006380) == 'add r0, r5, #0x3c' and
+          text(0x006460) == 'addne r0, r5, #0x3c' and
+          text(0x006468) == 'add r0, r5, #0x1e')
+    check('and ten ticks between shots in an encounter or for Silva',
+          text(0x0064a4) == 'teq r0, #9' and text(0x0064ac) == 'mov r0, #0xa')
+    check('elsewhere ten plus what is left of 10 - tier - cid, clamped 0..9',
+          text(0x0064b8) == 'bl #0x8dc4' and text(0x0064bc) == 'rsb r0, r0, #0xa' and
+          text(0x0064d0) == 'sub r0, r0, r1' and text(0x0064e8) == 'add r0, r0, #0xa')
+
+    print('== 0x01175c, the drink, and the loop it closes')
+    check('an eighth of a unit plus a thousandth of the Defense ceiling',
+          text(0x011770) == 'mov r1, #0x800' and
+          text(0x0117b4) == 'add r1, r1, ip, asr #10')
+    check('inside 135 units of the origin it is a flat quarter and no charge '
+          'is spent -- the DOAsys heals whatever the city is doing',
+          text(0x0117fc) == 'cmp r4, #0x870000' and
+          text(0x011808) == 'mov r2, #0x4000' and text(0x011818) == 'b #0x1191c')
+    check('elsewhere you must be within sixteen units of a lattice corner',
+          text(0x01182c) == 'add r4, r4, #0x100000' and
+          text(0x011848) == 'cmp r4, #0x200000')
+    check('a cell that feeds both gives half as much',
+          text(0x011900) == 'teq ip, #0' and text(0x011904) == 'asreq r2, r1, #1')
+    check('GainDOA answers 1 when it had nothing to give, and only then is '
+          'the cell left alone',
+          text(0x011ac0) == 'mov r0, #1' and text(0x011b0c) == 'mov r0, #0' and
+          text(0x011914) == 'teq r0, #0' and text(0x01192c) == 'bl #0x1a5ec')
+    check('a drain, or standing off the grid, costs *you* all three at once '
+          'and costs a rithm nothing',
+          text(0x0118b4) == 'teq r2, #0' and text(0x0118b8) == 'beq #0x11930' and
+          text(0x01178c) == 'mov r2, #1' and text(0x01179c) == 'mov r2, #0')
+    check('and Agility is not in the field anywhere: GainDOA has three arms '
+          'and they are D, O and both',
+          text(0x011954) == 'teq r1, #0' and text(0x01195c) == 'teq r1, #1' and
+          text(0x011964) == 'teq r1, #2' and text(0x01196c) == 'teq r1, #3')
+
+    print('== the two switches, run')
+    import spawns
+    dec = Decider(args.image, args.movers)
+    pl = Player(0, 0, args.image, args.movers)
+    rng = spawns.Rng(1)
+    probe = spawns.Probe()
+    probe.look_from(0, 0)
+    w = World(rng, probe, [], field_seed(args.image), world_box(args.world),
+              args.image, args.movers)
+    agree = []
+    for k, (nm, _, tgt, rad, gait) in STATES.items():
+        cid = 6 if k in (6, 0x41) else 0
+        m = Body(cid, dec.records[cid - 1]['doa'] if cid else (2.5, 2.5, 2.5))
+        m.x = m.y = 0x280000
+        mate = Body(cid, (2.5, 2.5, 2.5))
+        mate.x, mate.y = m.x + 0x100000, m.y
+        m.mate = mate
+        w.movers = [m, mate]
+        look_at_player(m, pl)
+        m.state = k
+        enter_state(m, pl, w)
+        want = 'a mover' if tgt not in (-1, 0, 1) else tgt
+        got = m.target if isinstance(m.target, int) else 'a mover'
+        agree.append(got == want and m.radius == rad and m.gait == gait
+                     and (m.state & 0xff) == k)
+    check('all fifteen arms of 0x0058f0 write the aim, the radius and the '
+          'gait docs/26 tabulates', all(agree),
+          '   %d of %d' % (sum(agree), len(agree)))
+
+    m = Body(0, (2.5, 2.5, 2.5))
+    m.x = m.y = 0
+    m.state, m.radius = 10, 0x10
+    m.dest, m.save, m.leg = (100, 200), (300, 400), 1
+    corners = []
+    for _ in range(5):
+        corners.append(m.dest)
+        m.x, m.y = m.dest[0] << 16, m.dest[1] << 16       # it walked there
+        state_done(m, pl, w)
+    check('four arrivals on a patrol walk a rectangle and come back',
+          corners == [(100, 200), (300, 200), (300, 400), (100, 400),
+                      (100, 200)], '   %s' % (corners,))
+
+    m = Body(0, (2.5, 2.5, 2.5))
+    m.state, m.dest, m.radius = 0x40, (0, 0), 0x10
+    check('and a scramble is never over', state_done(m, pl, w) == 0)
+
+    f = field_seed(args.image)
+    box = world_box(args.world)
+    m = Body(0, (2.5, 2.5, 2.5))
+    m.d = m.o = 0
+    m.x = m.y = 0
+    check('a rithm standing on the DOAsys ring gains a quarter of each',
+          drink_from_field(m, pl, f, box) == 0 and m.d == HEAL and m.o == HEAL)
+    m.d = m.dmax
+    m.o = m.omax
+    before = sum(c[1] for c in f if c is not None)
+    for _ in range(60):
+        drink_from_field(m, pl, f, box)
+    check('and a full one costs the city nothing',
+          sum(c[1] for c in f if c is not None) == before)
+
     print('\n%d/%d checks pass' % (ok, ok + fail))
     return 1 if fail else 0
 
@@ -964,6 +1828,164 @@ class Body:
         self.face_player = 0                    # +0x37, MoverFrame writes it
         self.d, self.o, self.a = [int(v * 65536) for v in doa]
         self.dmax, self.omax, self.amax = self.d, self.o, self.a
+        # what `MoverEnterState` writes and `MoverStateDone` reads back
+        self.dest = (0, 0)                      # +0x44/+0x46, whole units
+        self.save = (0, 0)                      # +0x48/+0x4a, the other corner
+        self.leg = 0                            # +0x40, patrol leg or point
+        self.target = 0                         # +0x70, -1 you, 1 the pair
+        self.radius = 0x10                      # +0x75, the arrival radius
+        self.gait = 0                           # +0x18 bits 24-25
+        self.prio = 0                           # +0x18 bits 7-14
+        self.parked = 0                         # +0x18 bit 4, home and done
+        self.until = 0                          # +0x28, Loki's five seconds
+        self.aim = 0                            # +0x78, the bearing to +0x70
+        self.hitmark = 0                        # +0x77, bit 7 in flight
+        self.shots = 0                          # what 0x0447fc spawned
+        # `MoverThink`'s three deadlines
+        self.at_decide = 0                      # +0x80
+        self.at_fire = 0                        # +0x84
+        self.at_aim = 0                         # +0x88
+        self.nudge = 0                          # +0x76, decide *now*
+
+
+def mover_think(m, pl, d, w):
+    """`MoverThink`, `0x0062f8`, with `MoverAim` and `MoverStep` left out.
+
+    The three routines this session read, in the order the frame runs them,
+    against the three deadlines they hang off.  `0x006128`'s own interval is
+    ten ticks flat inside an encounter and for Silva, and elsewhere ten plus
+    what is left of `10 - PlayerTier() - cid` between 0 and 9 -- so a Goner
+    facing a tier-1 player shoots every nineteen ticks and Loki every ten.
+    """
+    if state_done(m, pl, w):                    # 0x006324
+        m.at_decide = w.now
+    if m.nudge:                                 # 0x006330
+        m.nudge = m.at_decide = 0
+    if w.now >= m.at_decide:
+        new = d.decide(m, pl, w.rng, w.probe)[0]
+        if new != s8(m.state):                  # 0x006360
+            m.state = new
+            enter_state(m, pl, w)
+            m.at_decide = w.now + 0x3c
+    if w.now >= m.at_fire:                      # 0x006470
+        mover_shoot(m, pl, w.rng, w.probe)
+        if pl.flags & 0x20000000 or m.cid == 9:
+            gap = 0xa
+        else:
+            gap = min(9, max(0, 0xa - pl.tier - m.cid)) + 0xa
+        m.at_fire = w.now + gap
+
+
+def live(args):
+    """Drive the loop and print what a rithm actually does with its day.
+
+    No walk under it: the mover stands where it is put, so every state that
+    ends on an arrival ends on the sixty-tick deadline instead.  What this
+    shows is the *sequence* -- which is the half `packdiff --walk` cannot see
+    and the half `docs/25` got wrong.
+    """
+    import spawns
+    d = Decider(args.image, args.movers)
+    pl = Player(args.eye[0] << 16, args.eye[1] << 16, args.image, args.movers)
+    pl.jump_ticks = args.hours * 0xe10
+    rng = spawns.Rng(args.seed)
+    probe = spawns.Probe()
+    probe.look_from(*args.eye)
+    field, box = field_seed(args.image), world_box(args.world)
+
+    cast = []
+    for i in range(args.count):
+        doa = (spawns.DOA[rng.bits(2)] if args.cid == 0
+               else d.records[args.cid - 1]['doa'])
+        m = Body(args.cid, doa)
+        m.temper = rng.below(5)
+        m.x = (args.eye[0] + rng.below(0x100) - 0x80) << 16
+        m.y = (args.eye[1] + rng.below(0x100) - 0x80) << 16
+        cast.append(m)
+    w = World(rng, probe, cast, field, box, args.image, args.movers)
+
+    print('%d %s at (%d, %d), %d hours of play, tier %d, city power %d'
+          % (args.count, NAMES[args.cid], args.eye[0], args.eye[1],
+             pl.hours, pl.tier, pl.power))
+    print('%-7s %-9s %-9s %6s %4s %5s %s'
+          % ('tick', 'was', 'is', 'within', 'gait', 'shots', 'destination'))
+    seen = collections.Counter()
+    for t in range(args.ticks):
+        w.now = t
+        drink_from_field(None, pl, field, box)   # 0x00bc38, you drink too
+        for m in cast:
+            look_at_player(m, pl)
+            drink_from_field(m, pl, field, box)  # 0x00bc50, once a frame each
+            was = m.state & 0xff
+            mover_think(m, pl, d, w)
+            seen[m.state & 0xff] += 1
+            if m is cast[0] and (m.state & 0xff) != was:
+                print('%-7d %-9s %-9s %6d %4d %5d (%d, %d)'
+                      % (t, STATES[was][0], STATES[m.state & 0xff][0],
+                         m.radius, m.gait, m.shots, m.dest[0], m.dest[1]))
+    print()
+    print('%-9s %s' % ('state', 'ticks spent in it, over the whole cast'))
+    for k, n in seen.most_common():
+        print('%-9s %6d  %4.1f%%' % (STATES[k][0], n,
+                                     100.0 * n / (args.ticks * args.count)))
+
+
+def world_box(path=WORLD_B3D):
+    """The four words of the `.B3D` header the game keeps at `0x058434`,
+    which `hudmap.py` already reads: `(minX, maxY, maxX, minY)`."""
+    from hudmap import MIN_X, MAX_X, MIN_Y, MAX_Y
+    return (MIN_X, MAX_Y, MAX_X, MIN_Y)
+
+
+def arms(args):
+    """Run every one of the fifteen arms and print what it actually wrote.
+
+    `STATES` is `docs/26`'s reading of `0x0058f0` as a table.  This is the
+    transcription executed, so the two can be held against each other: the
+    `aim`, `within` and `gait` columns should agree state for state, and
+    where they do not the table is what is wrong.
+    """
+    import spawns
+    d = Decider(args.image, args.movers)
+    pl = Player(args.eye[0] << 16, args.eye[1] << 16, args.image, args.movers)
+    rng = spawns.Rng(args.seed)
+    probe = spawns.Probe()
+    probe.look_from(*args.eye)
+    field, box = field_seed(args.image), world_box(args.world)
+
+    print('0x0058f0 run, one mover of each shape per arm, from (%d, %d)\n'
+          % (args.eye[0], args.eye[1]))
+    print('%-5s %-9s %-8s %-8s %6s %4s %-16s %s'
+          % ('', 'state', 'shape', 'aim at', 'within', 'gait',
+             'destination', 'agrees'))
+    bad = 0
+    for k, (nm, _, tgt, rad, gait) in STATES.items():
+        # a Goner never escorts and only a lieutenant has a home box, so
+        # those two arms are run by Medusa and the rest by the crowd
+        cid = args.cid or (6 if k in (6, 0x41) else 0)
+        m = Body(cid, d.records[cid - 1]['doa'] if cid else (2.5, 2.5, 2.5))
+        m.x, m.y = (args.eye[0] + 40) << 16, (args.eye[1] + 40) << 16
+        other = Body(cid, (2.5, 2.5, 2.5))
+        other.x, other.y = m.x + 0x100000, m.y
+        m.mate = other
+        w = World(rng, probe, [m, other], field, box, args.image, args.movers)
+        look_at_player(m, pl)
+        m.state = k
+        enter_state(m, pl, w)
+        got = m.target
+        aim = {-1: 'you', 0: 'keep', 1: 'the pair'}.get(
+            got if isinstance(got, int) else 2, 'a mover')
+        want = {-1: 'you', 0: 'keep', 1: 'the pair'}.get(tgt, 'a mover')
+        agree = (aim == want and m.radius == rad and m.gait == gait
+                 and (m.state & 0xff) == k)
+        bad += not agree
+        print('%-5s %-9s %-8s %-8s %6d %4d %-16s %s'
+              % ('%#04x' % k, nm, NAMES[cid], aim, m.radius, m.gait,
+                 '(%d, %d)' % m.dest,
+                 'yes' if agree else 'NO'))
+    print('\n%d of %d arms disagree with the table in docs/26'
+          % (bad, len(STATES)))
+    return 1 if bad else 0
 
 
 def poll(args):
@@ -1006,9 +2028,17 @@ def main():
     ap.add_argument('--poll', action='store_true', help='sample the decision')
     ap.add_argument('--field', action='store_true',
                     help='the DOA field states 2 and 3 walk to')
+    ap.add_argument('--arms', action='store_true',
+                    help='run all fifteen arms of 0x0058f0')
+    ap.add_argument('--live', action='store_true',
+                    help='drive the decide/enter/done loop')
     ap.add_argument('--runs', type=int, default=400)
     ap.add_argument('--hours', type=int, default=0)
     ap.add_argument('--seed', type=int, default=1)
+    ap.add_argument('--ticks', type=int, default=3600)
+    ap.add_argument('--count', type=int, default=8)
+    ap.add_argument('--cid', type=int, default=0)
+    ap.add_argument('--eye', type=int, nargs=2, default=(-279, 640))
     a = ap.parse_args()
 
     if a.verify:
@@ -1052,6 +2082,10 @@ def main():
         print('anchors: %s' % ', '.join('(%d,%d)' % t
                                         for t in field_anchors(a.image)))
         return
+    if a.arms:
+        return arms(a)
+    if a.live:
+        return live(a)
     if a.poll:
         return poll(a)
     ap.print_help()

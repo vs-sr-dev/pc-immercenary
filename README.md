@@ -253,6 +253,28 @@ Early, but moving. Nothing is playable yet.
   the record's own easting, the canopy widened by a second roll. It had been
   written down as a random weapon spawn on the strength of an off-by-one in
   `RandomBelow`. [23](docs/23-the-item-spawns.md).
+- **A rithm shoots to spend the Offense it walks across the city to refill.**
+  `MoverThink`'s third deadline, `0x006128`, was the last unread routine of
+  the mover loop and it is the **trigger**. Range is the only hard cut in it —
+  half the draw distance plus four units a character id, 79 for a Goner and
+  111 for Loki — and everything else is a weight: sixteen points a unit of arc
+  inside six units of aim, fifty more when the last shot *connected*, 0x40 off
+  for a state with nothing but the ground to aim at, and a quarter of the lot
+  for a lieutenant that is escorting somebody. Under the roll, an eighth of a
+  unit of Offense leaves `+0x5c` and a kind-2 projectile leaves the barrel at
+  2.0 units a tick carrying `1.0 + maxOffense/16` — **sixteen shots to the
+  tank**, after which the vote sends the rithm to a source of the DOA field
+  and the loop closes. Transcribing the two switches on either side of the
+  vote corrects three rows of [26](docs/26-the-decision.md): the *patrol* is a
+  **rectangle** walked one axis a leg and never reports itself finished, the
+  *mark* state aims at the world origin rather than at you, and state `0x41`'s
+  home is not the patrol rectangle out of `PerfectMovers.B3D` at all but one
+  of nine thirty-unit **spire boxes** written into the BSS in hand-assembled
+  constants as each lieutenant is placed. Three more things fell out of the
+  drink: the field carries **no Agility**, the DOAsys ring heals without
+  spending a charge, and standing off the grid costs *you* all three stats a
+  frame and costs a rithm nothing.
+  [28](docs/28-what-a-decision-does.md).
 - **The city is a resource, and the rithms eat it.** The last unread routine
   of the mover band, `0x006de8`, is not a mover routine at all: it is a rithm
   walking to the nearest cell of a **DOA field** the player drinks from too.
