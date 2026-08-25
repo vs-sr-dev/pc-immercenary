@@ -22,8 +22,8 @@ prop, they share a byte layout and they are drawn by different code:
 
 `sub = 1` and `sub = 5`, the item spawn points, build a record of the same
 shape at `0x03af04` and are drawn by `0x01715c`, which reads the same three
-fields. They are not covered here: their id is an `i16` that reaches 1,139 on
-the overworld and does not index the object table.
+fields. Their id indexes a different table — two of them, in fact — and
+[23](23-the-item-spawns.md) is where that is read.
 
 ### The third byte is a ground offset, not an angle
 
@@ -184,7 +184,7 @@ dispatches on **bits 20-23** of each entry's flags word:
 
 | kind | drawn by |
 |---|---|
-| 1, 5 | `0x01715c` — item spawn points |
+| 1, 5 | `DrawItemSpawn` — item spawn points, [23](23-the-item-spawns.md) |
 | 3 | `0x0175c0` — a placed prop, turntable |
 | 4 | `0x017998` |
 | 6 | `0x017398` — a placed prop, clock |

@@ -21,7 +21,10 @@ cast. Offsets are from the start of the file.
     TexEnt[]     8 bytes each, indexed by texture id; w == 0 means unused
     TexEnt[30]   the floor tiles: 0-14 far, 15-29 near
     map          256 x 256 bytes, one tile id per cell, row 0 at the north
-    Prop[]       16 bytes each: a placed sprite, see tools/props.py
+    Prop[]       16 bytes each: a placed sprite, see tools/props.py and
+                 tools/items.py -- the props first, then the item spawns.
+                 Its ground offset, width and height are 12.4 fixed point,
+                 because a rolled tree's height is `h * 1.5`
     AnimEnt[]    4 bytes each: frame count and first frame, per `.anim`
     TexEnt[]     one per sprite frame, all the anims' frames end to end
     texdata      ARGB8888 pixels, alpha 0 for the CEL's transparent index
@@ -37,14 +40,27 @@ from celbank import Bank
 from cel import rgb555
 from floor import Floor, TILE, COL_BIAS, ROW_BIAS
 import props as propmod
+import items as itemmod
 
 MAGIC = b'IMPK'
-VERSION = 2
+VERSION = 3
 HEADER = '<4sI 2I 2I 2I 2I I 3i 2I 2I 2I 16x'   # 96 bytes
 QUAD = '<12h hh HH'                       # 32 bytes
 TEXENT = '<HHI'                           # 8 bytes
 PROP = '<3h 3h 3B x'                      # 16 bytes
 ANIMENT = '<HH'                           # 4 bytes
+
+
+def u4(v):
+    """World units to the pack's 12.4 fixed point.
+
+    A prop's size is always whole units, but a tree the id-0 roll grows is
+    `height * 1.5` and the game keeps that in 16.16 -- so the pack has to
+    carry the half, or the two renderers disagree by a pixel on every
+    odd-height tree."""
+    n = int(round(v * 16))
+    assert abs(n - v * 16) < 1e-9, v
+    return n
 
 
 def flatten(im, bgnd=True):
@@ -149,10 +165,40 @@ def pack(b3dpath, celpath, floorpath, assets, out):
             blobs.append(px)
             span += len(px)
     props_bin = b''.join(
-        struct.pack(PROP, p.x, p.y, int(p.z), int(p.w), int(p.h), p.face,
+        struct.pack(PROP, p.x, p.y, u4(p.z), u4(p.w), u4(p.h), p.face,
                     p.k, aidx[p.oid],
                     (1 if p.sub == 6 else 0) | (2 if p.bright else 0))
         for p in plist)
+
+    # The item spawn points, in the same array and drawn by the same code:
+    # `0x01715c` is the props' sibling and reads the same three fields. What
+    # differs is which cel shows -- two of them, near and far, chosen by a
+    # compare against 75 units -- so each distinct id becomes a two-frame
+    # `anim` and the record carries the threshold in `face`. tools/items.py
+    # is the authority.
+    ilist = itemmod.items(b, recs)
+    opairs = itemmod.object_pairs(os.path.join(assets, itemmod.OBJECT_CELS))
+    iidx = {}
+    for key in sorted({(i.src, i.oid) for i in ilist}):
+        src, oid = key
+        pair = opairs[oid][:2] if src == 'object' else itemmod.bank_pair(bank, oid)
+        iidx[key] = len(anims)
+        anims.append((len(pair), len(sents)))
+        for im in pair:
+            if im is None:
+                sents.append((0, 0, span))
+                continue
+            w, h, px = flatten(im, im[3])
+            sents.append((w, h, span))
+            blobs.append(px)
+            span += len(px)
+    items_bin = b''.join(
+        struct.pack(PROP, i.x, i.y, u4(i.z), u4(i.w), u4(i.h),
+                    int(itemmod.NEAR_DISTANCE.get(i.sub, 75.0)),
+                    0, iidx[(i.src, i.oid)], 4)
+        for i in ilist)
+    props_bin += items_bin
+    nprops = len(plist) + len(ilist)
 
     hsz = struct.calcsize(HEADER)
     quads_off = hsz
@@ -172,7 +218,7 @@ def pack(b3dpath, celpath, floorpath, assets, out):
                             30, floor_off,
                             map_off,
                             COL_BIAS, ROW_BIAS, TILE,
-                            len(plist), props_off,
+                            nprops, props_off,
                             len(sents), spr_off,
                             len(anims), anim_off))
         f.write(b''.join(quads))
@@ -189,10 +235,10 @@ def pack(b3dpath, celpath, floorpath, assets, out):
         for blob in blobs:
             f.write(blob)
 
-    print("%s: %d quads, %d of %d textures, %d floor cels, %d props in %d "
-          "anims (%d frames), %.1f MB, %.1fs"
+    print("%s: %d quads, %d of %d textures, %d floor cels, %d props and "
+          "%d item spawns in %d anims (%d frames), %.1f MB, %.1fs"
           % (os.path.basename(out), len(quads), len(used), ntex, 30,
-             len(plist), len(anims), len(sents),
+             len(plist), len(ilist), len(anims), len(sents),
              os.path.getsize(out) / 1048576.0, time.time() - t0))
     if failed:
         print("  %d unwalked ranges" % len(failed))

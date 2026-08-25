@@ -66,9 +66,16 @@ PerfectWorld.CELS: 3603 slots, 3600 used, 50 unreadable
 
 Almost everything is 4 bpp (code 3) or 6 bpp (code 4) with a 16- or 64-entry
 PLUT. The size histogram gives away the structure: `35x30`, `70x60` and
-`140x120` are the same texture at three scales, stored consecutively. **The bank
-holds a mip chain per texture**, and the level to use is chosen at draw time by
-distance.
+`140x120` are the same texture at three scales. **The bank holds a mip chain
+per texture**, and the level to use is chosen at draw time by distance.
+
+The three levels are **1,201 slots apart, not adjacent**. `0x036ca8` reads
+this index into three separate 1,201-word arrays with three consecutive
+reads, and three sibling loaders index one array each
+([23](23-the-item-spawns.md)), so slot `id` is the 1x copy, `1201 + id` the
+2x and `2402 + id` the 4x. The data says the same: 746 ids double twice over
+and two look like a consecutive triple. It is also why a `.B3D` texture id
+never goes above 1,148 in a bank of 3,603.
 
 ```sh
 python tools/celbank.py extracted/Perfect/PerfectWorld.CELS --sheet sheet.png --count 256
@@ -116,9 +123,13 @@ Both helpers are **File folio call stubs**, not functions of their own:
 0004d4a4  ldr pc, [r3, #-8]      ; tail-call folio slot -8  (arg, arg, arg)
 ```
 
-So the bank is opened as a file with an 8 KiB buffer and then read three times
-into three separate destinations — a multi-buffered background loader, which is
-how a 3DO keeps 17.8 MiB of texture available off a 2× CD. See
+So the bank is opened as a file with an 8 KiB buffer and its offset table read
+into three destinations — one per mip level, `0x12c4` bytes each and
+`3 x 0x12c4 = 0x384c` the whole of it. The cels themselves are then pulled in
+one at a time by the `"LoadThread"` `0x036850` creates, into the 1,200 x 12
+`AllCels` array at `[0x0582cc]`: three cel pointers per texture id, which is
+how a 3DO keeps 17.8 MiB of texture available off a 2× CD.
+[23](23-the-item-spawns.md) reads the whole of that path; see
 [09-os-surface.md](09-os-surface.md) for the folio calling convention.
 
 Immediately before it, seven identical `SWI 0x10015` calls with `r0 = 0` store

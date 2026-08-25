@@ -3,6 +3,52 @@
 Everything below has a concrete starting address or file. Nothing here is
 open-ended research.
 
+## Done in session 15
+
+- **The item spawn id indexes one of two tables, and the branch names two
+  subsystems.** [`tools/items.py`](tools/items.py) is the read,
+  [docs/23](docs/23-the-item-spawns.md) the write-up. `0x03afa4` picks on
+  **bit 1 of the record's flag byte**: clear and the id is an object, 0 to 27,
+  in the 50-entry table at `0x0862b8`; set and it is a slot in
+  `PerfectWorld.CELS`, which is how an `i16` reaches 1,139. On the overworld
+  that is 1,143 against 31.
+- **`Objects/AllStaticObjects` is the static table, in near/far pairs.**
+  `0x0158fc` stores its 56 cels two at a time, `2 * id` into the descriptor's
+  `+0` and `2 * id + 1` into `+4`. It is street furniture and vegetation —
+  trees, STOP, WRONG WAY, DO NOT ENTER, a barrel, a cactus, an eyeball — and
+  **not** `ObjectAnimById`'s id space, which names `.anim` files for the props
+  and disagrees from id 5 on.
+- **`AllCels` is the wall bank's streaming array, and the bank is three
+  parallel blocks.** `0x036850` says so in a failure message. `0x036ca8` reads
+  `PerfectWorld.CELS`'s 14,412-byte offset table into **three** 1,201-word
+  arrays, and three sibling loaders fill one descriptor word each: slot `id`
+  is 1x, `1201 + id` is 2x, `2402 + id` is 4x. 746 ids double twice over and
+  two look like a consecutive triple, so [docs/07](docs/07-cel-banks.md)'s
+  "stored consecutively" is corrected. `LoadThread` at `0x036fbc` pulls them
+  in; `RequestNearCels` at `0x013588` asks it to.
+- **A power-of-two cel is drawn with a shift, and the descriptor's third word
+  says by how much.** Four signed bytes, near and far, `log2(width) - 4` and
+  `log2(height)`, `-1` meaning "divide instead" — and `0x0158fc` derives all
+  four from the cel's own `ccb_Width` and `ccb_Height` as it loads it. The
+  quads `LoadDOAsys` writes by hand (`1,1,5,5`, `0,0,4,4`, `2,2,7,7`, four
+  `0xff`) are exactly what the `.scel` files on the disc measure.
+- **`id = 0` plants a tree, and the world is procedural along one axis.**
+  569 of the 1,174 records. Ids 5, 6, 7 and 11-14 are seven trees and a roll
+  of 0 keeps id 0, an eighth; the canopy is widened by a second roll and the
+  record's own height. The seed is `(X << 16) << ((Y << 16) + 2)`, and an ARM
+  register shift takes only the bottom byte of its amount — so the seed is
+  `X << 18` and two spawn points on the same easting grow the same tree.
+  `RandomBelow` returns **0 .. n-1**, not 1 .. n, which is the whole reason
+  seven trees had been written down as a random weapon spawn.
+- **The viewer draws them, and still matches the reference exactly.** An item
+  spawn is a prop with a two-frame anim and one compare — near cel under 75
+  units, far cel over — so both renderers took a dozen lines each. 400,000 of
+  400,000 pixels identical at the reference camera, and 20 different at the
+  second one where 22 already were. 96.8 fps at 960x600 with 1,547 sprites in
+  the world instead of 373. The pack's sizes are 12.4 fixed point now, because
+  a rolled tree's height is `h * 1.5` and half a unit is a pixel on a near
+  tree.
+
 ## Done in session 14
 
 - **The props are drawn, and the record's third byte was not an angle.**
@@ -728,8 +774,9 @@ open-ended research.
 
 ## 1. The interactive viewer  *(the one real artefact)*
 
-**It exists, it walks, and the props are in it.** `native/view.c` at 116 fps,
-pixel-identical to `tools/b3dview.py`, collision included. Build and run:
+**It exists, it walks, and the props and item spawns are in it.**
+`native/view.c` at 97 fps with 1,547 sprites, pixel-identical to
+`tools/b3dview.py`, collision included.
 
 ```sh
 python tools/scenepack.py out/world.pack
@@ -746,24 +793,19 @@ the two renderers still agree; run it after touching either, and pass
 
 What is still missing:
 
-- **The item spawn points, `sub = 1` and `sub = 5`.** 1,174 records on the
-  overworld, 569 of them a random weapon roll. They build the same record shape
-  at `0x03af04` and are drawn by `0x01715c`, which reads the same ground
-  offset, width and height the props do — so the geometry is done. What is not
-  done is the id: it is an `i16` that reaches 1,139 on the overworld and does
-  **not** index the object table `ObjectAnimById` owns, so where the art comes
-  from is the whole of the question. The answer is one branch away.
-  `0x03afa4` turns the id into a pointer to a **12-byte descriptor** and parks
-  it at the record's `+0x20`, choosing the table on bit 1 of the record's flag
-  byte: `0x0862b8 + 12 * id` when it is clear, `[0x0582cc] + 12 * id` when it
-  is set. `0x01715c` then reads a cel out of `+0` or `+4` of that descriptor
-  and two signed bytes out of `+8`..`+0xb`. Read the twelve bytes and the item
-  spawns fall out.
-- **The movers.** `0x0137e4` is the props' sibling culler for the 36-byte list
-  at `0x06267c`, kind 5, with a far distance of 150 for one sub-kind and 75 for
-  the rest; `0x017398`'s cousin draws them. `PerfectMovers.B3D`'s
-  per-animation columns give width, height and ground offset for the nineteen
-  characters, which is the same triple `ProjectSprite` wants.
+- **The movers**, and they are the last sprite kind left. `0x012a18` is their
+  culler and it is not one of the array-walking siblings: it follows a
+  **linked list** from `[0x060cdc + 0xa544]`, takes a 16-bit id out of the
+  record's `+0x32` to index the pointer array at `0x0585c8`, splits detail at
+  50 units, and then appends up to 64 entries from a second array at
+  `0x08a1ec` (112-byte stride) that carry bit 19. Kind 2 is what it submits —
+  `ClipVisibleFaces` already passes kind 2 through untouched as a sprite, and
+  `RequestNearCels` streams near cels for exactly kinds 1 and 2.
+  `PerfectMovers.B3D`'s per-animation columns give width, height and ground
+  offset for the nineteen characters, which is the triple `ProjectSprite`
+  wants. (`0x0137e4`, written down here as the mover culler for two sessions,
+  is not: it walks the item spawn list and takes only kind 5, the DOAsys
+  spires. See [23](docs/23-the-item-spawns.md).)
 - **The radar.** `tools/hudmap.py` gives the tile, the world-to-pixel
   transform and the rotation the CCB applies. A viewer can draw the real HUD
   map with no further reversing. `tools/armmath.py` now gives the exact
@@ -869,6 +911,35 @@ What is still missing:
   consumes it.
 
 ## Notes to self
+
+- **Look at the art.** Fifteen sessions of disassembly could not say what an
+  item spawn id meant; decoding the 28 cel pairs and putting them in a contact
+  sheet answered it in one glance — trees and road signs, not weapons. When a
+  table's *meaning* is the open question and the table points at pixels,
+  render the pixels first.
+- **Check what a helper returns before reading its callers.** `RandomBelow`
+  was written down as returning 1 .. n and it returns 0 .. n-1, so every id
+  the tree roll produces was read one too high and seven trees came out as
+  seven weapons. It is two instructions: a doubling and the top word of a
+  multiply, and neither is a modulo.
+- **A failure message names a structure better than any amount of tracing.**
+  `[0x0582cc]` had 39 references and no meaning until `0x036850`'s
+  `printf` — *"Couldn't allocate memory for the AllCels array!"* — said what
+  the 14,400 bytes were. Grep the strings of the function that *allocates* a
+  global, not of the ones that use it.
+- **Two tables of the same shape need not share an id space.** The `.anim`
+  names in `ObjectAnimById` and the cel pairs in `0x0862b8` are both indexed
+  by "object id", both start at 0, and both are filled at load time — and they
+  disagree from id 5 onwards. Nothing but a check against the art tells you.
+- **When one file's index is read into N arrays, the file is N blocks.**
+  Three reads of `0x12c4` into three globals is the whole statement that
+  `PerfectWorld.CELS` holds its mip levels 1,201 slots apart, and the sizes in
+  the file then agree 746 to 2. A size histogram alone had suggested the
+  opposite and been believed for eight sessions.
+- **One word of a struct can be a pointer in one table and four bytes in
+  another.** The flag bit that picks which table an id indexes also picks how
+  the third word is read, and the drawer reads it *both* ways and throws one
+  away. Do not assume a struct has one layout because one routine reads it.
 
 - **The reference renderer is the one that was wrong.** Props went in and the
   pixel check fell from 400,000 to 399,210 — 790 pixels, all inside two

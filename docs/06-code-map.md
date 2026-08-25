@@ -67,7 +67,7 @@ every reference beyond 255 bytes.
 | `0x01cc58` | LoadCelGroup(name, out, count) | splits a chunked cel file |
 | `0x036ca8` | LoadWorldCels — opens `PerfectWorld.Cels` | *"$Perfect/PerfectWorld.Cels"* |
 | `0x037dd8` | **ObjectAnimById** — id to `.anim` dispatcher | *"Unrecognized anim ID %d!"* |
-| `0x038c00` | **RandomBelow(n)** — `(n * rand()) >> 16` | called from `ParseSub1` |
+| `0x038c00` | **RandomBelow(n)** — the top word of `n * (2 * rand())`, so **0 .. n-1**; `rand` is `0x04e448` and `srand` `0x04e4a8`, the C library's 54-word additive generator. See [23](23-the-item-spawns.md) | called from `ParseSub1` |
 | `0x03929c` | **ParseWorldRecord** — one section C record | 60 references to the parse cursor |
 | `0x0393dc` | *(inside ParseWorldRecord)* the cull test | `teq type, #0` |
 | `0x03945c` | ParseSub2 — inline geometry | dispatch fallthrough at `0x39458` |
@@ -164,6 +164,17 @@ every reference beyond 255 bytes.
 | `0x012e3c` | **SortVisibleByDepth** — gathers a key per entry and quicksorts the visible list and the keys together at `0x012f64` | the three key loops, then `bl 0x12f64` |
 | `0x0169a4` | **DrawVisibleList** — walks the sorted visible list **back to front** and dispatches on bits 20-23 of each entry's flags: 1 and 5 to `0x01715c`, 3 to `DrawPropByAngle`, 4 to `0x017998`, 6 to `DrawPropByClock`, 7 to `0x045d68`, 8 to `0x01582c`, `0xf` skipped, everything else to the wall-face path | eight `teq r1, #n` in a row |
 | `0x0127d0` | **CullProps** — the world file's 44-byte prop list at `0x069478` against the near plane, a 90-degree side test and the draw distance; radius is the record's own width halved. See [22](22-the-props.md) | `[r4, #0x18], asr #1` then `cmp r3, #0x20000` |
+| `0x012660` | **CullItemSpawns** — the 36-byte item spawn list at `0x062680` against the near plane, the 90-degree side test and the draw distance, then **1 or 2** into bits 29-31 from a compare against 75 units, or 150 for `sub = 5`; a `sub = 5` entry is also gated on two bits of `[0x06bed0 + 0x78]`. See [23](23-the-item-spawns.md) | `cmp r0, #0x4b0000` then `mov r6, #1` |
+| `0x0137e4` | **CullDOAsysSpires** — the same list and the same thresholds, but it takes only kind 5 and writes the survivors to a caller's array instead of the visible list | `and r0, r0, r1, asr #20` then `teq r0, #5` |
+| `0x01715c` | **DrawItemSpawn** — kinds 1 and 5: the descriptor at the record's `+0x20`, its near cel for detail 1 and its far one for detail 2, the shift bytes beside them in place of `DivSF16`, `ProjectSprite`, then a PIXC built from the fade band. Kind 5 draws only with bit 5 set and then calls `0x01a9c4` for the Quadeye and CRYSTAL on top | `ldrb r8, [r2, #8]` / `ldrb r8, [r2, #9]` |
+| `0x0158fc` | **LoadStaticObjectCels** — walks `Objects/AllStaticObjects` and fills `0x0862b8` two cels at a time, deriving the four shift bytes from each cel's own `ccb_Width` and `ccb_Height` | two five-arm ladders on `0x10`..`0x100` |
+| `0x036850` | **AllocCelTables** — `AllCels` and the three offset arrays, then `CreateThread("LoadThread")` | *"Couldn't allocate memory for the AllCels array!"* |
+| `0x036fbc` | **LoadThread** — walks all 1,200 ids and pulls in the 1x cel of each one the region wants, then the 2x, then the 4x | `cmp r5, #0x4b0` three times |
+| `0x037a94` | **LoadCel1x** — bank slot `id` into the descriptor's `+8`, sized from the difference of two adjacent offsets | `str r0, [r1, #8]!` |
+| `0x037bac` | **LoadCel2x** — slot `1201 + id` into `+4`, the same body against the second offset array | `str r0, [r1, #4]!` |
+| `0x037cc0` | **LoadCel4x** — slot `2402 + id` into `+0`, the cel the drawers reach for first | `str r0, [r1]` |
+| `0x013588` | **RequestNearCels** — signals `LoadThread` and queues the ids of visible sprites in detail band 4 whose near cel is still null, deduplicating against a 20-entry list | `mov r0, #0xc ; bl 0x354` on `desc - AllCels` |
+| `0x01b090` | **SetObjectCelPLUT(id)** — points both cels of one static object at the animated palette `[0x05825c] >> 1` selects | `str r2, [r0, #0xc]!` twice |
 | `0x0175c0` | **DrawPropByAngle** — `sub = 3`: `ProjectSprite` from the record's own width, height and ground offset, then the frame `k` views and `ATan2` choose | `teq r1, #0x10` ladder on `k` |
 | `0x017398` | **DrawPropByClock** — `sub = 6`: the same, sized from the static object table at `0x07b758`, and the frame stepped `0x2222` a tick | `bl 0x4437c` twice |
 | `0x0183a8` | **ProjectSprite(vec, groundOffset, width, height, out)** — four screen corners of a screen-aligned cel rectangle, on the same 160-pixel half screen as the walls | `rsb r8, r0, #0x5000` |
@@ -389,7 +400,9 @@ that the released game does in C instead.
 | `0x06b22c`, `0x06b230` | the **visible list**: how many entries and an array of pointers to `record + 8`, which the face builders and all three sprite cullers append to and which `DrawVisibleList` walks. Reached as `0x060cdc + 0xa550` and `+ 0xa554` |
 | `0x07bac8` | each entity's world position, eight bytes an index: X at `+0`, Y at `+4`, both 16.16. `ParseWorldRecord` allocates the index and writes the pair |
 | `0x080ec0` | the same positions camera-relative and rotated, written by `CameraTransform`: depth at `+0`, lateral at `+4`. A record's `+0x0c` points straight at its slot |
-| `0x0862b8` | the DOAsys cel table: the pedestal, the two spires and the three `.far.scel` props |
+| `0x0862b8` | **the static object cel table**: 50 x 12, one descriptor per object id — `+0` the near cel, `+4` the far one, `+8`..`+0xb` four signed shift bytes. `LoadStaticObjectCels` fills ids 0-27 from `Objects/AllStaticObjects` and `LoadDOAsys` overwrites 1, 10, 25, 26 and 27 with the spire's own. See [23](23-the-item-spawns.md) |
+| `0x0582cc` | **`AllCels`**: 1,200 x 12, the same descriptor for every `PerfectWorld.CELS` texture id — `+0` the 4x cel, `+4` the 2x, `+8` the 1x, all three streamed in by `LoadThread` and null until it gets there |
+| `0x058a54`, `0x058a58`, `0x058a5c` | the bank's offset table in three 1,201-word arrays, one per mip level; `0x036ca8` reads them with three consecutive reads of `0x12c4` |
 | `0x058a40`, `0x058bc0` | the draw distance in whole units, and the fade step derived from it; `0x0027d0` gates faces on the first and `0x012298` picks a fade band with both. See [08](08-the-ground.md) |
 | `0x058640` | **the character name table** — nineteen `char *`, NULL-terminated: Goner, Picasso, Tork, Kilroy, Venus, David, Medusa, Tesla, Balkan, Silva, Fly, Riberto, Chameleon, Chance, Loki, Raven, PerfectMale, PerfectFemale, PerfectRobot. The id space of `PerfectMovers.B3D` and of the DOA conversation, written down by the program. See [19](19-the-doasys-spire.md) |
 | `0x057d14` | sixteen DOAsys art pointers: 0-3 the Gaz front and back, 4-12 the three player forms' stand/mask/glow, 13-15 the three speakers' `StandAA50.anim`, built at run time |

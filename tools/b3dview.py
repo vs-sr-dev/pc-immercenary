@@ -21,6 +21,7 @@ from cel import write_png, rgb555
 from celbank import Bank
 from floor import Floor, TILE
 import props as propmod
+import items as itemmod
 
 
 def flat_hue(texid):
@@ -371,11 +372,47 @@ def render(path, out, eye, yaw, pitch, fov=70.0, size=(800, 500), far=6000.0,
             r._sprite(sx - 0.5 * prop.w * f * iz, sx + 0.5 * prop.w * f * iz,
                       sbot - prop.h * f * iz, sbot, iz, shade, tex)
             np_ += 1
+
+    # The item spawn points. Same projector, same fade, and the only new rule
+    # is which of the two cels shows: `0x012660` compares the base point's
+    # camera-space depth against 75 units and `0x01715c` reads the near cel
+    # for 1 and the far one for 2. tools/items.py resolves the id.
+    ni_ = 0
+    if draw_props and assets:
+        pairs = itemmod.object_pairs(os.path.join(assets, itemmod.OBJECT_CELS))
+        icache = {}
+        for it in itemmod.items(b, recs):
+            if (it.x - ex) ** 2 + (it.y - ey) ** 2 > far * far:
+                continue
+            key = (it.src, it.oid)
+            if key not in icache:
+                pair = (pairs[it.oid][:2] if it.src == 'object'
+                        else itemmod.bank_pair(bank, it.oid) if bank else (None, None))
+                icache[key] = [None if im is None else
+                               Texture(im[0], im[1], im[2], im[3]) for im in pair]
+            x, y, z = it.x - ex, it.y - ey, it.z - ez
+            fx = x * cy + y * sy
+            rx = -x * sy + y * cy
+            fz = fx * cp + z * sp
+            uz = -fx * sp + z * cp
+            if fz <= 1.0:
+                continue
+            tex = icache[key][0 if itemmod.near(fz, it.sub) else 1]
+            if tex is None:
+                continue
+            iz = 1.0 / fz
+            sx = W / 2 - rx * f * iz
+            sbot = H / 2 - uz * f * iz
+            shade = FADE_SHADE[propmod.depth_shade(fz)]
+            r._sprite(sx - 0.5 * it.w * f * iz, sx + 0.5 * it.w * f * iz,
+                      sbot - it.h * f * iz, sbot, iz, shade, tex)
+            ni_ += 1
     r.png(out)
     print("%s: %d wall quads%s%s from (%d,%d,%d) yaw=%g pitch=%g%s -> %s"
           % (os.path.basename(path), nq,
              ", %d floor tiles" % nf if ground else "",
-             ", %d props" % np_ if np_ else "", ex, ey, ez, yaw, pitch,
+             ", %d props" % np_ + (", %d items" % ni_ if ni_ else "")
+             if np_ else "", ex, ey, ez, yaw, pitch,
              ", %d textures" % len([tt for tt in cache.values() if tt]) if bank else "",
              out))
     if failed:

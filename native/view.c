@@ -45,10 +45,14 @@ typedef struct {
 typedef struct { int16_t v[4][3]; int16_t texid, angle; uint16_t flags, pad; } Quad;
 typedef struct { uint16_t w, h; uint32_t off; } TexEnt;
 /* a placed sprite: position and size in world units, then which .anim and
- * how it picks a frame.  tools/props.py is the authority on all of it. */
+ * how it picks a frame.  tools/props.py and tools/items.py are the authority
+ * on all of it; an item spawn is the same record with mode bit 2, two frames
+ * and its near/far threshold in `face`. */
+#define U4 (1.0 / 16.0)                 /* the Prop's 12.4 size fields */
 typedef struct {
     int16_t x, y, z, w, h, face;
-    uint8_t k, anim, mode, pad;     /* mode bit 0 clock, bit 1 do not fade */
+    uint8_t k, anim, mode, pad;     /* mode bit 0 clock, bit 1 do not fade,
+                                       bit 2 near/far by depth */
 } Prop;
 typedef struct { uint16_t n, first; } AnimEnt;
 #pragma pack(pop)
@@ -77,8 +81,8 @@ static int pack_open(Pack *p, const char *path)
     }
     fclose(f);
     p->h = (const Header *)p->blob;
-    if (memcmp(p->h->magic, "IMPK", 4) || p->h->version != 2) {
-        fprintf(stderr, "%s: not a v2 scene pack\n", path); return 0;
+    if (memcmp(p->h->magic, "IMPK", 4) || p->h->version != 3) {
+        fprintf(stderr, "%s: not a v3 scene pack\n", path); return 0;
     }
     p->quads   = (const Quad *)(p->blob + p->h->quads_off);
     p->tex     = (const TexEnt *)(p->blob + p->h->tex_off);
@@ -359,11 +363,16 @@ static int draw_prop(Raster *r, const Cam *c, const Pack *p, const Prop *pr,
 {
     const AnimEnt *a = &p->anim[pr->anim];
     if (!a->n) return 0;
-    CV b = to_cam(c, pr->x, pr->y, pr->z, 0.0, 0.0);
+    CV b = to_cam(c, pr->x, pr->y, pr->z * U4, 0.0, 0.0);
     if (b.z < NEARZ) return 0;
 
     int frame;
-    if (pr->mode & 1) {                /* 0x2222 of a frame per 1/60 s tick */
+    if (pr->mode & 4) {                /* an item spawn: near cel or far one,
+                                        * `0x012660` comparing the base
+                                        * point's depth against `face` */
+        frame = (b.z < pr->face) ? 0 : 1;
+        if (frame >= a->n) frame = a->n - 1;
+    } else if (pr->mode & 1) {         /* 0x2222 of a frame per 1/60 s tick */
         frame = (int)(t * 59.94 * (0x2222 / 65536.0)) % a->n;
     } else {                           /* k views, `face` naming view zero */
         int sector = pr->k ? 256 / pr->k : 256;
@@ -377,9 +386,9 @@ static int draw_prop(Raster *r, const Cam *c, const Pack *p, const Prop *pr,
     double iz = 1.0 / b.z;
     double sx = r->w / 2.0 - b.x * c->f * iz;
     double sy = r->h / 2.0 - b.y * c->f * iz;
-    double left = sx - 0.5 * pr->w * c->f * iz;
-    double right = sx + 0.5 * pr->w * c->f * iz;
-    double bot = sy, top = sy - pr->h * c->f * iz;
+    double left = sx - 0.5 * (pr->w * U4) * c->f * iz;
+    double right = sx + 0.5 * (pr->w * U4) * c->f * iz;
+    double bot = sy, top = sy - (pr->h * U4) * c->f * iz;
     double dw = right - left, dh = bot - top;
     if (dw < 1e-9 || dh < 1e-9) return 0;
     /* the reciprocals are taken here, not left as divisions in the loop:

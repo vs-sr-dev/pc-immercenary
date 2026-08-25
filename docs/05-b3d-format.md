@@ -464,24 +464,35 @@ encode.
 +13  u8  height         world units
 +14  i8  groundOffset   the height of the sprite's base, world units
 +15  i16 id
-+17  u8  flag
++17  u8  flag           bit 1: the id is a CEL bank slot, not an object
 ```
+
+The whole of the id is in [23-the-item-spawns.md](23-the-item-spawns.md), and
+it turns on the flag byte: **bit 1 clear** and the id is an object, 0 to 27,
+indexing the near/far cel pairs `Objects/AllStaticObjects` fills the table at
+`0x0862b8` with; **bit 1 set** and it is a slot in `PerfectWorld.CELS`,
+which is why it reaches 1,139 in a table of 28. On the overworld that is
+1,143 objects against 31 bank sprites — a column, three towers and twelve
+flames.
 
 If `id` is non-zero the record is a fixed placement. If `id` is **zero** the
-handler rolls dice at `0x3a4e0`:
+handler rolls dice at `0x3a4b8`, having first seeded the generator from the
+record's own X:
 
 ```
-0x3a53c   mov r0, #8 ; bl 0x38c00     ; Random(8) -> 1..8
+0x3a4dc   mov r0, #0x32 ; bl 0x38c00  ; RandomBelow(50) -> 0..49, a size tier
+0x3a534   mov r0, #8 ; bl 0x38c00     ; RandomBelow(8)  -> 0..7
 0x3a548   cmp r0, #4
-0x3a54c   addge r0, r0, #7            ; -> 11..15
+0x3a54c   addge r0, r0, #7            ; -> 11..14
 0x3a550   addlt r0, r0, #4            ; ->  5..7
 ```
 
-Ids 5–16 are the twelve weapon pickups in
-[06-code-map.md](06-code-map.md), so **`sub = 1` with `id = 0` is a random
-weapon spawn**. The overworld has 569 of them out of 1,174 `sub = 1` records.
-A second roll, `Random(50)` at `0x3a4dc`, scales a value derived from the
-width and height.
+Ids 5, 6, 7 and 11 to 14 are seven **trees**, and a roll of 0 leaves the id at
+0, which is an eighth, so **`sub = 1` with `id = 0` plants a tree** — 569 of
+the overworld's 1,174 records. The first roll and the record's own height
+widen the canopy by a factor of three to eight. This was written down as a
+random *weapon* spawn for four sessions on the strength of `RandomBelow`
+returning 1..8; it returns 0..7, and every id it can produce is a tree.
 
 ### `sub = 2` — inline geometry
 
