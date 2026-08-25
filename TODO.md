@@ -1,7 +1,647 @@
 # Next session
 
-Everything below has a concrete starting address or file. Nothing here is
-open-ended research.
+Everything in **The work** has a concrete starting address or file. Nothing
+there is open-ended research. The session logs are at the bottom, under
+[History](#history); read the top of this file, not the top of its history.
+
+## Where the port stands
+
+| | |
+|---|---|
+| functions in `p` | 1,308 |
+| with a name in [`docs/06`](docs/06-code-map.md) | 371 |
+| of the code, by bytes, inside a function that has one | **50%** |
+
+Half of what is left is not work: [21](docs/21-the-call-graph.md) proves 126
+functions dead and [15](docs/15-library-and-game.md) proves 71 library. The
+rest is the CEL engine, the DSP, the front end and the encounters, and none
+of those has been opened.
+
+**What is finished is the rithms.** `MoverFrame` down through `MoverThink`,
+the vote, both switches, the aim, the crowd, the shot, the pickers, the DOA
+field, the collision and the step: there is no unread routine left anywhere
+in the mover loop, and every one of them is transcribed in
+[`tools/behave.py`](tools/behave.py) under 153 checks against the image.
+[25](docs/25-where-the-movers-are.md), [26](docs/26-the-decision.md),
+[27](docs/27-the-doa-field.md), [28](docs/28-what-a-decision-does.md).
+
+**What is finished visually** is the city: `native/view.c` walks it at ~84 fps
+with 1,594 sprites and agrees with `tools/b3dview.py` to the pixel over a
+swept grid. The radar, the lake cut and the rest of `DrawMover` are the three
+things a viewer still owes, and none of them needs any more reversing.
+
+### And two thirds of `native/view.c` is scaffolding
+
+Worth knowing before deciding how much to invest in it. Measured:
+
+| section | lines | what it is |
+|---|---|---|
+| the pack | 98 | the viewer |
+| collision | 84 | **the game, transcribed** |
+| 16.16 math | 35 | **the game, transcribed** |
+| the movers | 181 | **the game, transcribed** |
+| ground fade | 34 | **the game, transcribed** |
+| rasteriser | 81 | the viewer |
+| camera | 101 | the viewer |
+| drawing + props | 235 | the viewer |
+| wall index / walktest | 154 | the viewer |
+| player movement | 160 | **the game, transcribed** |
+| bmp + main | 272 | the viewer |
+| | **494 / 941** | **34% game, 66% viewer** |
+
+The transcribed third survives any port. The other two thirds will not: the
+`.pack` is a format this project invented, the rasteriser is a float
+triangle filler and the camera a float perspective projection, and the 3DO
+does none of that — it draws fixed-point CCB quads through the CEL engine,
+which is the Graphics folio's 22 vectors and has never been opened.
+
+So the viewer's lasting value is **not its rendering code**. It is
+`tools/packdiff.py`: two independent implementations of the same rules held
+against each other to the pixel and to the bit. That has already caught real
+errors in the side that looked authoritative — see *the reference renderer is
+the one that was wrong*, below.
+
+## The work
+
+Do these in order. The first one has a deadline attached to it and the rest
+do not.
+
+### 1. Port the states into `native/view.c` — **before** any more reading
+
+`packdiff --walk` is a check only while both sides carry the same rules.
+`behave.StateWalk` runs the whole of `MoverThink`; `native/view.c`'s
+`sim_tick` still runs the one arm of `MoverAim` that `docs/25` knew, the
+scramble. Today the two agree because Python is still *offering*
+`spawns.Walk` for the comparison. Leave it ten sessions and `--walk` will go
+on printing **0 differing** about two things nobody cares about any more, and
+the only regression net this project has will have quietly stopped covering
+anything.
+
+It is not reversing. It is transcription with a green test at the end:
+
+* carry `behave.Body`'s new fields into `view.c`'s `Mover` — `dest`, `save`,
+  `leg`, `target`, `radius`, `until`, `aim`, `hitmark`, the three deadlines,
+  `loner` and `crowd`;
+* port `MoverDecide`, `MoverEnterState`, `MoverStateDone`, `MoverAim`,
+  `CrowdAim`, `MoverShoot`, `PickDestination`, `PickCompanion`,
+  `NearestMover`, `NearestSource`, `DrinkFromField`, `ATan2Fine` — all
+  transcribed and all verified, `behave.py` is the authority;
+* the pack has to carry the DOA field seed, the arctangent table, the nine
+  home boxes and the character records; `tools/scenepack.py` is where that
+  goes;
+* then swap `spawns.Walk.tick` for `StateWalk.tick` in `packdiff --walk` and
+  make it green again.
+
+**Do the two ends in the same session.** The moment either side moves alone
+the check goes red, and there is nothing else to tell you which side is
+wrong. `sim_*` is 181 lines today; expect 600.
+
+Loose ends that come with it, both cheap:
+
+* `TurnMover`'s **gradual** arm is in both renderers and has never once been
+  exercised, because a scrambled rithm snaps. Every state but the scramble
+  goes through it. The port is its first real test — watch it.
+* `PickDestination`'s retry loop and the three spawners all ask the wall
+  clock a question a port cannot answer (`AudioTicks()` against a deadline
+  three ticks out). Python picks 64 tries and C must pick the same number or
+  the two walks will not agree.
+
+### 2. Then read `ResolveHit`, `0x00bff0`
+
+We can shoot and we cannot die. Thirteen arms inside an encounter, one per
+lieutenant and player form; six on the crowd shapes outside one, with
+everything above 5 falling to `0x00c370` where **only Silva** has an arm.
+Two lines of it are read already and both were worth having: the crowd alarm
+at `0x00c42c` and the hit credit into `+0x77` at `0x00c150`. `CrashMover`
+`0x00b4d8` is read and is what it calls when the answer is yes.
+
+After it the combat loop is closed the way the mover loop now is.
+
+## The backlog: the viewer  *(the one real artefact)*
+
+**It exists, it walks, the city walks back, and the collision is the game's
+own.** `native/view.c` at ~84 fps with 1,594 sprites, pixel-identical to
+`tools/b3dview.py` over a swept grid of cameras *and* mover tick counts.
+
+```sh
+python tools/scenepack.py out/world.pack
+make -C native
+native/view.exe out/world.pack
+```
+
+`--shot FILE.bmp` renders one frame headless, `--time SECONDS` fixes the phase
+of the clock-animated props and `--ticks N` fixes how far the rithms have
+walked, so that shot is reproducible; `--bench N` times N frames,
+`--dump-movers` prints the walk for `tools/spawns.py` to check against, and
+`--walktest N` wanders the city the game's own way and holds the radar map
+against the wall geometry. `tools/packdiff.py out/ref.png out/native.bmp` is
+the check that the two renderers still agree and `--walk N` is the check that
+their *movers* do, comparing the 16.16 state rather than the pixels; run both
+after touching either renderer, and pass `--assets extracted/Perfect` to
+`b3dview.py` or its props will be missing.
+
+What is still missing:
+
+- ~~**The rithms still run state `0x40`.**~~ Still true of `native/view.c`,
+  and it is now [the work](#1-port-the-states-into-nativeviewc--before-any-more-reading),
+  not a backlog item. Everything above it is transcribed and verified in
+  Python; nothing here is left to read.
+- **The rest of `DrawMover`'s 2,400 bytes.** The Perfect One's three forms and
+  the hit states. The stealth branch and the PPMPC are answered
+  ([24](docs/24-the-cast.md)). Goner's three spare palettes are still unused:
+  the byte at `+0x1e` picks one, and the pack carries no PLUT variants.
+- **The radar.** `tools/hudmap.py` gives the tile, the world-to-pixel
+  transform and the rotation the CCB applies, and the pack now carries all 256
+  tiles of both maps — so a viewer can draw the real HUD map with no further
+  reversing and no new file to read. `tools/armmath.py` gives the exact
+  `Sin`/`Cos`/`MulSF16` the game rotates it with, half-pixel slip included.
+- **The lake is read and not drawn.** Bit 28 quarters a mover's stride and
+  halves both its CCBs' source line count, cutting the sprite off at the
+  waterline ([24](docs/24-the-cast.md)); neither renderer does the cut yet,
+  and the player's own eye drop from six units to two is in `view.c` already.
+- **The pixel-for-pixel check is a grid, it covers the walk, and it is
+  clean.** `python tools/packdiff.py --sweep` — 48 cameras, 4.8 million
+  pixels, zero differing; `--eyes 16 --size 480 300` is 96 cameras and 13.8
+  million, also zero. The cameras are no longer kept away from buildings, and
+  six different mover tick counts are swept with them. There is **no known
+  divergence left** between the two renderers.
+
+## The backlog: small unread call sites
+
+- `Floor/Highlight.cel` and `Floor/SpirePad.Cel`, loaded at `0x014b4c` and
+  `0x03238c` — small overlays drawn on top of the ground. Not a format, just
+  unread call sites.
+- The arena floor grids: `Fly/FlyFloorGrid.cel`, `Loki/LokiFloorGrid.cel`,
+  `Loki/AllFloorPatterns.%d`.
+- `Perfect/Music/*.music` needs no work — it is plain uncompressed AIFF, mono
+  16-bit at 44.1 kHz.
+
+## The backlog: the code map, wider
+
+- **Name the remaining 104 folio vector slots.** Every one in both images is
+  attributed now — in `p`: 46 audio, 23 Kernel, 22 Graphics, 10 File, 8
+  Operamath — and `swiscan.py --sites` lists each with the wrapper that calls
+  it. Five are named, `LookupItem` being the newest. The Graphics folio's 22 are the CEL engine, the single
+  largest piece of work in any port; the Kernel folio's 23 are the cheapest,
+  since slot −56 is already pinned as the block copy.
+- **The DSP instruction set.** `tools/dsp.py` reads everything around the
+  code and not one word of the code itself: 1,950 sixteen-bit instructions
+  across the 64 files, of which a port needs the 21 named instruments'
+  worth. The relocation mask (`0x00020a00` on 519 of 668 sites,
+  `0x00010a00` on 128) says which field of an instruction word takes an
+  address, so it is the natural way in. `directout` is eight words and does
+  almost nothing — start there.
+- **The knob frequency hint.** Two words at `+0x38` of a `DKNB` record,
+  non-zero on exactly fourteen knobs and always an oscillator's `Frequency`:
+  3, or 4 with a second word of 8 on the two `_lfo` variants, or −1 on
+  `pulse_lfo`. It is the hertz-to-phase-increment rule and the files alone do
+  not give it.
+- **Name the remaining kernel/audio SWIs.** Seven are identified in
+  [docs/09](docs/09-os-surface.md); the rest have call sites listed and need
+  one context read each. `1:5` is the warning: it was named from the company
+  it kept and it was wrong. Read the arguments.
+- **The library/game split is answered as far as the disc allows**, and
+  [docs/15](docs/15-library-and-game.md) says where the wall is. 71 functions
+  are proved library by exact shape match against the 38 executables on the
+  disc that carry no Immercenary code. Do **not** spend another session
+  pushing that number: the corpus links the C runtime and folio glue only,
+  and nothing here links the audio, Graphics, DataStream or Cinepak libraries
+  without game code beside it. `CinepakSubroutine` looks like the corpus you
+  want and is disqualified — its strings are `$Perfect/film/…`.
+  What *is* still open is the 24 functions in the weakest tier (in `p`,
+  `CinepakSubroutine` and `SpeechSubroutine` alike, touching no game string):
+  one context read each says whether they are the SDK's or Immercenary's own
+  utility layer. `SpeechSubroutine` is read now
+  ([docs/16](docs/16-speech-and-doa.md)), so those 26 shared shapes can be
+  looked at with their callers in view rather than blind.
+- ~~**356 functions still have no direct caller.**~~ Answered in
+  [docs/21](docs/21-the-call-graph.md): there is no dispatch mechanism, and
+  126 of them are dead code. What is left of the item is small and optional —
+  the 41 `p`-only dead functions are a list of what the developers cut, and
+  two of them are named tools. Nothing in it blocks a port.
+- Feed named functions back into `docs/06-code-map.md`, not into the symbol
+  file: `tools/symbols.py` reads the doc, so the doc stays the authority. Put
+  the **name first** in the description column, or the harvester takes the
+  leading word as the name — and keep the description in the **second**
+  column, or it is not harvested at all.
+
+## The backlog: loose ends worth an hour each
+
+- **`CinepakSubroutine`'s subsystem map is closed** — every entry in it is
+  read ([docs/17](docs/17-the-front-end.md)). What is left there is `main`
+  itself at `0x9a4`, the state machine that sequences logo, title, date
+  stamps, menu, stats and films, and the Cinepak player at `0x2368`. Neither
+  is a format; both are a port's control flow.
+- **Name Kernel SWI `1:17`.** Three call sites in three programs, no
+  arguments, and the shell treats its result as six coin flips
+  ([docs/09](docs/09-os-surface.md)). Everything about it says random source
+  and nothing proves it.
+- **`Floor/SpirePad.Cel`, loaded at `0x03238c`**, and `0x01a9c4`, called from
+  `DrawItemSpawn`, are the *drawn* half of the DOA field
+  ([27](docs/27-the-doa-field.md)): floor tile 13 is the pad and `0x01a9c4`
+  draws the spire on it, asking `0x021aec` about the city's power while it
+  does. Neither renderer draws either. This is no longer a loose "small unread
+  call site" — it has a subject.
+- **Bit 12 of a DOA field cell word.** `0x01a3bc` clears it on every live cell
+  every time `BuildCellList` runs and nothing read so far tests it.
+- **`0x018e34`, 4,956 bytes, one caller, is the largest unread function in
+  either image** — and it is not a mystery, it is the **new game**. Its one
+  caller is the `CharacterList` init path, it calls `SeedDOAField` and
+  `KernelCopyMem`, and its first two dozen instructions stamp the clock into
+  `[0x058264]` and `[0x058270]` and zero four more globals beside them. It
+  holds seventy references to `0x0602dc`. Everything a port has to be true of
+  before the first frame is written here, once, in one place.
+- **`p1e` `0x01aa40`, 2,876 bytes, one caller**, is the largest unread
+  function in `p1e`, and `0x01a1a4`, `0x01a4f8` and `0x0194b4` sit
+  beside it in the Perfect One's behaviour band. ~~The two-bit phase at mover
+  `+0x18` bits 24-25~~ is answered: it is the **gait**, and `0x00bdf0` spends
+  0, a half, one or one and a half of the mover's base rate on it
+  ([25](docs/25-where-the-movers-are.md)). So `0x01b9d8` moving the mover on
+  each change is the Perfect One changing pace, not changing phase.
+- **The three per-form constants** `0x88b87`, `0xafc87`, `0xd6d87` and the
+  eight-byte table at `p1e` `0x065b84` beside them. `p` `0x03f658` packs one
+  of them into a request word at `[0x58f74 + 0x50]`; nothing says yet what
+  consumes it.
+
+## Notes to self
+
+- **When a table is one entry longer than it needs to be, that is the
+  interpolator asking for room.** `ATan2Fine`'s table is 257 entries and the
+  258th is a copy of the 257th. It looks like padding and it is not: the
+  interpolation reads `T[i]` and `T[i + 1]`, and `i` reaches 256 exactly when
+  `min == max`. The duplicate is multiplied by a weight of zero every time it
+  is read. A port that ships 257 words and stops walks off the end once every
+  time a rithm faces a perfect diagonal.
+- **A jump table with nineteen identical arms has the interesting ones in the
+  two that differ.** `MoverAim` dispatches on the character id into nineteen
+  branches and seventeen of them go to the same address. It would have been
+  easy to read the default and move on -- and the two exceptions are Medusa's
+  encounter aim and, in arm 0, the entire overworld crowd, which does not use
+  `MoverAim`'s target logic at all. Read the odd arms of a jump table first;
+  the default is the part you can infer.
+
+- **Tabulating a switch is not transcribing it.** `docs/26` §4 and §5 read
+  all thirty arms of `MoverEnterState` and `MoverStateDone` and wrote them
+  down as two tables. Fifteen of the fifteen rows in §4 survived being
+  executed; three of §5's did not, and every one of the three failed the same
+  way — two arms that *look* like one line of prose turned out to be four
+  instructions apart. The patrol swaps one axis a leg and not the pair; state
+  5 stores the `r0` that was zeroed at the top of the routine and state 12
+  stores the `mvn r0, #0` one instruction above the shared store. Reading a
+  jump table tells you which arms exist. Only running them tells you what
+  they write.
+- **A table in the BSS has a writer somewhere, and it is worth ten minutes
+  to find it.** `0x060170` was written down as "the patrol rectangle out of
+  `PerfectMovers.B3D`" because the numbers it *would* hold were plausible and
+  the file was right there. `armxref -a` says three sites touch it and none
+  of them writes it — which is the whole clue: the writer reaches it through
+  a base register, and `litrefs` on the neighbourhood finds it in one query.
+  It turned out to be 128 hand-assembled constants behind nine flag bits.
+
+- **A state the transcription never leaves is a state the game may never
+  enter.** `docs/25` found that `MoverAim`, `TurnMover` and `MoverEnterState`
+  all special-case `0x40`, transcribed all three correctly, and concluded that
+  `0x40` was therefore the state the overworld lives in. It is the opposite:
+  three routines special-case it *because* it is an exception, and one
+  instruction in 90,000 puts a rithm there. Before deciding a state is the
+  default, grep for what **writes** it, and check what the allocator leaves
+  behind — `NewMover` memsets 0x90 bytes, so the default state is 0 by
+  construction and no instruction has to say so.
+- **A routine with two callers can still be the door to a subsystem.**
+  `0x006de8` was on the list for four sessions as "2,160 bytes, behind two
+  states that are switched off most of the time" — the least promising item
+  there was. It turned out to be the city's whole DOA economy, six more
+  routines, a 256-word table and the mechanic the printed guide describes as
+  the blue spires. Size and caller count say how hard something is to read,
+  not how much is behind it.
+- **A field named from one reader is named from a guess.** `+0x75` was "an
+  animation slot" because it looked like one beside `+0x74`. Two instructions
+  read it in the whole image and neither draws anything: it is an arrival
+  radius. Grep the readers before naming a field, not only the writers.
+- **"Nothing writes this field" is a claim about your grep, not about the
+  game.** `docs/25` said the mover's `+0x34` was written only by `NewMover`,
+  which zeroes it, and built a conclusion on it — that a rithm cannot animate.
+  `MoverStep` writes it, one instruction, in a function nobody had read.
+  Before writing *nothing writes X*, grep the whole disassembly for the store
+  by offset, not the functions you think are involved.
+- **Truncation is not flooring, and half the world has a negative
+  coordinate.** `(int)x` and `x >> 16` agree on the whole right-hand half of
+  Perfect and differ by one unit on the left. It cost 379 of 20,000 walk-test
+  strides looking like a collision bug that was not there. The game floors
+  everywhere, because ARM has no truncating shift.
+- **A constant that looks like a state pair may belong to one character.**
+  `0xe288e288` against `0x1f001f00` read for three sessions as "the mover's
+  two translucency states". Both are written under `teq r7, #0xc` — the
+  Chameleon and nobody else. Read the branch *above* the interesting store
+  before naming what it is for.
+
+- **A filename generator run backwards names the dead files.** The rule in
+  `LoadCharacterAnims` produces 67 names and all 67 are on the disc; asking
+  which files it can *never* produce left exactly three, and two of them say
+  Medusa used to be a lieutenant. Both directions are worth running.
+- **A shipped path's case is not the disc's.** The code asks for
+  `Tesla/Tesla.stand.anim` and the disc holds `tesla.stand.anim`. If a name
+  does not resolve, fold the case before doubting the rule — and write down
+  that the folio folds it, because a port on Linux will not.
+
+- **Look at the art.** Fifteen sessions of disassembly could not say what an
+  item spawn id meant; decoding the 28 cel pairs and putting them in a contact
+  sheet answered it in one glance — trees and road signs, not weapons. When a
+  table's *meaning* is the open question and the table points at pixels,
+  render the pixels first.
+- **Check what a helper returns before reading its callers.** `RandomBelow`
+  was written down as returning 1 .. n and it returns 0 .. n-1, so every id
+  the tree roll produces was read one too high and seven trees came out as
+  seven weapons. It is two instructions: a doubling and the top word of a
+  multiply, and neither is a modulo.
+- **A failure message names a structure better than any amount of tracing.**
+  `[0x0582cc]` had 39 references and no meaning until `0x036850`'s
+  `printf` — *"Couldn't allocate memory for the AllCels array!"* — said what
+  the 14,400 bytes were. Grep the strings of the function that *allocates* a
+  global, not of the ones that use it.
+- **Two tables of the same shape need not share an id space.** The `.anim`
+  names in `ObjectAnimById` and the cel pairs in `0x0862b8` are both indexed
+  by "object id", both start at 0, and both are filled at load time — and they
+  disagree from id 5 onwards. Nothing but a check against the art tells you.
+- **When one file's index is read into N arrays, the file is N blocks.**
+  Three reads of `0x12c4` into three globals is the whole statement that
+  `PerfectWorld.CELS` holds its mip levels 1,201 slots apart, and the sizes in
+  the file then agree 746 to 2. A size histogram alone had suggested the
+  opposite and been believed for eight sessions.
+- **One word of a struct can be a pointer in one table and four bytes in
+  another.** The flag bit that picks which table an id indexes also picks how
+  the third word is read, and the drawer reads it *both* ways and throws one
+  away. Do not assume a struct has one layout because one routine reads it.
+
+- **The reference renderer is the one that was wrong.** Props went in and the
+  pixel check fell from 400,000 to 399,210 — 790 pixels, all inside two
+  fountains. Every number matched: the same four corners to four decimals, the
+  same depth, the same fade band, the same texel, the same frame index when
+  computed by hand. The bug was that `render()` in `b3dview.py` took the
+  animation clock as a parameter named `t`, and forty lines above, the floor
+  loop assigns `t = ground.tile_at_world(...)`. By the time the props drew,
+  `t` was a tile id, so the reference was showing frame 7 of the fountain and
+  the native viewer frame 0. Two lessons. A short parameter name in a long
+  function is a bug waiting for a second author, and **when two
+  implementations disagree, do not assume the new one is the wrong one** —
+  half an hour went into instrumenting the C.
+
+- **A tool's noise looks exactly like a discovery.** "356 functions nothing
+  calls" survived eleven sessions as the last open question about the call
+  graph, and half of it was a substring test: `'lr' in ops` accepts
+  `stmdbvs lr!, {…}`, where `lr` is the base register, and the bytes of a
+  printf format string decode to exactly that. The tell was there the whole
+  time — the mystery functions clustered inside string literals, and their
+  auto-generated names in `p.sym` were the strings they sat in. Before
+  reading a surprising list, check the test that built it.
+
+- **A shared string is a hint, not a pair.**
+  `$Perfect/PerfectOne/Male/pmale.stand.anim` is referenced by exactly one
+  function in `p` and exactly one in `p1e`, and they are *different*
+  functions — `LoadDOAsysArt` in one, the Perfect One's own loader in the
+  other. Three such strings agree, so a majority vote does not save you.
+  Requiring the two bodies to still resemble each other does.
+- **The port of a thing is the cheapest way to read the thing.** `p1e`'s copy
+  of `0x004ff8` is 872 bytes smaller because the final encounter has one
+  character in it, so every arm that asks *which lieutenant is this* is gone.
+  Two sessions of staring at the 2,296-byte original had not cracked it; the
+  1,424-byte one read in twenty minutes and then the original was obvious.
+  When a routine resists, check whether the other executable has a simpler
+  copy before reading the hard one.
+
+- **A string with no direct reference is still a string somebody prints.**
+  `MESSAGES ON`, `MUSIC ON` and `SELECT AMMO` sat in `p_strings.txt` marked
+  *no direct literal reference* for eight sessions, and the four bits they
+  name went unread the whole time — because the menu reaches them through a
+  pointer table, so the reference is to the table. When `armxref -s` says a
+  string is unreferenced, look for a *second copy* of it: here the copies at
+  `0x24b98` onward are the ones the code points at.
+
+- **"Nothing writes this field" is only ever true of the images you scanned.**
+  `statsJump+0x04` was written up twice in one session as a field nobody
+  writes and an X the game never draws — and the writer was `launchme`, the
+  one image the save-game scanner does not scan. Before calling a field dead,
+  list the programs that can see it. Four of them touch this block.
+- **A function with no `bl` to it is not dead.** `0x0008c0` looked
+  unreachable; `main` loads its *address* into a register and hands it to the
+  film player as a callback. `armxref -c` counts branches only, and `-a` on
+  the same address is the check that catches it.
+- **Read the second table beside the one you already understand.** The ten
+  music names at `0x14c38` had been read a session earlier; the ten words at
+  `0x14c64` had not, and they are the streaming buffer size, which is what
+  proves the `22` in those file names is the sample rate.
+
+- **Capstone prints `pop {r3}` for `ldr r3, [sp], #-4` as well as for
+  `ldr r3, [sp], #4`** — it drops the U bit, and the two move the stack
+  pointer in opposite directions. Tracking arguments through a `sprintf` with
+  sixteen of them is off by eight bytes if you believe the mnemonic. Read
+  bit 23 of the encoding, the same way you already have to read bits 27-24 to
+  tell `bl` from `blt`.
+- **`'blt'.startswith('bl')` is True**, and it cost a scan two of eighteen
+  arms of the interlude chooser before the answer looked wrong. The note
+  about conditional `BL` was already in this file; the trap is not reading
+  the mnemonic, it is *filtering* on it.
+- **A label painted in the artwork is a string the string dump cannot see.**
+  The seven statistics counters had gone two sessions without names because
+  every search was for text in the executables. `StatsPage2.cel` had them all
+  along, and `tools/cel.py` had been able to read it since session 1. When a
+  field's meaning is missing, ask what the game *draws* next to it.
+- **A field can mean two different things in two copies of the same struct.**
+  `+0x04` is the weapon you lost per jump and the number of jumps in the
+  totals, and the tell was already in the fold: the shell increments that one
+  word instead of adding, alone among the seven.
+
+- **A register carried across a label belongs to whoever branched there.**
+  A forward scan that follows a base register is right until the first label,
+  and `0x01fd2c` proves it: `ip` holds `0x89d40` at the top and `0x5803c` at
+  every path into `0x01fee8`. The tell was not the disassembly, it was a
+  contradiction — a word store at an offset already read as two counters.
+  When a scan produces one access that argues with a reading you trust, the
+  scan is wrong, not the reading.
+- **A column written down with no meaning is a lead.** `PerfectMovers`' byte
+  `+0x1f` — 123, 64, 32, 16, 8, then 1 eleven times — sat in
+  [docs/10](docs/10-second-b3d-family.md) for two sessions as an unnamed
+  column. It is the population of each rank tier, and it was the number that
+  made the whole ladder close. Grep your own docs for the columns you could
+  not name.
+- **The player is an entry in the same table as everyone else.** Rank 255 is
+  index 0 of the top tier's bitmap, marked in use by the new-game path like
+  any rithm. Looking for a separate "player" field would have missed it.
+- **An array can start on purpose inside another field.** `+0x9c` is a flags
+  word and `+0x9c + 4*type` is a population count, because type 0 has no
+  count and the compiler was told so. A field map that assumes disjointness
+  would have called one of them a bug.
+- **Two blocks of identical size are one struct twice.** 28 bytes at `+0x24`
+  and 28 at `+0x40`, and the proof was a routine reading the same 16-bit
+  counter out of both and adding them — not the sizes.
+- **A save file need not have a format.** This one is the live struct, sent
+  as-is. Before reverse-engineering a serialiser, check whether there is one.
+
+- `armxref.py` must handle both literal pools **and** `add rD, pc, #imm`,
+  including ARM rotated immediates printed by Capstone as `#imm, #rot`.
+  Forgetting the rotation silently loses most string references.
+- `-S tools/p.sym` makes a disassembly far easier to read; build it first.
+- Capstone spells a conditional `BL` `bleq`/`bllt`, which the mnemonic alone
+  cannot tell from the plain branch `blt`. Read bits 27-24 of the encoding.
+- A literal pool word decodes as an instruction under a linear sweep, and one
+  starting `0x?B` looks like a `BL` to nowhere. Filter targets by the code
+  range or the call graph fills with ghosts.
+- **A three-instruction `ldr`/`ldr`/`ldr pc` run is a folio thunk, not part of
+  the function before it.** Neither `func_of` nor a `bl`-target scan sees the
+  second and later thunks of a run, and `0x04d8f8` — the "general `MapCel`"
+  that looked like an unread function for two sessions — is one of them.
+- **A hand-written routine may use a register the caller left set.**
+  `0x056ea8` reads `r4` before writing it; only `0x056e60` can call it. A
+  cross-referencer will happily list it as a function.
+- The Opera FS gotcha: multi-block directories use consecutive LBAs, and
+  `next`/`prev` in the block header are indices inside the extent, not LBAs.
+- `.img` files are frame-buffer dumps, not rasters. De-interleave before
+  looking at them — and the Cinepak renderer shows why: it pairs pixels
+  *vertically* in a word, two write pointers half a scanline apart.
+- The CEL `WOFFSET` field moves with bit depth: bits 16-25 at bpp >= 8, bits
+  24-31 below.
+- **CEL pixel data is MSB first.** The `.Maps` read the right way round give a
+  clean city plan; read LSB first every diagonal shatters into four-pixel
+  sawteeth. That is the fastest way to tell a wrong bit order from a wrong
+  stride.
+- When a length rule "fits" the data, check it against the code anyway. The
+  section A rule `N = len(template) - 10` was a fit that happened to be exactly
+  right; the section C `sub = 2` rule was a fit that was wrong, and that is
+  where the 13 unwalked cells were hiding the whole time.
+- Conditions are the other trap. `bhs` is carry **set**; reading it as "clear"
+  turned the Cinepak-style tail of the font decoder inside out for an hour.
+  When a decode almost works, re-read the branch senses before re-reading the
+  data.
+- **An anchor that refuses to match is worth more than one that does.**
+  `memcpy` and `printf` failed the library check, and both failures were
+  right: one is a folio thunk and the other a two-instruction prologue. Two
+  documented "functions" were wrong. Explain a failing check before relaxing
+  it.
+- **A "last unread format" can turn out not to be the game's.** The 64
+  `.dsp` files are the stock Portfolio instrument library, shipped whole
+  because libraries ship whole. Reading the format was still worth it, but
+  the answer a port needed was *which 21 of them the game names*, not what
+  the other 43 do. Ask which question the format is being read to answer.
+- **A decoder that never computes anything is a lookup table.** When ported
+  code reads a table where the reference implementation does arithmetic, the
+  table is not just a speed trick: it is where the platform's own quirks got
+  folded in. Immercenary's Cinepak hides a per-component ordered dither in
+  one, and nothing in the decoder itself hints at it.
+- **A pointer at a string is not a string the scanner found.** A "maximal run
+  of printable bytes" is keyed where the run starts, which is not where the
+  pointer points if the padding before it happens to be printable. Read a C
+  string at the pointer instead. Two folio names hid behind this for two
+  sessions.
+- **The SWI next to a call is not the call.** `1:5` sat in every folio opener
+  and got written down as `FindNamedItem` because it was the only SWI in
+  sight. The real lookup was a `bl` to a wrapper two instructions earlier,
+  because it takes a tag list and needed one. When a routine's name comes
+  from *proximity*, check what the arguments are.
+- **A number in one file that predicts another file is the best check there
+  is.** `SpeakLine`'s seek arithmetic is three instructions in a program that
+  never opens `SpeechStream`; the stream's own marker table agreed with it on
+  six speakers out of seven, line for line. That is worth more than any
+  amount of internal consistency — and the seventh disagreement was a real
+  finding, not a bug in the reading.
+- **Shipped data can be wrong and the game still works.** A duplicate rule
+  that can never fire, a rule out of sort order, a switch with no arm for a
+  phoneme the table uses 459 times, two lines of dialogue with no audio. Do
+  not "fix" the reading when the data looks wrong: check whether the wrongness
+  is reachable, then write it down.
+- **Two data columns that are always in step means the code reads one.** The
+  DOA answer table has a byte per question, and the second is the first plus
+  one in all 185 live pairs — because `0x2258` never reads it, it adds the
+  question index. If a redundancy holds with no exceptions, look for the code
+  that exploits it rather than the code that maintains it.
+- **A file nothing names is as interesting as a name with no file.**
+  `silence.music` is on the disc and no executable mentions it, while eight
+  of the ten names in the music table have no file. Grep both directions.
+- **The smallest executable can hold the architecture.** `launchme` is 12 KiB
+  and almost all glue, but five of its strings lay out the entire launch
+  chain — front end, game, encounter, and who creates the message port `p`
+  goes looking for. Read the small ones early.
+- **Do not carry a convention across two programs without checking.** Both
+  subroutine programs take a selector in `argv[1]`, so `argv[2]` looked like
+  the same callback in both. It is not: the speech program calls home through
+  it, the front end stores 512 bytes of game state at it. One `ldr pc,
+  [global]` scan settles which.
+- **A fixed-point routine can be deliberately wrong.** Do not assume a
+  multiply is a multiply: check where its intermediate overflows, then check
+  whether every call site stays inside that bound. Twice in this module the
+  bound turned out to be a design decision — the reciprocal table's floor of
+  2.0 is what makes `MulSF16` exact.
+
+- **A hinted symbol names a function, not a string.** `tools/symbols.py`
+  labels a function `s_<its longest string>`, so `0000d754
+  s_DOASys_JuniorSpire_far_scel` means *the routine at `0xd754` mentions that
+  filename* — the string itself is at `0xdc44`. Reading it as a string
+  address wasted the first ten minutes of this session on a tooling bug that
+  was not there. The file's own header says so; read it.
+- **Two columns of one table agreeing is worth more than either.** The
+  DOAsys scale tables have a width column and a height column, and separately
+  the routine lifts exactly one id off the ground. The widest of the sixteen
+  and the lifted one are the same id, and that id is called *Fly*. Neither
+  number was recorded to identify anybody.
+- **"The controller sets it with C" was one block out of three.** The
+  set/clear pair for the side bit is copied verbatim under each fire button.
+  Reading the first one and stopping produced a true sentence about a third
+  of the mechanism. When a block ends by ORing one bit into an accumulator,
+  look for the other bits of that accumulator before believing the block is
+  alone.
+- **A boolean helper can be named backwards.** `0x3e7b0` returns **1 when
+  the lieutenant's bit is clear**, and the caller keeps the ids it answers
+  `0` for. Naming it from the caller's intent — "alive" — inverts it. Check
+  the polarity against a second caller and against a *value* you already
+  know: a new game writes `0xff8`, all nine bits set, when all nine are
+  alive.
+- **Two globals can be one array and its count.** `0x068cdc + 0x798` and
+  `0x060cdc + 0x879c` are adjacent words, and the second is the array the
+  first counts. A literal-pool cross-referencer lists them as unrelated
+  because the base registers differ. When two globals are always touched in
+  the same routine, add their offsets out.
+
+- **A string table can hide behind the string dump's minimum length.** The
+  nineteen character names at `0x058640` had been on the disc for nine
+  sessions. `p_strings.txt` keeps runs of six printable bytes or more, and
+  *Goner*, *Tork*, *Venus*, *David*, *Tesla*, *Silva*, *Fly*, *Loki* and
+  *Raven* are all shorter — so the block read as six scattered names with the
+  pattern filtered out. When a set of related names is half-missing from a
+  dump, lower the threshold and look again.
+- **Do not derive an order you can read.** Ids 1-5 got written down backwards
+  this session because the rank-ladder table lists its tiers top-down and
+  that felt like the id order. `speech.py --doa` had been printing
+  *"Picasso, id 1"* since session 7, and `b3d2.py --names` had the same list
+  from the file. Two tools in the repo already knew.
+- **A filename generator is a completeness checker.** Once you know the code
+  builds `prefix + name[i] + suffix`, you can ask the disc which of those
+  files exist — and the answer here was one missing and one unreachable, in
+  the same directory, in opposite directions. A hardcoded name list gives you
+  nothing to check.
+
+- **The bound you are looking for may not be where the culling is.** Two
+  sessions assumed the per-cell cull was what kept `ProjectPoint` inside its
+  table. It is not — the cull submits records 768 units out, and the real
+  bound is three instructions in each *face builder*, a comparison against
+  the mean of two corner depths. Grep for the comparison, not for the cull.
+- **Count the callers, then ask which of them can see a new value.** Eight
+  functions call `ProjectFace` and only six can introduce a depth, because
+  `ProjectPoint` short-circuits on corners already done. Splitting callers by
+  *whether they call `GatherCorners`* turned an eight-way muddle into a clean
+  six-and-two, and it is why "five of six have the gate" is a statement worth
+  making.
+- **A constant that is out of line with its eleven siblings is the answer.**
+  Twelve `SetDrawDistance` calls: ten 250, two 200, one **600**. The one that
+  does not fit is the one that matters, and it named the encounter before any
+  geometry was measured.
+- **Threads hide the last `bl`.** Four encounter drivers reach no gated face
+  builder at all, because their frame loops are entered through addresses
+  handed to `CreateThread`. `armxref -c` cannot follow that, and the fix is
+  the same one from session 9: look for the *address* being loaded, not the
+  branch.
+
+## History
+
+Session logs, newest first. Nothing below this line is work to do.
 
 ## Done in session 19
 
@@ -1110,543 +1750,3 @@ open-ended research.
   before it — `out/i01`, `out/balkan`, `out/ealogo` — was regenerated.
   `out/fmodpng` and `out/medusa` were not, and did not need to be: those are
   cels decoded by `celbatch.py`, not video.
-
-## 1. The interactive viewer  *(the one real artefact)*
-
-**It exists, it walks, the city walks back, and the collision is the game's
-own.** `native/view.c` at ~84 fps with 1,594 sprites, pixel-identical to
-`tools/b3dview.py` over a swept grid of cameras *and* mover tick counts.
-
-```sh
-python tools/scenepack.py out/world.pack
-make -C native
-native/view.exe out/world.pack
-```
-
-`--shot FILE.bmp` renders one frame headless, `--time SECONDS` fixes the phase
-of the clock-animated props and `--ticks N` fixes how far the rithms have
-walked, so that shot is reproducible; `--bench N` times N frames,
-`--dump-movers` prints the walk for `tools/spawns.py` to check against, and
-`--walktest N` wanders the city the game's own way and holds the radar map
-against the wall geometry. `tools/packdiff.py out/ref.png out/native.bmp` is
-the check that the two renderers still agree and `--walk N` is the check that
-their *movers* do, comparing the 16.16 state rather than the pixels; run both
-after touching either renderer, and pass `--assets extracted/Perfect` to
-`b3dview.py` or its props will be missing.
-
-What is still missing:
-
-- **The rithms still run state `0x40`, and it is now the only thing left
-  between the viewer and a city that fights back.** Every routine above it is
-  transcribed *and* verified in Python, and `behave.StateWalk` drives the
-  whole frame; what is missing is on the C side.
-  - **`native/view.c` still runs the scramble.** Everything above it is
-    transcribed and verified in Python: `MoverDecide`, `MoverEnterState`,
-    `MoverStateDone`, `MoverAim`, `CrowdAim`, `MoverShoot`, the pickers, the
-    drink and both arctangents ([26](docs/26-the-decision.md),
-    [27](docs/27-the-doa-field.md), [28](docs/28-what-a-decision-does.md)).
-    `behave.StateWalk` is the whole frame and it works. The job is now a
-    **port**, not a read: carry `Body`'s fields into `native/view.c`'s mover
-    struct, put `MoverThink` where the scramble aim is, and swap
-    `spawns.Walk.tick` for `StateWalk.tick` so that `packdiff --walk` covers
-    the new walk on both sides. Do the two ends together -- the moment either
-    one moves alone the check goes red, and it is the only check there is.
-  - `TurnMover`'s **gradual** arm is in both renderers and has never been
-    exercised, because a scrambled rithm snaps. Every state but the scramble
-    goes through it, so the port is also the first real test of it.
-  - `ResolveHit`'s thirteen arms at `0x00bff0` are the other half of the
-    shot: what a hit *does*. The crowd alarm is one line of it, the +0x77 hit
-    credit another, and nothing else in it is read.
-
-  `behave.py` is the authority and `packdiff --walk` is the check, exactly as
-  the walk went.
-- **The rest of `DrawMover`'s 2,400 bytes.** The Perfect One's three forms and
-  the hit states. The stealth branch and the PPMPC are answered
-  ([24](docs/24-the-cast.md)). Goner's three spare palettes are still unused:
-  the byte at `+0x1e` picks one, and the pack carries no PLUT variants.
-- **The radar.** `tools/hudmap.py` gives the tile, the world-to-pixel
-  transform and the rotation the CCB applies, and the pack now carries all 256
-  tiles of both maps — so a viewer can draw the real HUD map with no further
-  reversing and no new file to read. `tools/armmath.py` gives the exact
-  `Sin`/`Cos`/`MulSF16` the game rotates it with, half-pixel slip included.
-- **The lake is read and not drawn.** Bit 28 quarters a mover's stride and
-  halves both its CCBs' source line count, cutting the sprite off at the
-  waterline ([24](docs/24-the-cast.md)); neither renderer does the cut yet,
-  and the player's own eye drop from six units to two is in `view.c` already.
-- **The pixel-for-pixel check is a grid, it covers the walk, and it is
-  clean.** `python tools/packdiff.py --sweep` — 48 cameras, 4.8 million
-  pixels, zero differing; `--eyes 16 --size 480 300` is 96 cameras and 13.8
-  million, also zero. The cameras are no longer kept away from buildings, and
-  six different mover tick counts are swept with them. There is **no known
-  divergence left** between the two renderers.
-
-## 2. Small unread call sites
-
-- `Floor/Highlight.cel` and `Floor/SpirePad.Cel`, loaded at `0x014b4c` and
-  `0x03238c` — small overlays drawn on top of the ground. Not a format, just
-  unread call sites.
-- The arena floor grids: `Fly/FlyFloorGrid.cel`, `Loki/LokiFloorGrid.cel`,
-  `Loki/AllFloorPatterns.%d`.
-- `Perfect/Music/*.music` needs no work — it is plain uncompressed AIFF, mono
-  16-bit at 44.1 kHz.
-
-## 3. Code map, wider
-
-- **Name the remaining 104 folio vector slots.** Every one in both images is
-  attributed now — in `p`: 46 audio, 23 Kernel, 22 Graphics, 10 File, 8
-  Operamath — and `swiscan.py --sites` lists each with the wrapper that calls
-  it. Five are named, `LookupItem` being the newest. The Graphics folio's 22 are the CEL engine, the single
-  largest piece of work in any port; the Kernel folio's 23 are the cheapest,
-  since slot −56 is already pinned as the block copy.
-- **The DSP instruction set.** `tools/dsp.py` reads everything around the
-  code and not one word of the code itself: 1,950 sixteen-bit instructions
-  across the 64 files, of which a port needs the 21 named instruments'
-  worth. The relocation mask (`0x00020a00` on 519 of 668 sites,
-  `0x00010a00` on 128) says which field of an instruction word takes an
-  address, so it is the natural way in. `directout` is eight words and does
-  almost nothing — start there.
-- **The knob frequency hint.** Two words at `+0x38` of a `DKNB` record,
-  non-zero on exactly fourteen knobs and always an oscillator's `Frequency`:
-  3, or 4 with a second word of 8 on the two `_lfo` variants, or −1 on
-  `pulse_lfo`. It is the hertz-to-phase-increment rule and the files alone do
-  not give it.
-- **Name the remaining kernel/audio SWIs.** Seven are identified in
-  [docs/09](docs/09-os-surface.md); the rest have call sites listed and need
-  one context read each. `1:5` is the warning: it was named from the company
-  it kept and it was wrong. Read the arguments.
-- **The library/game split is answered as far as the disc allows**, and
-  [docs/15](docs/15-library-and-game.md) says where the wall is. 71 functions
-  are proved library by exact shape match against the 38 executables on the
-  disc that carry no Immercenary code. Do **not** spend another session
-  pushing that number: the corpus links the C runtime and folio glue only,
-  and nothing here links the audio, Graphics, DataStream or Cinepak libraries
-  without game code beside it. `CinepakSubroutine` looks like the corpus you
-  want and is disqualified — its strings are `$Perfect/film/…`.
-  What *is* still open is the 24 functions in the weakest tier (in `p`,
-  `CinepakSubroutine` and `SpeechSubroutine` alike, touching no game string):
-  one context read each says whether they are the SDK's or Immercenary's own
-  utility layer. `SpeechSubroutine` is read now
-  ([docs/16](docs/16-speech-and-doa.md)), so those 26 shared shapes can be
-  looked at with their callers in view rather than blind.
-- ~~**356 functions still have no direct caller.**~~ Answered in
-  [docs/21](docs/21-the-call-graph.md): there is no dispatch mechanism, and
-  126 of them are dead code. What is left of the item is small and optional —
-  the 41 `p`-only dead functions are a list of what the developers cut, and
-  two of them are named tools. Nothing in it blocks a port.
-- Feed named functions back into `docs/06-code-map.md`, not into the symbol
-  file: `tools/symbols.py` reads the doc, so the doc stays the authority. Put
-  the **name first** in the description column, or the harvester takes the
-  leading word as the name — and keep the description in the **second**
-  column, or it is not harvested at all.
-
-## 4. Loose ends worth an hour each
-
-- **`CinepakSubroutine`'s subsystem map is closed** — every entry in it is
-  read ([docs/17](docs/17-the-front-end.md)). What is left there is `main`
-  itself at `0x9a4`, the state machine that sequences logo, title, date
-  stamps, menu, stats and films, and the Cinepak player at `0x2368`. Neither
-  is a format; both are a port's control flow.
-- **Name Kernel SWI `1:17`.** Three call sites in three programs, no
-  arguments, and the shell treats its result as six coin flips
-  ([docs/09](docs/09-os-surface.md)). Everything about it says random source
-  and nothing proves it.
-- ~~**`0x006128`, `MoverThink`'s third deadline**~~ is read: it is
-  `MoverShoot`, and reading `p1e` `0x0198f4` first is what made it quick, for
-  the third time running. `0x006ac8`, `SpawnShot`'s other caller, is read too
-  -- it is `CrowdAim`. **There is no unread routine left in the mover loop.**
-  What is left of the *shot* is `ResolveHit`'s thirteen arms at `0x00bff0`.
-- **`Floor/SpirePad.Cel`, loaded at `0x03238c`**, and `0x01a9c4`, called from
-  `DrawItemSpawn`, are the *drawn* half of the DOA field
-  ([27](docs/27-the-doa-field.md)): floor tile 13 is the pad and `0x01a9c4`
-  draws the spire on it, asking `0x021aec` about the city's power while it
-  does. Neither renderer draws either. This is no longer a loose "small unread
-  call site" — it has a subject.
-- **Bit 12 of a DOA field cell word.** `0x01a3bc` clears it on every live cell
-  every time `BuildCellList` runs and nothing read so far tests it.
-- **`p1e` `0x01aa40`, 2,876 bytes, one caller**, is now the largest unread
-  function in either image, and `0x01a1a4`, `0x01a4f8` and `0x0194b4` sit
-  beside it in the Perfect One's behaviour band. ~~The two-bit phase at mover
-  `+0x18` bits 24-25~~ is answered: it is the **gait**, and `0x00bdf0` spends
-  0, a half, one or one and a half of the mover's base rate on it
-  ([25](docs/25-where-the-movers-are.md)). So `0x01b9d8` moving the mover on
-  each change is the Perfect One changing pace, not changing phase.
-- **The three per-form constants** `0x88b87`, `0xafc87`, `0xd6d87` and the
-  eight-byte table at `p1e` `0x065b84` beside them. `p` `0x03f658` packs one
-  of them into a request word at `[0x58f74 + 0x50]`; nothing says yet what
-  consumes it.
-
-## Notes to self
-
-- **When a table is one entry longer than it needs to be, that is the
-  interpolator asking for room.** `ATan2Fine`'s table is 257 entries and the
-  258th is a copy of the 257th. It looks like padding and it is not: the
-  interpolation reads `T[i]` and `T[i + 1]`, and `i` reaches 256 exactly when
-  `min == max`. The duplicate is multiplied by a weight of zero every time it
-  is read. A port that ships 257 words and stops walks off the end once every
-  time a rithm faces a perfect diagonal.
-- **A jump table with nineteen identical arms has the interesting ones in the
-  two that differ.** `MoverAim` dispatches on the character id into nineteen
-  branches and seventeen of them go to the same address. It would have been
-  easy to read the default and move on -- and the two exceptions are Medusa's
-  encounter aim and, in arm 0, the entire overworld crowd, which does not use
-  `MoverAim`'s target logic at all. Read the odd arms of a jump table first;
-  the default is the part you can infer.
-
-- **Tabulating a switch is not transcribing it.** `docs/26` §4 and §5 read
-  all thirty arms of `MoverEnterState` and `MoverStateDone` and wrote them
-  down as two tables. Fifteen of the fifteen rows in §4 survived being
-  executed; three of §5's did not, and every one of the three failed the same
-  way — two arms that *look* like one line of prose turned out to be four
-  instructions apart. The patrol swaps one axis a leg and not the pair; state
-  5 stores the `r0` that was zeroed at the top of the routine and state 12
-  stores the `mvn r0, #0` one instruction above the shared store. Reading a
-  jump table tells you which arms exist. Only running them tells you what
-  they write.
-- **A table in the BSS has a writer somewhere, and it is worth ten minutes
-  to find it.** `0x060170` was written down as "the patrol rectangle out of
-  `PerfectMovers.B3D`" because the numbers it *would* hold were plausible and
-  the file was right there. `armxref -a` says three sites touch it and none
-  of them writes it — which is the whole clue: the writer reaches it through
-  a base register, and `litrefs` on the neighbourhood finds it in one query.
-  It turned out to be 128 hand-assembled constants behind nine flag bits.
-
-- **A state the transcription never leaves is a state the game may never
-  enter.** `docs/25` found that `MoverAim`, `TurnMover` and `MoverEnterState`
-  all special-case `0x40`, transcribed all three correctly, and concluded that
-  `0x40` was therefore the state the overworld lives in. It is the opposite:
-  three routines special-case it *because* it is an exception, and one
-  instruction in 90,000 puts a rithm there. Before deciding a state is the
-  default, grep for what **writes** it, and check what the allocator leaves
-  behind — `NewMover` memsets 0x90 bytes, so the default state is 0 by
-  construction and no instruction has to say so.
-- **A routine with two callers can still be the door to a subsystem.**
-  `0x006de8` was on the list for four sessions as "2,160 bytes, behind two
-  states that are switched off most of the time" — the least promising item
-  there was. It turned out to be the city's whole DOA economy, six more
-  routines, a 256-word table and the mechanic the printed guide describes as
-  the blue spires. Size and caller count say how hard something is to read,
-  not how much is behind it.
-- **A field named from one reader is named from a guess.** `+0x75` was "an
-  animation slot" because it looked like one beside `+0x74`. Two instructions
-  read it in the whole image and neither draws anything: it is an arrival
-  radius. Grep the readers before naming a field, not only the writers.
-- **"Nothing writes this field" is a claim about your grep, not about the
-  game.** `docs/25` said the mover's `+0x34` was written only by `NewMover`,
-  which zeroes it, and built a conclusion on it — that a rithm cannot animate.
-  `MoverStep` writes it, one instruction, in a function nobody had read.
-  Before writing *nothing writes X*, grep the whole disassembly for the store
-  by offset, not the functions you think are involved.
-- **Truncation is not flooring, and half the world has a negative
-  coordinate.** `(int)x` and `x >> 16` agree on the whole right-hand half of
-  Perfect and differ by one unit on the left. It cost 379 of 20,000 walk-test
-  strides looking like a collision bug that was not there. The game floors
-  everywhere, because ARM has no truncating shift.
-- **A constant that looks like a state pair may belong to one character.**
-  `0xe288e288` against `0x1f001f00` read for three sessions as "the mover's
-  two translucency states". Both are written under `teq r7, #0xc` — the
-  Chameleon and nobody else. Read the branch *above* the interesting store
-  before naming what it is for.
-
-- **A filename generator run backwards names the dead files.** The rule in
-  `LoadCharacterAnims` produces 67 names and all 67 are on the disc; asking
-  which files it can *never* produce left exactly three, and two of them say
-  Medusa used to be a lieutenant. Both directions are worth running.
-- **A shipped path's case is not the disc's.** The code asks for
-  `Tesla/Tesla.stand.anim` and the disc holds `tesla.stand.anim`. If a name
-  does not resolve, fold the case before doubting the rule — and write down
-  that the folio folds it, because a port on Linux will not.
-
-- **Look at the art.** Fifteen sessions of disassembly could not say what an
-  item spawn id meant; decoding the 28 cel pairs and putting them in a contact
-  sheet answered it in one glance — trees and road signs, not weapons. When a
-  table's *meaning* is the open question and the table points at pixels,
-  render the pixels first.
-- **Check what a helper returns before reading its callers.** `RandomBelow`
-  was written down as returning 1 .. n and it returns 0 .. n-1, so every id
-  the tree roll produces was read one too high and seven trees came out as
-  seven weapons. It is two instructions: a doubling and the top word of a
-  multiply, and neither is a modulo.
-- **A failure message names a structure better than any amount of tracing.**
-  `[0x0582cc]` had 39 references and no meaning until `0x036850`'s
-  `printf` — *"Couldn't allocate memory for the AllCels array!"* — said what
-  the 14,400 bytes were. Grep the strings of the function that *allocates* a
-  global, not of the ones that use it.
-- **Two tables of the same shape need not share an id space.** The `.anim`
-  names in `ObjectAnimById` and the cel pairs in `0x0862b8` are both indexed
-  by "object id", both start at 0, and both are filled at load time — and they
-  disagree from id 5 onwards. Nothing but a check against the art tells you.
-- **When one file's index is read into N arrays, the file is N blocks.**
-  Three reads of `0x12c4` into three globals is the whole statement that
-  `PerfectWorld.CELS` holds its mip levels 1,201 slots apart, and the sizes in
-  the file then agree 746 to 2. A size histogram alone had suggested the
-  opposite and been believed for eight sessions.
-- **One word of a struct can be a pointer in one table and four bytes in
-  another.** The flag bit that picks which table an id indexes also picks how
-  the third word is read, and the drawer reads it *both* ways and throws one
-  away. Do not assume a struct has one layout because one routine reads it.
-
-- **The reference renderer is the one that was wrong.** Props went in and the
-  pixel check fell from 400,000 to 399,210 — 790 pixels, all inside two
-  fountains. Every number matched: the same four corners to four decimals, the
-  same depth, the same fade band, the same texel, the same frame index when
-  computed by hand. The bug was that `render()` in `b3dview.py` took the
-  animation clock as a parameter named `t`, and forty lines above, the floor
-  loop assigns `t = ground.tile_at_world(...)`. By the time the props drew,
-  `t` was a tile id, so the reference was showing frame 7 of the fountain and
-  the native viewer frame 0. Two lessons. A short parameter name in a long
-  function is a bug waiting for a second author, and **when two
-  implementations disagree, do not assume the new one is the wrong one** —
-  half an hour went into instrumenting the C.
-
-- **A tool's noise looks exactly like a discovery.** "356 functions nothing
-  calls" survived eleven sessions as the last open question about the call
-  graph, and half of it was a substring test: `'lr' in ops` accepts
-  `stmdbvs lr!, {…}`, where `lr` is the base register, and the bytes of a
-  printf format string decode to exactly that. The tell was there the whole
-  time — the mystery functions clustered inside string literals, and their
-  auto-generated names in `p.sym` were the strings they sat in. Before
-  reading a surprising list, check the test that built it.
-
-- **A shared string is a hint, not a pair.**
-  `$Perfect/PerfectOne/Male/pmale.stand.anim` is referenced by exactly one
-  function in `p` and exactly one in `p1e`, and they are *different*
-  functions — `LoadDOAsysArt` in one, the Perfect One's own loader in the
-  other. Three such strings agree, so a majority vote does not save you.
-  Requiring the two bodies to still resemble each other does.
-- **The port of a thing is the cheapest way to read the thing.** `p1e`'s copy
-  of `0x004ff8` is 872 bytes smaller because the final encounter has one
-  character in it, so every arm that asks *which lieutenant is this* is gone.
-  Two sessions of staring at the 2,296-byte original had not cracked it; the
-  1,424-byte one read in twenty minutes and then the original was obvious.
-  When a routine resists, check whether the other executable has a simpler
-  copy before reading the hard one.
-
-- **A string with no direct reference is still a string somebody prints.**
-  `MESSAGES ON`, `MUSIC ON` and `SELECT AMMO` sat in `p_strings.txt` marked
-  *no direct literal reference* for eight sessions, and the four bits they
-  name went unread the whole time — because the menu reaches them through a
-  pointer table, so the reference is to the table. When `armxref -s` says a
-  string is unreferenced, look for a *second copy* of it: here the copies at
-  `0x24b98` onward are the ones the code points at.
-
-- **"Nothing writes this field" is only ever true of the images you scanned.**
-  `statsJump+0x04` was written up twice in one session as a field nobody
-  writes and an X the game never draws — and the writer was `launchme`, the
-  one image the save-game scanner does not scan. Before calling a field dead,
-  list the programs that can see it. Four of them touch this block.
-- **A function with no `bl` to it is not dead.** `0x0008c0` looked
-  unreachable; `main` loads its *address* into a register and hands it to the
-  film player as a callback. `armxref -c` counts branches only, and `-a` on
-  the same address is the check that catches it.
-- **Read the second table beside the one you already understand.** The ten
-  music names at `0x14c38` had been read a session earlier; the ten words at
-  `0x14c64` had not, and they are the streaming buffer size, which is what
-  proves the `22` in those file names is the sample rate.
-
-- **Capstone prints `pop {r3}` for `ldr r3, [sp], #-4` as well as for
-  `ldr r3, [sp], #4`** — it drops the U bit, and the two move the stack
-  pointer in opposite directions. Tracking arguments through a `sprintf` with
-  sixteen of them is off by eight bytes if you believe the mnemonic. Read
-  bit 23 of the encoding, the same way you already have to read bits 27-24 to
-  tell `bl` from `blt`.
-- **`'blt'.startswith('bl')` is True**, and it cost a scan two of eighteen
-  arms of the interlude chooser before the answer looked wrong. The note
-  about conditional `BL` was already in this file; the trap is not reading
-  the mnemonic, it is *filtering* on it.
-- **A label painted in the artwork is a string the string dump cannot see.**
-  The seven statistics counters had gone two sessions without names because
-  every search was for text in the executables. `StatsPage2.cel` had them all
-  along, and `tools/cel.py` had been able to read it since session 1. When a
-  field's meaning is missing, ask what the game *draws* next to it.
-- **A field can mean two different things in two copies of the same struct.**
-  `+0x04` is the weapon you lost per jump and the number of jumps in the
-  totals, and the tell was already in the fold: the shell increments that one
-  word instead of adding, alone among the seven.
-
-- **A register carried across a label belongs to whoever branched there.**
-  A forward scan that follows a base register is right until the first label,
-  and `0x01fd2c` proves it: `ip` holds `0x89d40` at the top and `0x5803c` at
-  every path into `0x01fee8`. The tell was not the disassembly, it was a
-  contradiction — a word store at an offset already read as two counters.
-  When a scan produces one access that argues with a reading you trust, the
-  scan is wrong, not the reading.
-- **A column written down with no meaning is a lead.** `PerfectMovers`' byte
-  `+0x1f` — 123, 64, 32, 16, 8, then 1 eleven times — sat in
-  [docs/10](docs/10-second-b3d-family.md) for two sessions as an unnamed
-  column. It is the population of each rank tier, and it was the number that
-  made the whole ladder close. Grep your own docs for the columns you could
-  not name.
-- **The player is an entry in the same table as everyone else.** Rank 255 is
-  index 0 of the top tier's bitmap, marked in use by the new-game path like
-  any rithm. Looking for a separate "player" field would have missed it.
-- **An array can start on purpose inside another field.** `+0x9c` is a flags
-  word and `+0x9c + 4*type` is a population count, because type 0 has no
-  count and the compiler was told so. A field map that assumes disjointness
-  would have called one of them a bug.
-- **Two blocks of identical size are one struct twice.** 28 bytes at `+0x24`
-  and 28 at `+0x40`, and the proof was a routine reading the same 16-bit
-  counter out of both and adding them — not the sizes.
-- **A save file need not have a format.** This one is the live struct, sent
-  as-is. Before reverse-engineering a serialiser, check whether there is one.
-
-- `armxref.py` must handle both literal pools **and** `add rD, pc, #imm`,
-  including ARM rotated immediates printed by Capstone as `#imm, #rot`.
-  Forgetting the rotation silently loses most string references.
-- `-S tools/p.sym` makes a disassembly far easier to read; build it first.
-- Capstone spells a conditional `BL` `bleq`/`bllt`, which the mnemonic alone
-  cannot tell from the plain branch `blt`. Read bits 27-24 of the encoding.
-- A literal pool word decodes as an instruction under a linear sweep, and one
-  starting `0x?B` looks like a `BL` to nowhere. Filter targets by the code
-  range or the call graph fills with ghosts.
-- **A three-instruction `ldr`/`ldr`/`ldr pc` run is a folio thunk, not part of
-  the function before it.** Neither `func_of` nor a `bl`-target scan sees the
-  second and later thunks of a run, and `0x04d8f8` — the "general `MapCel`"
-  that looked like an unread function for two sessions — is one of them.
-- **A hand-written routine may use a register the caller left set.**
-  `0x056ea8` reads `r4` before writing it; only `0x056e60` can call it. A
-  cross-referencer will happily list it as a function.
-- The Opera FS gotcha: multi-block directories use consecutive LBAs, and
-  `next`/`prev` in the block header are indices inside the extent, not LBAs.
-- `.img` files are frame-buffer dumps, not rasters. De-interleave before
-  looking at them — and the Cinepak renderer shows why: it pairs pixels
-  *vertically* in a word, two write pointers half a scanline apart.
-- The CEL `WOFFSET` field moves with bit depth: bits 16-25 at bpp >= 8, bits
-  24-31 below.
-- **CEL pixel data is MSB first.** The `.Maps` read the right way round give a
-  clean city plan; read LSB first every diagonal shatters into four-pixel
-  sawteeth. That is the fastest way to tell a wrong bit order from a wrong
-  stride.
-- When a length rule "fits" the data, check it against the code anyway. The
-  section A rule `N = len(template) - 10` was a fit that happened to be exactly
-  right; the section C `sub = 2` rule was a fit that was wrong, and that is
-  where the 13 unwalked cells were hiding the whole time.
-- Conditions are the other trap. `bhs` is carry **set**; reading it as "clear"
-  turned the Cinepak-style tail of the font decoder inside out for an hour.
-  When a decode almost works, re-read the branch senses before re-reading the
-  data.
-- **An anchor that refuses to match is worth more than one that does.**
-  `memcpy` and `printf` failed the library check, and both failures were
-  right: one is a folio thunk and the other a two-instruction prologue. Two
-  documented "functions" were wrong. Explain a failing check before relaxing
-  it.
-- **A "last unread format" can turn out not to be the game's.** The 64
-  `.dsp` files are the stock Portfolio instrument library, shipped whole
-  because libraries ship whole. Reading the format was still worth it, but
-  the answer a port needed was *which 21 of them the game names*, not what
-  the other 43 do. Ask which question the format is being read to answer.
-- **A decoder that never computes anything is a lookup table.** When ported
-  code reads a table where the reference implementation does arithmetic, the
-  table is not just a speed trick: it is where the platform's own quirks got
-  folded in. Immercenary's Cinepak hides a per-component ordered dither in
-  one, and nothing in the decoder itself hints at it.
-- **A pointer at a string is not a string the scanner found.** A "maximal run
-  of printable bytes" is keyed where the run starts, which is not where the
-  pointer points if the padding before it happens to be printable. Read a C
-  string at the pointer instead. Two folio names hid behind this for two
-  sessions.
-- **The SWI next to a call is not the call.** `1:5` sat in every folio opener
-  and got written down as `FindNamedItem` because it was the only SWI in
-  sight. The real lookup was a `bl` to a wrapper two instructions earlier,
-  because it takes a tag list and needed one. When a routine's name comes
-  from *proximity*, check what the arguments are.
-- **A number in one file that predicts another file is the best check there
-  is.** `SpeakLine`'s seek arithmetic is three instructions in a program that
-  never opens `SpeechStream`; the stream's own marker table agreed with it on
-  six speakers out of seven, line for line. That is worth more than any
-  amount of internal consistency — and the seventh disagreement was a real
-  finding, not a bug in the reading.
-- **Shipped data can be wrong and the game still works.** A duplicate rule
-  that can never fire, a rule out of sort order, a switch with no arm for a
-  phoneme the table uses 459 times, two lines of dialogue with no audio. Do
-  not "fix" the reading when the data looks wrong: check whether the wrongness
-  is reachable, then write it down.
-- **Two data columns that are always in step means the code reads one.** The
-  DOA answer table has a byte per question, and the second is the first plus
-  one in all 185 live pairs — because `0x2258` never reads it, it adds the
-  question index. If a redundancy holds with no exceptions, look for the code
-  that exploits it rather than the code that maintains it.
-- **A file nothing names is as interesting as a name with no file.**
-  `silence.music` is on the disc and no executable mentions it, while eight
-  of the ten names in the music table have no file. Grep both directions.
-- **The smallest executable can hold the architecture.** `launchme` is 12 KiB
-  and almost all glue, but five of its strings lay out the entire launch
-  chain — front end, game, encounter, and who creates the message port `p`
-  goes looking for. Read the small ones early.
-- **Do not carry a convention across two programs without checking.** Both
-  subroutine programs take a selector in `argv[1]`, so `argv[2]` looked like
-  the same callback in both. It is not: the speech program calls home through
-  it, the front end stores 512 bytes of game state at it. One `ldr pc,
-  [global]` scan settles which.
-- **A fixed-point routine can be deliberately wrong.** Do not assume a
-  multiply is a multiply: check where its intermediate overflows, then check
-  whether every call site stays inside that bound. Twice in this module the
-  bound turned out to be a design decision — the reciprocal table's floor of
-  2.0 is what makes `MulSF16` exact.
-
-- **A hinted symbol names a function, not a string.** `tools/symbols.py`
-  labels a function `s_<its longest string>`, so `0000d754
-  s_DOASys_JuniorSpire_far_scel` means *the routine at `0xd754` mentions that
-  filename* — the string itself is at `0xdc44`. Reading it as a string
-  address wasted the first ten minutes of this session on a tooling bug that
-  was not there. The file's own header says so; read it.
-- **Two columns of one table agreeing is worth more than either.** The
-  DOAsys scale tables have a width column and a height column, and separately
-  the routine lifts exactly one id off the ground. The widest of the sixteen
-  and the lifted one are the same id, and that id is called *Fly*. Neither
-  number was recorded to identify anybody.
-- **"The controller sets it with C" was one block out of three.** The
-  set/clear pair for the side bit is copied verbatim under each fire button.
-  Reading the first one and stopping produced a true sentence about a third
-  of the mechanism. When a block ends by ORing one bit into an accumulator,
-  look for the other bits of that accumulator before believing the block is
-  alone.
-- **A boolean helper can be named backwards.** `0x3e7b0` returns **1 when
-  the lieutenant's bit is clear**, and the caller keeps the ids it answers
-  `0` for. Naming it from the caller's intent — "alive" — inverts it. Check
-  the polarity against a second caller and against a *value* you already
-  know: a new game writes `0xff8`, all nine bits set, when all nine are
-  alive.
-- **Two globals can be one array and its count.** `0x068cdc + 0x798` and
-  `0x060cdc + 0x879c` are adjacent words, and the second is the array the
-  first counts. A literal-pool cross-referencer lists them as unrelated
-  because the base registers differ. When two globals are always touched in
-  the same routine, add their offsets out.
-
-- **A string table can hide behind the string dump's minimum length.** The
-  nineteen character names at `0x058640` had been on the disc for nine
-  sessions. `p_strings.txt` keeps runs of six printable bytes or more, and
-  *Goner*, *Tork*, *Venus*, *David*, *Tesla*, *Silva*, *Fly*, *Loki* and
-  *Raven* are all shorter — so the block read as six scattered names with the
-  pattern filtered out. When a set of related names is half-missing from a
-  dump, lower the threshold and look again.
-- **Do not derive an order you can read.** Ids 1-5 got written down backwards
-  this session because the rank-ladder table lists its tiers top-down and
-  that felt like the id order. `speech.py --doa` had been printing
-  *"Picasso, id 1"* since session 7, and `b3d2.py --names` had the same list
-  from the file. Two tools in the repo already knew.
-- **A filename generator is a completeness checker.** Once you know the code
-  builds `prefix + name[i] + suffix`, you can ask the disc which of those
-  files exist — and the answer here was one missing and one unreachable, in
-  the same directory, in opposite directions. A hardcoded name list gives you
-  nothing to check.
-
-- **The bound you are looking for may not be where the culling is.** Two
-  sessions assumed the per-cell cull was what kept `ProjectPoint` inside its
-  table. It is not — the cull submits records 768 units out, and the real
-  bound is three instructions in each *face builder*, a comparison against
-  the mean of two corner depths. Grep for the comparison, not for the cull.
-- **Count the callers, then ask which of them can see a new value.** Eight
-  functions call `ProjectFace` and only six can introduce a depth, because
-  `ProjectPoint` short-circuits on corners already done. Splitting callers by
-  *whether they call `GatherCorners`* turned an eight-way muddle into a clean
-  six-and-two, and it is why "five of six have the gate" is a statement worth
-  making.
-- **A constant that is out of line with its eleven siblings is the answer.**
-  Twelve `SetDrawDistance` calls: ten 250, two 200, one **600**. The one that
-  does not fit is the one that matters, and it named the encounter before any
-  geometry was measured.
-- **Threads hide the last `bl`.** Four encounter drivers reach no gated face
-  builder at all, because their frame loops are entered through addresses
-  handed to `CreateThread`. `armxref -c` cannot follow that, and the fix is
-  the same one from session 9: look for the *address* being loaded, not the
-  branch.
