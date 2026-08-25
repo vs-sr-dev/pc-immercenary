@@ -17,7 +17,7 @@ only shipping build is the 3DO ARM6 executable on the retail CD.
 |---|---|
 | `native/` | A walkable viewer of the overworld, props, item spawns and *walking* rithms included: SDL2, a software span rasteriser, ~84 fps at 960x600 with 1,594 sprites in the world, the game's own radar-map collision, and pixel-identical to the Python reference renderer over a swept grid of cameras and mover tick counts |
 | `tools/` | Opera (3DO) filesystem reader, CEL/anim decoder, CEL bank reader, B3D world parser, ground tile map reader, OBJ exporter, textured software renderer, font decoder, DataStream demuxer with Cinepak and SDX2 decoders, HUD radar map decoder, ARM cross-referencer and call-graph reader, symbol-file builder, OS-surface scanner, DSP instrument reader, library-versus-game classifier, the hand-written ARM math module reimplemented and self-checking, the 512-byte game state read out of the code, a function-level pairing of the two game executables, a reachability pass over the call graph, the placed-prop reader, a reimplementation of the three mover spawners, the radar-map probe they place against and the walk they then do, a scene packer for the native viewer and a frame differ |
-| `docs/` | Findings: disc layout, file formats, executables, roadmap, B3D format, code map, CEL banks, the ground, the OS surface, the second B3D family, the fonts, the DataStream, the HUD maps, the DSP instruments, library versus game code, the DOA system and its lip sync, the front end, the save game, the DOAsys spire, the final encounter, the call graph, the props, the item spawns, the cast, where the movers are, the decision |
+| `docs/` | Findings: disc layout, file formats, executables, roadmap, B3D format, code map, CEL banks, the ground, the OS surface, the second B3D family, the fonts, the DataStream, the HUD maps, the DSP instruments, library versus game code, the DOA system and its lip sync, the front end, the save game, the DOAsys spire, the final encounter, the call graph, the props, the item spawns, the cast, where the movers are, the decision, the DOA field |
 
 ## Quick start
 
@@ -51,6 +51,7 @@ python tools/behave.py --verify
 python tools/behave.py --table
 python tools/behave.py --states
 python tools/behave.py --poll
+python tools/behave.py --field
 
 # The cast: which file each character's animations come from, and how big
 python tools/movers.py --verify
@@ -252,6 +253,29 @@ Early, but moving. Nothing is playable yet.
   the record's own easting, the canopy widened by a second roll. It had been
   written down as a random weapon spawn on the strength of an off-by-one in
   `RandomBelow`. [23](docs/23-the-item-spawns.md).
+- **The city is a resource, and the rithms eat it.** The last unread routine
+  of the mover band, `0x006de8`, is not a mover routine at all: it is a rithm
+  walking to the nearest cell of a **DOA field** the player drinks from too.
+  One 16-bit word per cell of the same 16 x 16 grid everything else in the
+  game is cut on — 207 of the 256 carry a source, and two bits say whether it
+  feeds Defense, Offense, both at half rate, or **drains all three**. A
+  deterministic sweep lays them out with an extra step at the end of every row,
+  which shears the three kinds diagonally so there is one of each within a
+  couple of cells of anywhere. You gain from one by standing within sixteen
+  units of a 256-unit lattice corner in both axes, at 0.03 plus a
+  thousandth of your own ceiling a frame, and you spend one of the cell's 500
+  frames of charge doing it. Inside 135 units of the world origin the DOAsys
+  heals you regardless, which is the other end of a rule the save-game read
+  already knew. The whole field is on a clock: a level 0 to 7 in `[0x058bb4]`
+  walks down and back up, printing *AMMO ALGORITHMS OFF* and *BACK ON-LINE*,
+  and at zero **every source in the city inverts into a drain** — which is
+  exactly what holds mover states 2 and 3 at −128 the rest of the time. The
+  nine points the routine falls back on when nothing is loaded check out
+  against a different file on the disc: eight of them are `sub = 6` records of
+  the world file to the unit — the outermost **spires** — and the ninth is the
+  middle of the DOAsys' own ring of sixteen. The guide, which had no way of
+  knowing: *"Most bosses have blue spires near them that you can use."*
+  [27](docs/27-the-doa-field.md).
 - **A rithm's next move is a weighted vote, and it is on a wall clock.**
   `MoverDecide` at `0x004ff8` runs once a second per rithm and rebuilds
   thirteen scores from scratch every time: a row of thirteen hand-tuned bytes

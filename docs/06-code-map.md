@@ -179,6 +179,21 @@ every reference beyond 255 bytes.
 | `0x00a608` | **SetMoverHeading(mover, angle)** — `+0x7c` *and* `+0x24` at once, then `velocity = MulSF16(step, Cos/Sin(angle))` where `step` is the animation record's `+0x14` | `NewMover`'s last call |
 | `0x007658` | **MoverStep(mover)** — one stride per `step` the accumulator has paid for: the phase byte at `+0x34` counts up and masks to three bits, and each axis is offered to `MapProbe` and `InsideWorld` separately. A refused axis turns the mover 11.25 degrees, both refused 45 | `0x0079d8` truncates the heading to a whole unit |
 | `0x00652c` | **InsideWorld(x, y)** — `ClampToWorld`'s four words asked as a question | `0x058434`..`0x058440` |
+| `0x006de8` | **NearestSource(mover, kind)** — a rithm walking to the city's DOA field: the nearest cell of the wanted kind in the resident 5 x 5 window, four buckets of eight sorted by octagonal distance, against nine hard-coded anchors — eight of which are `sub = 6` spires of the world file and the ninth the DOAsys. Silva and, in an arena, Tesla have their own points | 2,160 bytes, no `p1e` twin. See [27](27-the-doa-field.md) |
+| `0x01175c` | **DrinkFromField(who)** — once a frame for every mover and for you: 0.25 of D and of O inside 135 units of the origin, otherwise the cell under you if you are within 16 units of a lattice corner in both axes. Returns −1 when that cell is dead or spent | `MoverFrame` and `WorldFrame` |
+| `0x011938` | **GainDOA(who, kind, amount)** — kind 0 adds to Defense and Offense, 1 to Defense, 2 to Offense, 3 takes `amount` off all three. Every gain clamps at the recipient's own maximum | four arms |
+| `0x01a1cc` | **SeedDOAField(mode)** — mode 0 lays the field out (charge 10, 20 … 500 wrapping, kind cycling 0, 1, 2 with one extra step a row, which shears it diagonally); mode 1 turns every live cell into a drain; mode 2 re-sweeps the kinds | 207 live cells of 256 |
+| `0x01a590` | **RefillDOAField** — 500 frames of charge into every live cell | `orr ip, lr, #0x1f4` |
+| `0x01a478` | **FieldCharge(cell)** — bits 0-8 of the cell word, or 0 when bit 15 is clear | |
+| `0x01a4c4` | **FieldKind(cell)** — bits 13-14, or 3 when bit 15 is clear | |
+| `0x01a510` | **CellOfPoint(x, y)** — a 16.16 world point to a cell index, or −1 | `(maxX − x) >> 8` and `(y − minY) >> 8` |
+| `0x01a5ec` | **SpendCharge(col, row)** — one frame off a cell, floored at zero | |
+| `0x01a64c` | **FieldWouldHelp(mover)** — would the cell under this thing do it any good, given what it is short of | `0` means the player |
+| `0x021734` | **CityPowerTick** — the level in bits 28-31 of `[0x058bb4]` walking 7 → 0 → 7 on a timer, printing *AMMO ALGORITHMS OFF* at the bottom and *BACK ON-LINE* on the way up, and inverting or refilling the whole field as it goes | 960, 14,400 and 71,488-tick periods |
+| `0x021b1c` | **SetCityPower(level, mode)** — level 0-7 into bits 28-31 and a direction into 25-26; anything out of range parks it at 7 with a random deadline | a new game starts here |
+| `0x021ac4` | **CityPowerLevel** — the level itself | `BuildVisibleFaces` draws with it |
+| `0x021ad4` | **CityPowerOff** — the level is zero, so every source in the field is a drain | what holds mover states 2 and 3 at −128 |
+| `0x00fa60` | **NearestUseful(...)** — floor tile 13 under the player and a cell that would help, else the nearest mover | `Floor/SpirePad.Cel` is that tile |
 | `0x00ac88` | **FreeMover(mover)** — unlinks and releases; 20 call sites | `0x04e438` |
 | `0x00aec0` | **MoverSound(entry)** — reads the mover's point slot and tail-calls the positional sound at `0x0274b0` | three instructions |
 | `0x010ca8` | **MovePlayer(buttons)** — measures the frame into `[0x58bac]`, clamps it to 1..10 ticks, turns, advances the head-bob phase, and moves the camera one tick at a time against `MapProbe`. See *How the player moves* below | called from `EncounterFrame` |

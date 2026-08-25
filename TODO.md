@@ -35,6 +35,29 @@ open-ended research.
   `0x004a88`, `PickDestination` `0x0048c0`, `NearestMover` `0x0049b8`,
   `PickCompanion` `0x006c00`, `OctDistance` `0x004870`, `LineBlocked`
   `0x04439c` and `ScrambleMover` `0x04603c`.
+- **And `0x006de8`, the last unread routine of the mover band, is a whole
+  subsystem.** It is a rithm walking to the nearest cell of the city's **DOA
+  field**: `0x060adc`, one 16-bit word per cell of the 16 x 16 grid, 207
+  sources of 256, two bits saying whether the cell feeds Defense, Offense,
+  both at half rate or **drains all three**, and nine bits of charge that you
+  and the rithms spend out of the same pool. `0x01175c` is the drink, once a
+  frame for every mover and for you; the DOAsys is a 135-unit disc at the
+  origin that heals regardless. The field is on a clock — a level 0 to 7 in
+  `[0x058bb4]` walking down and back up, *AMMO ALGORITHMS OFF* and *BACK
+  ON-LINE* — and **at zero every source inverts into a drain**, which is what
+  holds mover states 2 and 3 at −128 the rest of the time. `docs/26` guessed
+  "only while the world warps" and that is corrected.
+  [27](docs/27-the-doa-field.md), and `behave.py --field --verify` (57 checks).
+- **The nine anchors check out against a different file.** `0x007b90`'s eight
+  non-zero points are `sub = 6` records of `CondensedPerfectWorld.B3D` to the
+  unit — the outermost spires — and the ninth is the middle of the DOAsys
+  ring. `p1e` has no counterpart to `0x006de8` at all (best shape similarity
+  0.09 of 1,066 functions): the final encounter has no city to feed on.
+- **Fifteen more routines named**, all of them the field or the clock over it:
+  `NearestSource`, `DrinkFromField`, `GainDOA`, `SeedDOAField`,
+  `RefillDOAField`, `FieldCharge`, `FieldKind`, `CellOfPoint`, `SpendCharge`,
+  `FieldWouldHelp`, `CityPowerTick`, `SetCityPower`, `CityPowerLevel`,
+  `CityPowerOff`, `NearestUseful`.
 
 ## Done in session 17
 
@@ -1037,6 +1060,9 @@ What is still missing:
   - **`MoverStateDone`, `0x004a88`**, 1,392 bytes, read but not transcribed:
     a fifteen-arm switch on the same state byte that forces an early
     re-decide.
+  - **The DOA field itself** — `field_seed`, `field_off`, `field_on` and
+    `nearest_source` are in `behave.py` already, so states 2 and 3 need only
+    `DrinkFromField` beside them to close.
   - Then `MoverAim`'s target arm (`0x00607c`, four cases on `+0x70`), which is
     read, and `TurnMover`'s gradual arm, which is already in both renderers
     and has never been exercised.
@@ -1133,12 +1159,18 @@ What is still missing:
   arguments, and the shell treats its result as six coin flips
   ([docs/09](docs/09-os-surface.md)). Everything about it says random source
   and nothing proves it.
-- **`0x006128`, `MoverThink`'s third deadline**, 464 bytes, and `p1e`
-  `0x0198f4` is its 296-byte counterpart at similarity 0.60. Read the small
-  one first — that is what worked on `0x004ff8`.
-- **`0x006de8`, 2,160 bytes**, behind states 2 and 3, is the only routine
-  either half of the state machine reaches that is still unread. It is
-  unreachable while the world is not warping.
+- **`0x006128`, `MoverThink`'s third deadline**, 464 bytes, is now the last
+  unread routine of the mover loop. `p1e` `0x0198f4` is its 296-byte
+  counterpart at similarity 0.60 — read the small one first, which is what
+  worked on `0x004ff8` and what was *not* available for `0x006de8`.
+- **`Floor/SpirePad.Cel`, loaded at `0x03238c`**, and `0x01a9c4`, called from
+  `DrawItemSpawn`, are the *drawn* half of the DOA field
+  ([27](docs/27-the-doa-field.md)): floor tile 13 is the pad and `0x01a9c4`
+  draws the spire on it, asking `0x021aec` about the city's power while it
+  does. Neither renderer draws either. This is no longer a loose "small unread
+  call site" — it has a subject.
+- **Bit 12 of a DOA field cell word.** `0x01a3bc` clears it on every live cell
+  every time `BuildCellList` runs and nothing read so far tests it.
 - **`p1e` `0x01aa40`, 2,876 bytes, one caller**, is now the largest unread
   function in either image, and `0x01a1a4`, `0x01a4f8` and `0x0194b4` sit
   beside it in the Perfect One's behaviour band. ~~The two-bit phase at mover
@@ -1162,6 +1194,13 @@ What is still missing:
   default, grep for what **writes** it, and check what the allocator leaves
   behind — `NewMover` memsets 0x90 bytes, so the default state is 0 by
   construction and no instruction has to say so.
+- **A routine with two callers can still be the door to a subsystem.**
+  `0x006de8` was on the list for four sessions as "2,160 bytes, behind two
+  states that are switched off most of the time" — the least promising item
+  there was. It turned out to be the city's whole DOA economy, six more
+  routines, a 256-word table and the mechanic the printed guide describes as
+  the blue spires. Size and caller count say how hard something is to read,
+  not how much is behind it.
 - **A field named from one reader is named from a guess.** `+0x75` was "an
   animation slot" because it looked like one beside `+0x74`. Two instructions
   read it in the whole image and neither draws anything: it is an arrival

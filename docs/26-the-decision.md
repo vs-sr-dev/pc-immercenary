@@ -134,7 +134,7 @@ id — `add ip, r1, r1, lsl #2` then `add r1, ip, r1, lsl #3`, which is
 thirteen.
 
 ```
-              wander  rush spireA spireB  halt  mark escort chase rejoin follow patrol circle watch
+              wander  rush feed D feed O  halt  mark escort chase rejoin follow patrol circle watch
 Goner             20     0     10     30     0     0     10    30     30     30      0      0     0
 Picasso           20    30     40     30    20     0     20    20     20     30     20     10     0
 Tork              20    20     30     30    30    20     30    30     30     40     30     20    40
@@ -181,14 +181,14 @@ Silva, id 9, is the exception written into the condition by name.
 | `0x005418` | shapes 0…5 only: the playtime ramp, below |
 | `0x0054a8` | the temperament byte at `+0x42` adds ten to its own group |
 | `0x0054e4` | a mate at `+0x8c` is +50 *rejoin*; a mate of −1 is +100 *chase* |
-| `0x005524` | `spireA += 128 − D`, `spireB += 128 − O`, `halt += 64 − A` |
+| `0x005524` | `feed D += 128 − D`, `feed O += 128 − O`, `halt += 64 − A` |
 | `0x005558` | the chase term proper, below, and the only clamp in the routine |
 | `0x005690` | if it can see you and is already rushing, marking or watching, +10 to that |
 | `0x0056cc` | inside its own sight range, +20 chase |
 | `0x005708` | your Offense against its, below |
 | `0x005774` | inertia: whatever it is doing now gets +10, except *chase*, which gets half its own table entry |
 | `0x0057ec` | shapes 0…5: a shape ranked above your tier takes −96 chase |
-| `0x00581c` | *spireA* and *spireB* are −128 unless the world is warping; Raven's *chase* is −128 |
+| `0x00581c` | *feed D* and *feed O* are −128 while the city's power level is zero ([27](27-the-doa-field.md)); Raven's *chase* is −128 |
 
 **The chase term.** Everything above is preamble to `w[7]`:
 
@@ -311,8 +311,8 @@ transcribed as they stand. `0x0058b8` is `moveq r1, r5`, which stores the
 is uninitialised stack. `MoverThink` always calls `MoverDecide` from the same
 depth, so on the console it holds whatever the previous call left there, and
 `behave.py` keeps a candidate array warm between calls for the same reason.
-Both quirks only fire when *spireA* is tied for the win, which needs the world
-to be warping.
+Both quirks only fire when *feed D* is tied for the win, which needs the
+city's power level to be above zero.
 
 The return value is `state | (weight << 16)`; `MoverThink` uses the low half
 and throws the score away.
@@ -329,8 +329,8 @@ the mover's base rate.
 |---|---|---|---|---|---|
 | `0x00` | wander | a point 250…349 units off its own | the pair | 16 | 1 |
 | `0x01` | rush | a point 256 off you, plus 0…99 | the pair | 16 | 3 |
-| `0x02` | spire A | `0x006de8(1)` — only while the world warps | the pair | 14 | 3 |
-| `0x03` | spire B | `0x006de8(2)` — only while the world warps | the pair | 14 | 2 |
+| `0x02` | feed D | `0x006de8(1)`, the nearest Defense source ([27](27-the-doa-field.md)) | the pair | 14 | 3 |
+| `0x03` | feed O | `0x006de8(2)`, the nearest Offense source | the pair | 14 | 2 |
 | `0x04` | halt | where it already stands | the pair | 16 | 0 |
 | `0x05` | mark | a point 256 off you — and then stands | the pair | 16 | 0 |
 | `0x06` | escort | `0x006c00`'s pick | a mover | 32 | 1 |
@@ -440,7 +440,7 @@ the collision.
 
 **Full health is invisible.** All three DOA terms start at 128 and only fall,
 so a rithm at full DOA weighs its own condition at zero. It is a wounded-animal
-rule, and it pushes a hurt rithm toward *spireA*, *spireB* and *halt* — the
+rule, and it pushes a hurt rithm toward *feed D*, *feed O* and *halt* — the
 states that heal — rather than away from you.
 
 **Almost nothing runs.** Eleven of the fifteen arms set gait 0 or 1, half the
@@ -455,12 +455,12 @@ reached through the wrong *state*.
   `Walk` and `native/view.c` both transcribe the scramble, exactly, and they
   still agree bit for bit after 36,000 ticks. Turning them onto the real
   decision needs `MoverEnterState`'s other fourteen arms and `0x004a88`
-  transcribed beside it — §4 and §5 are the specification, and the only
-  routine either of them reaches that is still unread is `0x006de8`.
-- **`0x006de8`, 2,160 bytes**, behind states 2 and 3, is that routine — the
-  largest thing left in the mover band. It is unreachable while the world is
-  not warping, which is what holds the two states it serves at −128 the rest
-  of the time.
+  transcribed beside it — §4 and §5 are the specification, and every routine
+  either of them reaches is now read.
+- ~~**`0x006de8`, 2,160 bytes**, behind states 2 and 3~~ is read:
+  [27](27-the-doa-field.md). It is a rithm walking to the nearest cell of the
+  city's **DOA field**, and the two states it serves are *feeding*. Nothing
+  either §4 or §5 reaches is unread now.
 - **`0x006128`**, the third of `MoverThink`'s deadlines, is still unread — the
   last item [TODO](../TODO.md) carried on the movers before this.
 - **The byte at `+0x16`.** No instruction in `p` writes it on a mover and

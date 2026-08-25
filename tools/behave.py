@@ -46,6 +46,7 @@ See docs/26.
     python tools/behave.py --poll           # sample the vote at five ranges
 """
 import os
+import re
 import sys
 import struct
 import argparse
@@ -55,6 +56,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 IMAGE = 'extracted/p'
 MOVERS_B3D = 'extracted/Perfect/PerfectMovers.B3D'
+WORLD_B3D = 'extracted/Perfect/CondensedPerfectWorld.B3D'
 
 M32 = 0xffffffff
 
@@ -87,8 +89,8 @@ NAMES = ['Goner', 'Picasso', 'Tork', 'Kilroy', 'Venus', 'David',
 STATES = {
     0:    ('wander',   'a point 250..349 units off its own',      1, 0x10, 1),
     1:    ('rush',     'a point 256 off you, plus 0..99',         1, 0x10, 3),
-    2:    ('spire A',  '0x006de8(1) -- only while the world warps', 1, 0x0e, 3),
-    3:    ('spire B',  '0x006de8(2) -- only while the world warps', 1, 0x0e, 2),
+    2:    ('feed D',   '0x006de8(1), the nearest Defense source',  1, 0x0e, 3),
+    3:    ('feed O',   '0x006de8(2), the nearest Offense source',  1, 0x0e, 2),
     4:    ('halt',     'where it already stands',                 1, 0x10, 0),
     5:    ('mark',     'a point 256 off you -- and then stands',   1, 0x10, 0),
     6:    ('escort',   "0x006c00's pick, and it sets the state too", 6, 0x20, 1),
@@ -279,7 +281,7 @@ class Player:
         self.flags = 0                          # `[0x06bed0 + 0x78]`
         self.sight = SIGHT_BASE                 # `[0x058a40]`
         self.shot = False                       # a `0x10101010` shot in flight
-        self.warping = False                    # `0x021ad4`, the top nibble
+        self.power = 7                          # `[0x058bb4]` bits 28-31
         self.raven = 0                          # `[0x058eac]`
         self._stat = [sum(r['doa']) for r in character_records(movers)[:5]]
         self._rank = rank_thresholds(image)[1:6]
@@ -467,9 +469,9 @@ class Decider:
         if cid <= 5 and cid - 1 > tier:
             w[7] -= 0x60
 
-        # 0x00581c: the two spire states are off unless the world is in a
-        # warp, and Raven never chases.
-        if not pl.warping:
+        # 0x00581c: with the city's power at zero every source in the field
+        # is a drain, so the two feeding states are off.  See docs/27.
+        if pl.power == 0:                       # 0x021ad4
             w[2] = w[3] = -0x80
         if cid == 15:
             w[7] = -0x80
@@ -505,6 +507,174 @@ class Decider:
             return best, bestw
         return cand[rng.below(n)], bestw
 
+
+
+# ---------------------------------------------------------------------------
+# The DOA field, `0x060adc` -- what states 2 and 3 walk to
+#
+# One 16-bit word per cell of the 16 x 16 world grid.  Bit 15 says the cell
+# carries a source at all; bits 13-14 say which stat it feeds; bits 0-8 are
+# how many frames' worth is left in it.  Both you and every rithm drink from
+# the same words: `0x01175c` is the drink and `0x0006de8` is a rithm walking
+# to one.  See docs/27.
+# ---------------------------------------------------------------------------
+FIELD = 0x060adc                # 256 words, big-endian, row-major
+FIELD_ANCHORS = 0x007b90        # nine (x, y) pairs in whole world units
+FIELD_CLEAR = (0x019d98, 0x019fe8)      # where the dead cells are written
+FIELD_FULL = 500                # `0x01a590`, the charge a refill leaves
+GRID = 16
+
+FEEDS_BOTH, FEEDS_D, FEEDS_O, DRAINS = 0, 1, 2, 3
+
+
+def field_anchors(image=IMAGE):
+    """`0x007b90`: the nine points `0x006de8` falls back on.
+
+    Eight of them are `sub = 6` records of the world file -- the outermost
+    spires, one to a corner and one to an edge -- and the ninth is `(0, 0)`,
+    the middle of the DOAsys' own ring of sixteen.  They are the sources a
+    rithm can always reach, whatever the streaming window holds.
+    """
+    d = open(image, 'rb').read()
+    return [struct.unpack_from('>2i', d, FIELD_ANCHORS + i * 8)
+            for i in range(9)]
+
+
+def field_dead(image=IMAGE):
+    """The cells `0x019d98` writes zero into, straight out of the code.
+
+    `0x019d5c` fills all 256 words with `0x8000` and then a run of paired
+    `strb`s knocks a hand-written list of them back to nothing -- a cell with
+    a zero word is skipped by every routine that touches the field.
+    """
+    from armxref import Image
+    im = Image(image)
+    out = set()
+    lo, hi = FIELD_CLEAR
+    for a in range(lo, hi, 4):
+        i = im.insns.get(a)
+        if i is None or not i.mnemonic.startswith('strb'):
+            continue
+        m = re.search(r'\[r2(?:, #(0x[0-9a-f]+|\d+))?\]', i.op_str)
+        if m:
+            out.add((int(m.group(1), 0) if m.group(1) else 0) // 2)
+    return frozenset(out)
+
+
+def field_seed(image=IMAGE):
+    """`0x01a1cc(0)`: the sweep that lays the field out, once, at load.
+
+    A charge that walks 10, 20 … 500 and wraps, and a kind that cycles 0, 1,
+    2 -- with **one extra step of the kind at the end of every row**, which is
+    what shears the pattern diagonally instead of striping it.  Then two cells
+    are forced to a full kind-0 source by hand.
+    """
+    dead = field_dead(image)
+    f = [None if c in dead else [FEEDS_BOTH, 0] for c in range(GRID * GRID)]
+    kind, charge = 0, 10
+    for row in range(GRID):
+        for col in range(GRID):
+            cell = f[row * GRID + col]
+            if cell is None:
+                continue
+            cell[0], cell[1] = kind, charge
+            charge = 10 if charge + 10 > FIELD_FULL else charge + 10
+            kind = 0 if kind + 1 > 2 else kind + 1
+        kind = 0 if kind + 1 > 2 else kind + 1       # 0x01a254, once a row
+    for c in (0x82 // 2, 0x1e2 // 2):                # 0x01a26c
+        f[c] = [FEEDS_BOTH, FIELD_FULL]
+    return f
+
+
+def field_off(f):
+    """`0x01a1cc(1)`, when the city's power reaches zero: every live cell
+    keeps its charge and becomes a **drain**."""
+    for cell in f:
+        if cell is not None:
+            cell[0] = DRAINS
+
+
+def field_on(f):
+    """`0x01a590` then `0x01a1cc(2)`, when the power starts climbing again:
+    refill every live cell and re-run the kind sweep over it."""
+    kind = 0
+    for cell in f:                                   # 0x01a590
+        if cell is not None:
+            cell[1] = FIELD_FULL
+    for row in range(GRID):                          # 0x01a304
+        for col in range(GRID):
+            cell = f[row * GRID + col]
+            if cell is None:
+                continue
+            cell[0] = kind
+            kind = 0 if kind + 1 > 2 else kind + 1
+        kind = 0 if kind + 1 > 2 else kind + 1
+
+
+def cell_of_point(x, y, box):
+    """`0x011874` and `0x0107b8`: a world point to a cell of the 16 x 16 grid.
+
+    `box` is `(minX, maxY, maxX, minY)`, the four words of the `.B3D` header
+    the game keeps at `0x058434`.  The column is numbered from the **east**.
+    """
+    min_x, max_y, max_x, min_y = box
+    col = (max_x - x) >> 8
+    row = (y - min_y) >> 8
+    if not (0 <= col < GRID and 0 <= row < GRID):
+        return None
+    return row * GRID + col
+
+
+def cell_point(row, col, box):
+    """Where `0x006de8` puts a cell when it measures the distance to it: the
+    world box's own corner rounded down to the 256-unit lattice, stepped by
+    whole cells.  It is a lattice point, not the source's real position."""
+    min_x, max_y, max_x, min_y = box
+    return ((max_x >> 8 << 8) - (col << 8),
+            (max_y >> 8 << 8) - ((15 - row) << 8))
+
+
+def nearest_source(m, want, field, box, image=IMAGE):
+    """`0x006de8(mover, kind)`, the overworld arm, and the whole of what
+    states 2 and 3 mean.
+
+    Sort every live, charged cell of the resident 5 x 5 window into four
+    buckets by kind, each kept in order of octagonal distance and each at most
+    eight deep, and take the nearest of the wanted kind -- unless the nearest
+    of the nine anchors is nearer still, in which case take that.  Bucket 0
+    starts with the anchor already in it, under a fake charge of 255, which is
+    what makes the comparison at the end a comparison between two buckets.
+
+    Returns the `(x, y)` it writes into `+0x44`/`+0x46`.
+    """
+    ox, oy = m.x >> 16, m.y >> 16
+    buckets = [[], [], [], []]
+
+    best = (0x1388, None)                            # 0x007028, 5000
+    for ax, ay in field_anchors(image):
+        d = oct_dist(ox, oy, ax, ay)
+        if d < best[0]:
+            best = (d, (ax, ay))
+    if best[1] is not None:
+        buckets[0].append((best[0], best[1]))
+
+    row0 = min(max(((oy - box[3]) >> 8) - 2, 0), 11)  # 0x0070c0
+    col0 = min(max((15 - ((ox - box[0]) >> 8)) - 2, 0), 11)
+    for row in range(row0, row0 + 5):
+        for col in range(col0, col0 + 5):
+            cell = field[row * GRID + col]
+            if cell is None or cell[1] < 2:          # 0x0071d4
+                continue
+            cx, cy = cell_point(row, col, box)
+            b = buckets[cell[0]]
+            if len(b) < 8:
+                b.append((oct_dist(ox, oy, cx, cy), (cx, cy)))
+                b.sort(key=lambda e: e[0])           # the bubble sort at 0x7250
+
+    pick = buckets[want] if 1 <= want <= 3 else []
+    if pick and (not buckets[0] or pick[0][0] < buckets[0][0][0]):
+        return pick[0][1]
+    return buckets[0][0][1] if buckets[0] else (ox, oy)
 
 # ---------------------------------------------------------------------------
 # Verification
@@ -679,6 +849,97 @@ def verify(args):
           text(0x0054bc) == 'cmp r0, #4' and
           text(0x0054c0) == 'addls pc, pc, r0, lsl #2')
 
+    print('== the DOA field, 0x060adc')
+    check('0x019d5c fills all 256 words with 0x8000 before anything else',
+          text(0x019d5c) == 'mov r2, #0x8000' and text(0x019d60) == 'mov lr, #0x80'
+          and text(0x019d80) == 'cmp r1, #0x10' and text(0x019d8c) == 'cmp r0, #0x10')
+    dead = field_dead(args.image)
+    check('and a hand-written run of stores kills 49 of them',
+          len(dead) == 49, '   %d dead, %d live' % (len(dead), 256 - len(dead)))
+    check('0x01a1cc walks the charge by ten and wraps it at 500',
+          text(0x01a1ec) == 'mov lr, #0xa' and text(0x01a230) == 'add lr, lr, #0xa'
+          and text(0x01a234) == 'cmp lr, #0x1f4')
+    check('and steps the kind once a cell and once more a row',
+          text(0x01a23c) == 'add r0, r0, #1' and text(0x01a240) == 'cmp r0, #2'
+          and text(0x01a254) == 'add r0, r0, #1')
+    f = field_seed(args.image)
+    kinds = collections.Counter(c[0] for c in f if c is not None)
+    check('the sweep leaves 207 sources, near enough evenly split',
+          sum(kinds.values()) == 207 and max(kinds.values()) -
+          min(kinds.values()) <= 6,
+          '   both %d, D %d, O %d' % (kinds[0], kinds[1], kinds[2]))
+    check('two cells are forced full by hand at the end of it',
+          f[0x82 // 2] == [FEEDS_BOTH, FIELD_FULL] and
+          f[0x1e2 // 2] == [FEEDS_BOTH, FIELD_FULL])
+    g = field_seed(args.image)
+    field_off(g)
+    check('0x01a1cc(1) turns every live cell into a drain and keeps its charge',
+          all(c is None or (c[0] == DRAINS and c[1] == f[i][1])
+              for i, c in enumerate(g)))
+    field_on(g)
+    check('0x01a590 then 0x01a1cc(2) refills them all and re-sweeps the kinds',
+          all(c is None or (c[1] == FIELD_FULL and c[0] == f[i][0])
+              for i, c in enumerate(g)))
+    check('0x01a590 is where the 500 comes from',
+          text(0x01a5c0) == 'orr ip, lr, #0x1f4')
+
+    print('== the nine anchors, 0x007b90, against the world file itself')
+    anchors = field_anchors(args.image)
+    check('nine (x, y) pairs, and 0x006de8 copies all eighteen words to its '
+          'own stack',
+          len(anchors) == 9 and text(0x006e08) == 'mov ip, #6' and
+          text(0x006e0c) == 'ldmdb r4!, {r1, r2, r3}')
+    try:
+        from b3d import B3D
+        w = B3D(args.world)
+        recs, _ = w.walk()
+        six = {(r.x, r.y) for r in recs if r.sub == 6}
+        hit = [a for a in anchors if tuple(a) in six]
+        check('eight of them are sub = 6 records of '
+              'CondensedPerfectWorld.B3D -- the outermost spires',
+              len(hit) == 8, '   %d of 9' % len(hit))
+        ring = [p for p in six if abs(p[0]) <= 126 and abs(p[1]) <= 126]
+        check('and the ninth is (0, 0), the middle of the DOAsys ring',
+              tuple(anchors[0]) == (0, 0) and len(ring) == 16,
+              '   %d pedestals round it' % len(ring))
+    except Exception as e:                      # the world file is optional
+        print('  --    (no world file: %s)' % e)
+
+    print('== the two column formulas do not quite agree')
+    box = (-1948, 2611, 2146, -1483)
+    bad = sum(1 for x in range(box[0], box[2] + 1)
+              if ((box[2] - x) >> 8) != 15 - ((x - box[0]) >> 8))
+    check('the drink counts from maxX and the walk from minX, and the world '
+          'is 4,094 units wide, so they differ on one unit a boundary',
+          bad == 15, '   %d of %d world units' % (bad, box[2] - box[0] + 1))
+
+    print('== 0x006de8, the walk to a source')
+    check('it takes cells only from the resident 5 x 5 window',
+          text(0x0070d4) == 'subs r1, r1, #2' and
+          text(0x0070e0) == 'cmp r1, #0xb' and text(0x0074e4) == 'ldr r0, [sp, #0x298]')
+    check('a cell with less than two frames left is not worth walking to',
+          text(0x0071d4) == 'cmp r2, #2' and text(0x0071d8) == 'blt #0x74d8')
+    check('four buckets, eight deep, each sorted by octagonal distance',
+          text(0x0072e8) == 'cmp r8, #8' and text(0x007390) == 'cmp r7, #8' and
+          text(0x007438) == 'cmp r6, #8' and text(0x007228) == 'cmp r3, #8')
+    check('and bucket 0 starts with the nearest anchor already in it',
+          text(0x007034) == 'mov r3, #0xff' and text(0x00713c) == 'mov r6, #1')
+
+    class _M:
+        pass
+    m = _M()
+    ok_all = True
+    for x in range(box[0] + 40, box[2], 331):
+        for y in range(box[3] + 40, box[1], 337):
+            m.x, m.y = x << 16, y << 16
+            for want in (1, 2):
+                p = nearest_source(m, want, f, box, args.image)
+                if not (box[0] - 256 <= p[0] <= box[2] and
+                        box[3] - 256 <= p[1] <= box[1] + 256):
+                    ok_all = False
+    check('and it always names a point, over a swept grid of standing places',
+          ok_all)
+
     print('\n%d/%d checks pass' % (ok, ok + fail))
     return 1 if fail else 0
 
@@ -738,10 +999,13 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.split('\n')[0])
     ap.add_argument('--image', default=IMAGE)
     ap.add_argument('--movers', default=MOVERS_B3D)
+    ap.add_argument('--world', default=WORLD_B3D)
     ap.add_argument('--verify', action='store_true')
     ap.add_argument('--table', action='store_true', help='the weight table')
     ap.add_argument('--states', action='store_true', help='the fifteen arms')
     ap.add_argument('--poll', action='store_true', help='sample the decision')
+    ap.add_argument('--field', action='store_true',
+                    help='the DOA field states 2 and 3 walk to')
     ap.add_argument('--runs', type=int, default=400)
     ap.add_argument('--hours', type=int, default=0)
     ap.add_argument('--seed', type=int, default=1)
@@ -766,6 +1030,27 @@ def main():
             aim = {-1: 'you', 0: 'keep', 1: 'the pair'}.get(tgt, 'a mover')
             print('%-5s %-9s %-44s %-8s %6d %4d'
                   % ('%#04x' % k, nm, dst, aim, rad, gait))
+        return
+    if a.field:
+        f = field_seed(a.image)
+        letter = {FEEDS_BOTH: 'b', FEEDS_D: 'D', FEEDS_O: 'O', DRAINS: 'x'}
+        print('0x060adc, the DOA field: b feeds both at half rate, D feeds')
+        print('Defense, O feeds Offense, . is a cell with no source at all.')
+        print('Column 0 is the east edge; charges run 10..500.')
+        print()
+        for row in range(GRID - 1, -1, -1):
+            print('  %2d  %s' % (row, ' '.join(
+                '.' if f[row * GRID + c] is None
+                else letter[f[row * GRID + c][0]] for c in range(GRID))))
+        print()
+        print('      %s' % ' '.join('%d' % (c % 10)
+                                       for c in range(GRID)))
+        n = [c for c in f if c is not None]
+        print()
+        print('%d sources, %d dead cells, %d frames of charge in the city'
+              % (len(n), GRID * GRID - len(n), sum(c[1] for c in n)))
+        print('anchors: %s' % ', '.join('(%d,%d)' % t
+                                        for t in field_anchors(a.image)))
         return
     if a.poll:
         return poll(a)
