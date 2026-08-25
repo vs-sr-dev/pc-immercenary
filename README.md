@@ -253,6 +253,21 @@ Early, but moving. Nothing is playable yet.
   the record's own easting, the canopy widened by a second roll. It had been
   written down as a random weapon spawn on the strength of an off-by-one in
   `RandomBelow`. [23](docs/23-the-item-spawns.md).
+- **And the city fights back in both renderers, to the bit.** The whole
+  decision loop is in `native/view.c` as well as in Python now, and
+  `packdiff --walk 36000` holds the two against each other for ten minutes of
+  game time -- 47 rithms, the same 16.16 position, heading, velocity and step
+  phase in both. Porting it found four things reading had not, and the first
+  is the best: **the game's cheap arctangent overflows.** All eight arms of
+  `0x0184b4` are a bare `lsl r1, ip, #5` with nothing under them, so past
+  1024 world units the shift runs into the sign bit and the divide comes back
+  negative -- and since `MoverFrame` calls it for every mover every frame,
+  **any rithm more than 1024 units away from you in its smaller axis carries
+  a bearing that is not a bearing**, which is the byte its sight cone is then
+  measured against. Python's unbounded integers had been quietly *right*
+  where the game is wrong, and nothing found it until a C transcription with
+  real 32-bit registers sat down beside it.
+  [28](docs/28-what-a-decision-does.md) §8.
 - **Shoot one rithm and the whole crowd turns on you.** `MoverAim`'s
   nineteen-arm table has seventeen identical arms and two that are not, and
   arm 0 -- the Goner, which is every rithm in the overworld crowd -- goes

@@ -43,7 +43,8 @@ typedef struct {
     uint32_t near_off, far_off;
     int32_t  min_x, max_x, min_y, max_y;
     uint32_t sine_off;
-    uint32_t reserved[3];
+    uint32_t brains_off;
+    uint32_t reserved[2];
 } Header;
 
 typedef struct { int16_t v[4][3]; int16_t texid, angle; uint16_t flags, pad; } Quad;
@@ -59,8 +60,33 @@ typedef struct {
                                        bit 2 near/far by depth */
 } Prop;
 typedef struct { uint16_t n, first; } AnimEnt;
-/* what the walk needs of a mover that the art does not carry, all 16.16 */
-typedef struct { int32_t step, rate, gait; } MoverEnt;
+/* What the walk needs of a mover that the art does not carry: the stride,
+ * the base rate and the gait in 16.16, then what `MoverDecide` reads of the
+ * record.  tools/scenepack.py writes it and tools/behave.py is the authority
+ * on every field. */
+typedef struct {
+    int32_t step, rate, gait;
+    int32_t cid, temper, loner, crowd;
+    int32_t d, o, a, dmax, omax, amax;
+} MoverEnt;
+
+/* The tables `MoverThink` reads, none of which is on the disc.  One block, in
+ * the order tools/scenepack.py's BRAINS declares; C casts it and parses
+ * nothing.  docs/26, docs/27 and docs/28 are the read. */
+typedef struct {
+    int8_t   weight[19][13];    /* 0x057c0c, nineteen rows of thirteen */
+    int8_t   pad;
+    uint32_t atan[258];         /* 0x0590f4, ATan2Fine's table */
+    uint16_t field[256];        /* 0x060adc seeded: kind << 14 | charge */
+    int32_t  home[9][4];        /* 0x060170 as SetHomeBoxes leaves it */
+    int32_t  anchor[9][2];      /* 0x007b90, nine (x, y) */
+    int32_t  recdoa[18][3];     /* the eighteen records' D, O, A */
+    int8_t   recesc[18];        /* and their escort probability */
+    int8_t   pad2[2];
+    int32_t  statthr[5];        /* PlayerTier's stat ladder */
+    int32_t  rankthr[5];        /* and its rank ladder */
+    int32_t  crowd[4][2];       /* the four crowds' centres */
+} Brains;
 #pragma pack(pop)
 
 typedef struct {
@@ -75,6 +101,7 @@ typedef struct {
     const MoverEnt *movers;
     const uint8_t  *nearmap, *farmap;
     const uint32_t *sine;
+    const Brains   *brains;
 } Pack;
 
 static int pack_open(Pack *p, const char *path)
@@ -90,8 +117,8 @@ static int pack_open(Pack *p, const char *path)
     }
     fclose(f);
     p->h = (const Header *)p->blob;
-    if (memcmp(p->h->magic, "IMPK", 4) || p->h->version != 4) {
-        fprintf(stderr, "%s: not a v4 scene pack\n", path); return 0;
+    if (memcmp(p->h->magic, "IMPK", 4) || p->h->version != 5) {
+        fprintf(stderr, "%s: not a v5 scene pack\n", path); return 0;
     }
     p->quads   = (const Quad *)(p->blob + p->h->quads_off);
     p->tex     = (const TexEnt *)(p->blob + p->h->tex_off);
@@ -105,6 +132,7 @@ static int pack_open(Pack *p, const char *path)
     p->nearmap = p->blob + p->h->near_off;
     p->farmap  = p->blob + p->h->far_off;
     p->sine    = (const uint32_t *)(p->blob + p->h->sine_off);
+    p->brains  = (const Brains *)(p->blob + p->h->brains_off);
     printf("%s: %u quads, %u texture slots, %u floor cels, %u props in %u "
            "anims, %u movers, %.1f MB of pixels\n",
            path, p->h->nquads, p->h->ntex, p->h->nfloor, p->h->nprops,
@@ -243,28 +271,66 @@ static int32_t trig_cos(const Pack *p, uint32_t a)   /* 0x056ff8 */
 
 /* --------------------------------------------------------------- the movers
  *
- * A rithm walks.  `0x00bacc` runs this list once a frame: it adds the gait's
- * share of the mover's base rate to a step accumulator, lets `0x0062f8` pick
- * a new bearing when the mover's own deadline is up, steers towards it in
- * `0x00a4a4`, and calls `0x007658` whenever the accumulator has paid for a
- * stride.  The stride itself is two map probes, one per axis; a blocked axis
- * turns the mover 11.25 degrees, both blocked turn it 45.
+ * A rithm decides, walks to what it decided on, arrives, and decides again.
+ * `0x00bacc` runs the list once a frame: it rewrites the mover's base rate
+ * from its crowd, adds the gait's share of it to a step accumulator, runs
+ * `MoverThink`, steers in `0x00a4a4` and calls `0x007658` whenever the
+ * accumulator has paid for a stride.  The stride itself is two map probes,
+ * one per axis; a blocked axis turns the mover 11.25 degrees, both 45.
  *
- * The state simulated is `0x40`, the wander -- the one whose whole chain is
- * read.  `0x0058f0` gives it a half-speed gait and `0x005fa0` short-circuits
- * on its first instruction, handing `0x00a600` a fresh `RandomBits(8)`
- * instead of a bearing to anything.  What is *not* here is `MoverDecide`,
- * `0x004ff8`, the weighted choice between states.  tools/spawns.py runs the
- * identical arithmetic in Python, which is how the two renderers can be held
- * against each other with the city in motion.
+ * `MoverThink` hangs off three deadlines and this is all three:
+ *
+ *     +0x80   MoverStateDone, then MoverDecide, then MoverEnterState
+ *     +0x88   MoverAim -- or CrowdAim, for a rithm that belongs to a crowd
+ *     +0x84   MoverShoot
+ *
+ * Every routine below is a transcription of the one whose address it carries,
+ * and `tools/behave.py` is the authority on all of them: it runs the same
+ * arithmetic in Python under 156 checks against the ARM image, and
+ * `tools/packdiff.py --walk` holds the two against each other in 16.16 rather
+ * than in pixels.  Read docs/26, docs/27 and docs/28 before changing a line
+ * of it; the draw order off the shared generator is part of the contract and
+ * one extra `rng_bits` moves every mover placed after it.
+ *
+ * **Two things here are deliberately not carried over from the Python.**
+ *
+ * The **encounter arms** are missing.  `MoverEnterState` and
+ * `MoverStateDone` each end on a trailer that only fires inside an encounter
+ * and only for Loki, and `MoverAim` has one for Medusa; the render-flag word
+ * this viewer runs with has bit 29 clear for ever, so none of them is
+ * reachable.  `tools/behave.py` does carry them.  If a viewer ever sets that
+ * bit, port them first or the two will part.
+ *
+ * The **shot** is a bookkeeping entry and not a projectile.  `MoverShoot` and
+ * `CrowdAim` spend the eighth of a unit of Offense out of `+0x5c` and mark
+ * `+0x77`, which is everything the *decision* can see; `SpawnShot` at
+ * 0x0447fc is not called on either side, so nothing a rithm fires can hit
+ * anything, the low seven bits of `+0x77` are never set, and the crowd alarm
+ * can only be raised by hand.  `ResolveHit`, 0x00bff0, is the missing half
+ * and it is unread.
  */
 
-#define WANDER      0x40
+#define ST_SCRAMBLE 0x40
+#define ST_HOME     0x41
+#define NSTATE      13
 #define TURN_DEAD   0x8000      /* 0x00a4f0 */
 #define TURN_SNAP   0x58000     /* 0x00a504 */
-#define AIM_MOVING  0x3c        /* 0x006460, ticks */
-#define AIM_STILL   0x1e        /* 0x006468 */
+#define AIM_MOVING  0x1e        /* 0x006468, thirty ticks while it walks */
+#define AIM_STILL   0x3c        /* 0x006460, and sixty while it stands */
 #define LAKE_TILE   9           /* 0x00f9e4, and the quarter speed at 0x0077ec */
+#define DOA_CAP     0x140000    /* 20.0, the ceiling every fraction is taken at */
+#define CONE_BASE   0x30        /* 0x005210: 48 units of 256 */
+#define CONE_MOVING 0x18        /* and 24 more if you are moving */
+#define CHASE_GIVE_UP 0x1000000 /* 0x004e10, 256 units */
+#define FED         0xbe        /* 0x004cf4, 190 of 255 */
+#define PICK_TRIES  64          /* 0x004984, which is really a clock */
+#define PICK_WIDEN  0x14        /* 0x004954 */
+#define CROWD_ALARM_RANGE 0x1000000     /* 0x006a5c */
+#define FIELD_GRID  16
+#define TGT_NONE    0
+#define TGT_PAIR    1
+#define TGT_YOU     (-1)
+#define TGT_MOVER   2           /* mover k is encoded as k + TGT_MOVER */
 
 /* The game's own generator, 0x04e448 and 0x04e4a8: a 54-word additive lagged
  * Fibonacci over Knuth's 69069 LCG.  See tools/spawns.py. */
@@ -280,35 +346,824 @@ static void rng_srand(Rng *r, uint32_t seed)
     r->a = 0x17; r->b = 0;
 }
 
-static uint32_t rng_bits(Rng *r, int k)      /* 0x038c40 */
+static uint32_t rng_raw(Rng *r)                 /* 0x04e448 */
 {
     r->a = r->a == 0 ? 53 : r->a - 1;
     r->b = r->b == 0 ? 53 : r->b - 1;
     r->t[r->b] += r->t[r->a];
-    uint32_t v = 2u * (r->t[r->b] & 0x7fffffffu);
+    return r->t[r->b];
+}
+
+static uint32_t rng_bits(Rng *r, int k)         /* 0x038c40 */
+{
+    uint32_t v = 2u * (rng_raw(r) & 0x7fffffffu);
     return (uint32_t)(((uint64_t)v << k) >> 32);
 }
 
-typedef struct {
-    int32_t x, y;           /* the shared point table's slot, 16.16 */
-    int32_t heading;        /* +0x24 */
-    int32_t want;           /* +0x7c */
-    int32_t vx, vy;         /* +0x50, +0x54 */
-    int32_t acc;            /* +0x4c, the step accumulator */
-    int32_t step, rate;     /* the animation record's +0x14, and +0x20 */
-    int     gait;           /* +0x18 bits 24-25 */
-    int     phase;          /* +0x34, what DrawMover reads back */
-    int     slow;           /* +0x18 bit 28: in the lake */
-    int     aim_at;         /* +0x88 */
-} Mover;
+static uint32_t rng_below(Rng *r, uint32_t n)   /* RandomBelow, 0x038c00 */
+{
+    uint32_t v = 2u * (rng_raw(r) & 0x7fffffffu);
+    return (uint32_t)(((uint64_t)v * n) >> 32);
+}
+
+/* ------------------------------------------------------------ small helpers */
+
+/* 0x004870 and its two neighbours: `max + min / 2`, and no square root
+ * anywhere in the movers. */
+static int32_t oct_dist(int32_t ax, int32_t ay, int32_t bx, int32_t by)
+{
+    int32_t dx = ax - bx, dy = ay - by;
+    if (dx < 0) dx = -dx;
+    if (dy < 0) dy = -dy;
+    return dx <= dy ? dy + (dx >> 1) : dx + (dy >> 1);
+}
+
+/* 0x00016c, the C runtime divide: 32 bits, truncating toward zero. */
+static int32_t div32(int32_t a, int32_t b)
+{
+    if (!b) return 0;
+    return a / b;               /* C99 truncates toward zero, as ARM does */
+}
+
+/* `ATan2`, 0x0184b4: an octant from the two signs and which is larger, then
+ * `32 * min / max` inside it.  **The shift is a bare 32-bit `lsl #5` and the
+ * game lets it overflow**, so a mover more than 1024.0 units from you in its
+ * smaller axis gets a bearing that is not a bearing.  Transcribed, not
+ * fixed -- see tools/behave.py and docs/28. */
+static int32_t atan2_units(int32_t dx, int32_t dy)
+{
+    int32_t ax = dx < 0 ? -dx : dx, ay = dy < 0 ? -dy : dy, q, r;
+    int o = (dx < 0 ? 1 : 0) | (dy < 0 ? 2 : 0) | (ax < ay ? 4 : 0);
+    if (o < 4) {
+        q = ax == 0 ? 0 : div32((int32_t)((uint32_t)ay << 5), ax);
+        r = o == 0 ? q : o == 1 ? 0x80 - q : o == 2 ? -q : q - 0x80;
+    } else {
+        q = ay == 0 ? 0 : div32((int32_t)((uint32_t)ax << 5), ay);
+        o -= 4;
+        r = o == 0 ? 0x40 - q : o == 1 ? q + 0x40
+                              : o == 2 ? q - 0x40 : -0x40 - q;
+    }
+    return (int32_t)((uint32_t)r << 16);
+}
+
+/* `ATan2Fine`, 0x04cd00: the same eight octants, but `DivUF16(min, max)` into
+ * the 257-word table at 0x0590f4 with the low eight bits interpolating.  Right
+ * to a unit where the ramp above is four out.  `MoverAim` uses this one. */
+static uint32_t atan2_fine(const Brains *B, int32_t dx, int32_t dy)
+{
+    int oct = 0, flip = 0;
+    if (!dx && !dy) return 0;                   /* 0x04cd14 */
+    if (dy < 0) { oct = 4; dx = -dx; dy = -dy; }
+    if (dx < 0) { oct ^= 3; flip = 1; dx = -dx; }
+    if (dx < dy) { oct ^= 1; flip ^= 1; }
+    int32_t lo = dx < dy ? dx : dy, hi = dx < dy ? dy : dx;
+    uint32_t q = hi ? (uint32_t)(((uint64_t)(uint32_t)lo << 16) / (uint32_t)hi)
+                    : 0;
+    uint32_t i = q >> 8, f = q & 0xff;
+    uint32_t a = (uint32_t)(((uint64_t)B->atan[i] * (0x100 - f)
+                             + (uint64_t)B->atan[i + 1] * f) >> 8);
+    if (flip) a = 0x200000u - a;
+    return a + ((uint32_t)oct << 21);
+}
+
+/* `DOAFraction`, 0x004810: 255 halved once per halving of `max` needed to
+ * fall to `value`.  A cheap log. */
+static int doa_fraction(int32_t v, int32_t mx)
+{
+    int r = 0xff;
+    while (v > 0 && mx > v) { r >>= 1; mx >>= 1; }
+    return r;
+}
+
+/* One of the three pairs 0x005104 turns into a 0..128 number.  Everything is
+ * measured against 20.0 rather than the mover's own ceiling. */
+static int doa_scale(int32_t cur, int32_t mx, int32_t guard)
+{
+    if (guard < DOA_CAP) return doa_fraction(cur, mx);
+    if (cur < DOA_CAP) return doa_fraction(cur, DOA_CAP);
+    return cur < mx ? 0x76 : 0x80;
+}
+
+/* `LineBlocked`, 0x04439c: a Bresenham walk of the map probe.  With the flag
+ * clear it tests **bit 1**, so sight passes over a wall and is stopped only
+ * by the inside of a building or by an encounter site. */
+static int32_t line_blocked(const Probe *pr, int32_t X0, int32_t Y0,
+                            int32_t X1, int32_t Y1)
+{
+    int x0 = (int)(X0 >> 16), y0 = (int)(Y0 >> 16);
+    int x1 = (int)(X1 >> 16), y1 = (int)(Y1 >> 16);
+    int dx = x1 - x0, sx = 1, dy = y1 - y0, sy = 1, acc = 0;
+    if (dx < 0) { dx = -dx; sx = -1; }
+    if (dy < 0) { dy = -dy; sy = -1; }
+    if (dx > dy) {
+        for (int i = 0; i < dx; i++) {
+            x0 += sx; acc += dy;
+            if (acc > dx) { acc -= dx; y0 += sy; }
+            if (!(probe_at(pr, x0, y0) & 2)) return (x0 << 16) + y0;
+        }
+    } else {
+        for (int i = 0; i < dy; i++) {
+            y0 += sy; acc += dx;
+            if (acc > dy) { acc -= dy; x0 += sx; }
+            if (!(probe_at(pr, x0, y0) & 2)) return (x0 << 16) + y0;
+        }
+    }
+    return 0;
+}
+
+/* `ClampToWorld`, 0x0065a4, over the four words at 0x058434. */
+static void clamp_to_world(const Pack *p, int *x, int *y)
+{
+    if (*x < p->h->min_x) *x = p->h->min_x;
+    if (*x > p->h->max_x) *x = p->h->max_x;
+    if (*y < p->h->min_y) *y = p->h->min_y;
+    if (*y > p->h->max_y) *y = p->h->max_y;
+}
+
+/* ------------------------------------------------------------- the records */
 
 typedef struct {
-    Mover  *w;
-    uint32_t n, first;      /* the movers are the last `n` props */
+    int32_t x, y;               /* the shared point table's slot, 16.16 */
+    int32_t heading;            /* +0x24 */
+    int32_t want;               /* +0x7c */
+    int32_t vx, vy;             /* +0x50, +0x54 */
+    int32_t acc;                /* +0x4c, the step accumulator */
+    int32_t step, rate;         /* the animation record's +0x14, and +0x20 */
+    int32_t own_rate;           /* +0x42, a loner's own */
+    int     gait;               /* +0x18 bits 24-25 */
+    int     phase;              /* +0x34, what DrawMover reads back */
+    int     slow;               /* +0x18 bit 28: in the lake */
+    int     aim_at;             /* +0x88 */
+    /* the decision */
+    int     cid;                /* +0x14 */
+    int     state;              /* +0x74, signed byte */
+    int     temper;             /* +0x42 */
+    int     flag16;             /* +0x16, which nothing writes */
+    int     loner;              /* +0x18 bit 6 */
+    int     crowd;              /* +0x18 bits 17-18 */
+    int     prio;               /* +0x18 bits 7-14, which nothing writes */
+    int32_t agility;            /* +0x60, and it is the turn rate too */
+    int32_t dist;               /* +0x38, to you */
+    int     face_player;        /* +0x37 */
+    int32_t d, o, a, dmax, omax, amax;      /* +0x58 .. +0x6c */
+    int32_t mate;               /* +0x8c */
+    int     dest_x, dest_y;     /* +0x44/+0x46, whole units */
+    int     save_x, save_y;     /* +0x48/+0x4a */
+    int     leg;                /* +0x40 */
+    int32_t target;             /* +0x70 */
+    int     radius;             /* +0x75 */
+    int     parked;             /* +0x18 bit 4 */
+    int     until;              /* +0x28 */
+    uint32_t aim;               /* +0x78 */
+    int     hitmark;            /* +0x77 */
+    int     at_decide, at_fire; /* +0x80, +0x84 */
+    int     nudge;              /* +0x76 */
+    int     shots;
+} Mover;
+
+/* The 44-byte crowd record at 0x089c90, as much as the aim and the rate
+ * read.  tools/spawns.py owns the rest of it. */
+typedef struct {
+    int32_t x, y;               /* +4/+6, the crowd's centre */
+    int     alarm;              /* bit 8: somebody shot one of us */
+    int     flag80;             /* bit 7 */
+    int     at;                 /* bits 17+, and -1 is you */
+    int     have;               /* bits 9-12 */
+    int32_t rate, fast;         /* +0x18 and +0x1c: 0x3000 and 0x6000 */
+} Crowd;
+
+/* As much of 0x089d40 and 0x06bed0 as the decision reads. */
+typedef struct {
+    int32_t x, y;
+    int32_t d, o, a, dmax, omax, amax;
+    int rank, jump_ticks, total_ticks, moving, flags, sight, shot, power, raven;
+} Player;
+
+typedef struct {
+    Mover   *w;
+    uint32_t n, first;
     Rng      rng;
     Probe    probe;
     int      now;
+    Player   pl;
+    Crowd    crowd[4];
+    uint16_t field[256];        /* a working copy: the drink spends it */
+    int32_t  scratch[NSTATE + 1];   /* the tie list, kept warm on purpose */
+    int32_t  min_x, max_x, min_y, max_y;    /* 0x058434, out of the header */
+    const Brains *B;
 } Sim;
+
+/* `PlayerTier`, 0x008dc4: three parts rank, one part stats. */
+static int player_tier(const Sim *s)
+{
+    const Player *pl = &s->pl;
+    int32_t stat = pl->dmax + pl->omax + pl->amax;
+    int st = 0, rk = 0, t;
+    while (st < 5 && stat > (s->B->statthr[st] << 16)) st++;
+    while (rk < 5 && !(pl->rank > s->B->rankthr[rk])) rk++;
+    t = (int)((0x8000u + ((((uint32_t)(rk << 16) * 3u
+                            + (uint32_t)(st << 16))) >> 2)) >> 16);
+    return t < 1 ? 1 : (t > 5 ? 5 : t);
+}
+
+static int player_hours(const Sim *s)
+{
+    return (s->pl.jump_ticks + s->pl.total_ticks) / 0xe10;
+}
+
+/* ----------------------------------------------------------- the DOA field */
+
+#define FEEDS_BOTH 0
+#define FEEDS_D    1
+#define FEEDS_O    2
+#define DRAINS     3
+#define FIELD_KIND(w)   (((w) >> 14) & 3)
+#define FIELD_CHARGE(w) ((w) & 0x1ff)
+#define FIELD_LIVE(w)   ((w) != 0)
+
+/* `0x006de8`, the overworld arm: sort the resident 5 x 5 window's live cells
+ * into four buckets by kind, each in order of octagonal distance and each at
+ * most eight deep, and take the nearest of the wanted kind -- unless the
+ * nearest of the nine anchors is nearer still.  See docs/27. */
+static void nearest_source(const Sim *s, const Mover *m, int want,
+                           int *ox_out, int *oy_out)
+{
+    const Brains *B = s->B;
+    int ox = (int)(m->x >> 16), oy = (int)(m->y >> 16);
+    int32_t bd[4][8]; int bx[4][8], by[4][8], bn[4] = { 0, 0, 0, 0 };
+    int32_t best = 0x1388; int bestx = 0, besty = 0, have = 0;
+
+    for (int i = 0; i < 9; i++) {                       /* 0x007028 */
+        int32_t d = oct_dist(ox, oy, B->anchor[i][0], B->anchor[i][1]);
+        if (d < best) { best = d; bestx = B->anchor[i][0];
+                        besty = B->anchor[i][1]; have = 1; }
+    }
+    if (have) { bd[0][0] = best; bx[0][0] = bestx; by[0][0] = besty; bn[0] = 1; }
+
+    int row0 = ((oy - s->min_y) >> 8) - 2;            /* 0x0070c0 */
+    int col0 = (15 - ((ox - s->min_x) >> 8)) - 2;
+    if (row0 < 0) row0 = 0;
+    if (row0 > 11) row0 = 11;
+    if (col0 < 0) col0 = 0;
+    if (col0 > 11) col0 = 11;
+    for (int row = row0; row < row0 + 5; row++)
+        for (int col = col0; col < col0 + 5; col++) {
+            uint16_t c = s->field[row * FIELD_GRID + col];
+            if (!FIELD_LIVE(c) || FIELD_CHARGE(c) < 2) continue;  /* 0x0071d4 */
+            int cx = ((s->max_x >> 8) << 8) - (col << 8);
+            int cy = ((s->max_y >> 8) << 8) - ((15 - row) << 8);
+            int k = FIELD_KIND(c);
+            if (bn[k] >= 8) continue;
+            int32_t d = oct_dist(ox, oy, cx, cy);
+            int j = bn[k]++;
+            bd[k][j] = d; bx[k][j] = cx; by[k][j] = cy;
+            while (j > 0 && bd[k][j - 1] > bd[k][j]) {   /* the bubble at 0x7250 */
+                int32_t td = bd[k][j - 1]; int tx = bx[k][j - 1], ty = by[k][j - 1];
+                bd[k][j - 1] = bd[k][j]; bx[k][j - 1] = bx[k][j]; by[k][j - 1] = by[k][j];
+                bd[k][j] = td; bx[k][j] = tx; by[k][j] = ty;
+                j--;
+            }
+        }
+    if (want >= 1 && want <= 3 && bn[want] &&
+        (!bn[0] || bd[want][0] < bd[0][0])) {
+        *ox_out = bx[want][0]; *oy_out = by[want][0]; return;
+    }
+    if (bn[0]) { *ox_out = bx[0][0]; *oy_out = by[0][0]; return; }
+    *ox_out = ox; *oy_out = oy;
+}
+
+/* `GainDOA`, 0x011938.  Returns **1 when there was nothing to give**, which
+ * is what stops `DrinkFromField` spending a charge on a full drinker. */
+static int gain_doa(Mover *m, Player *pl, int kind, int32_t amount)
+{
+    int32_t *cur_d = m ? &m->d : &pl->d, *max_d = m ? &m->dmax : &pl->dmax;
+    int32_t *cur_o = m ? &m->o : &pl->o, *max_o = m ? &m->omax : &pl->omax;
+    if (kind == FEEDS_BOTH) {
+        if (*cur_d >= *max_d && *cur_o >= *max_o) return 1;
+        *cur_d += amount; if (*cur_d > *max_d) *cur_d = *max_d;
+        *cur_o += amount; if (*cur_o > *max_o) *cur_o = *max_o;
+    } else if (kind == FEEDS_D) {
+        if (*cur_d >= *max_d) return 1;
+        *cur_d += amount; if (*cur_d > *max_d) *cur_d = *max_d;
+    } else if (kind == FEEDS_O) {
+        if (*cur_o >= *max_o) return 1;
+        *cur_o += amount; if (*cur_o > *max_o) *cur_o = *max_o;
+    }
+    return 0;
+}
+
+/* `DrinkFromField`, 0x01175c -- once a frame, for every mover and for you.
+ * `m` of NULL is you.  See docs/27 and docs/28. */
+static int drink_from_field(Sim *s, Mover *m)
+{
+    Player *pl = &s->pl;
+    int32_t dmax = m ? m->dmax : pl->dmax;
+    int32_t x = m ? m->x : pl->x, y = m ? m->y : pl->y;
+    int32_t rate = 0x800 + (dmax >> 10);
+    if (m && m->parked) return -1;                       /* 0x0117a8 */
+    if (oct_dist(0, 0, x, y) <= 0x870000)                /* the DOAsys ring */
+        return gain_doa(m, pl, FEEDS_BOTH, 0x4000) ? 1 : 0;
+    int32_t ax = (int32_t)((uint32_t)((x < 0 ? -x : x) + 0x100000) & 0xffffff);
+    int32_t ay = (int32_t)((uint32_t)((y < 0 ? -y : y) + 0x100000) & 0xffffff);
+    if (ax >= 0x200000 && ay >= 0x200000) return 0;
+    int row = (int)(((y >> 16) - s->min_y) >> 8);
+    int col = (int)((s->max_x - (x >> 16)) >> 8);
+    if ((row & ~0xf) || (col & ~0xf)) goto drain;        /* 0x011874 */
+    {
+        uint16_t *c = &s->field[row * FIELD_GRID + col];
+        if (!FIELD_LIVE(*c)) return -1;
+        if (FIELD_KIND(*c) == DRAINS) goto drain;
+        if (FIELD_CHARGE(*c) == 0) return -1;
+        int kind = FIELD_KIND(*c);
+        int32_t amount = kind == FEEDS_BOTH ? rate >> 1 : rate;
+        if (gain_doa(m, pl, kind, amount)) return 1;
+        *c = (uint16_t)((*c & ~0x1ff) | (FIELD_CHARGE(*c) - 1));  /* SpendCharge */
+        return 0;
+    }
+drain:                                                   /* 0x0118b4 */
+    if (m) return 0;
+    pl->d -= rate; pl->o -= rate; pl->a -= rate;
+    return 0;
+}
+
+/* ------------------------------------------------------------- the pickers */
+
+/* `PickDestination`, 0x0048c0 -- the only place a state's destination comes
+ * from.  One candidate at a time, and every one the map refuses widens the
+ * spread by twenty.  `PICK_TRIES` stands in for the wall clock the original
+ * gives up against; tools/spawns.py picks the same number and it has to. */
+static int pick_destination(Sim *s, const Pack *p, Mover *m,
+                            int ax, int ay, int base, int spread)
+{
+    for (int t = 0; t < PICK_TRIES; t++) {
+        int r = (int)rng_below(&s->rng, (uint32_t)spread) + base;
+        int x = (rng_below(&s->rng, 2) & 1) ? ax + r : ax - r;
+        r = (int)rng_below(&s->rng, (uint32_t)spread) + base;
+        int y = (rng_below(&s->rng, 2) & 1) ? ay + r : ay - r;
+        clamp_to_world(p, &x, &y);
+        if (probe_at(&s->probe, x, y) & 1) {             /* 0x004950, bit 0 */
+            m->dest_x = (int16_t)x; m->dest_y = (int16_t)y;
+            return 1;
+        }
+        spread += PICK_WIDEN;
+    }
+    m->dest_x = (int16_t)ax; m->dest_y = (int16_t)ay;    /* 0x004990 */
+    return 0;
+}
+
+/* `NearestMover`, 0x0049b8.  With `far` set the search starts from the
+ * distance to *you*, and refuses outright when you are inside 16.0. */
+static int32_t nearest_mover(Sim *s, const Mover *m, int far)
+{
+    int32_t best; int32_t pick;
+    if (far) {
+        best = m->dist; pick = -1;
+        if (best < 0x100000) return -1;                  /* 0x0049fc */
+    } else { best = 0x7fffffff; pick = TGT_NONE; }
+    for (uint32_t i = 0; i < s->n; i++) {
+        const Mover *o = &s->w[i];
+        if (o == m) continue;
+        int32_t d = oct_dist(m->x, m->y, o->x, o->y);
+        if (d < best) { best = d; pick = (int32_t)i + TGT_MOVER; }
+    }
+    return pick;
+}
+
+/* `PickCompanion`, 0x006c00 -- and it writes the state byte itself.  There is
+ * no distance term: a candidate is dropped when its distance in whole units
+ * beats a fresh `RandomBits(8)`, which makes the choice fall off with range
+ * for free.  A lieutenant's escort probability is 30 against a roll of 0..30,
+ * so a lieutenant the vote sends to escort always finds somebody. */
+static int pick_companion(Sim *s, Mover *m)
+{
+    if (m->cid == 0) return 0;                           /* 0x006c54 */
+    if ((int)rng_below(&s->rng, 0x1f) > s->B->recesc[m->cid - 1]) return 0;
+    int ox = (int)(m->x >> 16), oy = (int)(m->y >> 16);
+    int32_t best = 0x1388; int32_t pick = -1;
+    for (uint32_t i = 0; i < s->n; i++) {
+        Mover *o = &s->w[i];
+        if (o == m) continue;
+        int32_t d = oct_dist(ox, oy, (int)(o->x >> 16), (int)(o->y >> 16));
+        if (d > (int32_t)rng_bits(&s->rng, 8)) continue;  /* 0x006d40 */
+        if (o->prio < m->prio && o->cid == m->cid) continue;   /* 0x006d58 */
+        if (d < best) { best = d; pick = (int32_t)i; }
+    }
+    if (pick < 0) return 0;
+    m->state = 6;
+    m->target = pick + TGT_MOVER;
+    m->leg = (int)pick;                                  /* `+0x40` */
+    return 1;
+}
+
+/* --------------------------------------------------- MoverDecide, 0x004ff8 */
+
+/* `0x005848`: argmax, ties collected, `RandomBelow` between them.  Two things
+ * in it are the code's rather than the intent's and both are transcribed --
+ * `0x0058b8` stores the *index into the tie list* rather than the state it
+ * holds, and `0x0058cc` reads one word past the end of the list it has just
+ * filled.  That word is uninitialised stack, so `scratch` is kept warm. */
+static int decide_pick(Sim *s, const int32_t *w)
+{
+    int32_t *cand = s->scratch;
+    int n = 0, best = 0; int32_t bestw = -0xff;
+    for (int i = 0; i < NSTATE; i++) {
+        int32_t v = w[i];
+        if (v == bestw) cand[n++] = i;
+        else if (v > bestw) { best = i; n = 1; bestw = v; cand[0] = i; }
+    }
+    if (n <= 1) return best;
+    int i = 0;
+    while (i < n) { if (cand[i] == 2) return i; i++; }
+    if (cand[i] == 2) return best;                       /* one past the end */
+    return (int)cand[rng_below(&s->rng, (uint32_t)n)];
+}
+
+/* The weighted vote.  Thirteen signed bytes out of 0x057c0c plus
+ * `RandomBits(4)` each, then a dozen terms.  docs/26 is the read. */
+static int mover_decide(Sim *s, Mover *m)
+{
+    const Brains *B = s->B;
+    Player *pl = &s->pl;
+    int st = m->state & 0xff;
+    if (st == ST_SCRAMBLE) return ST_SCRAMBLE;           /* 0x005018 */
+    if (st == ST_HOME) return ST_HOME;
+
+    int cid = m->cid;
+    int32_t dist = m->dist >> 16;
+    int tier = player_tier(s);
+    if ((pl->flags & 0x20000000) && (cid == 14 || cid == 15) && !(pl->raven & 1))
+        return 4;                                        /* 0x00506c */
+    int shot = pl->shot;
+
+    int f_d = doa_scale(m->d, m->dmax, m->dmax);         /* 0x005100 */
+    int f_o = doa_scale(m->o, m->omax, m->omax);
+    int f_a = doa_scale(m->a, m->amax, m->omax);         /* the guard is O's */
+
+    int32_t off = (int32_t)((uint32_t)(m->face_player << 16) - (uint32_t)m->heading);
+    if (off < 0) off = -off;
+    if (off > 0x800000) off = 0x1000000 - off;
+    int cone = CONE_BASE + 2 * cid;
+    if (pl->moving) cone += CONE_MOVING;
+    int32_t blocked = 1;
+    if (off < (int32_t)((rng_bits(&s->rng, 4) + (uint32_t)cone) << 16)) {
+        if (dist < (pl->sight >> 1) + cid * 4)
+            blocked = line_blocked(&s->probe, pl->x, pl->y, m->x, m->y);
+    }
+
+    int32_t w[NSTATE];
+    int fixed = cid > 5 && cid != 9 && !(pl->flags & 0x20000000);
+    for (int i = 0; i < NSTATE; i++) {                   /* 0x0052b4 */
+        int32_t base = fixed ? (i == 6 ? 0x32 : i == 7 ? 0 : i == 8 ? 0x32
+                                : i == 9 ? 0x28 : 0x1e)
+                             : B->weight[cid][i];
+        w[i] = (int32_t)rng_bits(&s->rng, 4) + base;
+    }
+    if (cid == 0) {                                      /* 0x0053a0 */
+        if (m->omax > 0x18000) w[7] += 0xa;
+        else if (m->omax == 0x18000) w[7] -= 0x28;
+        else w[7] -= 0x32;
+    }
+    if ((pl->flags & 0x20000000) || cid == 9)            /* 0x0053dc */
+        if (dist >> 7) w[7] += dist;
+    if (cid <= 5) {                                      /* 0x005418 */
+        int h = player_hours(s);
+        if (h < 4) w[7] -= 0x60;
+        else if (h < 10) w[7] -= 0x60 - (h - 4) * 8;
+        else if (tier < 5) w[7] -= 0x28 - tier * 8;
+    }
+    switch (m->temper) {                                 /* 0x0054a8 */
+    case 0: w[0] += 0xa; w[11] += 0xa; break;
+    case 1: w[10] += 0xa; break;
+    case 2: w[6] += 0xa; w[7] += 0xa; w[8] += 0xa; w[9] += 0xa; break;
+    case 3: w[1] += 0xa; w[5] += 0xa; break;
+    case 4: w[12] += 0xa; break;
+    default: break;
+    }
+    if (cid != 4 && m->mate) {                           /* 0x0054e4 */
+        if (m->mate != -1) w[8] += 0x32; else w[7] += 0x64;
+    }
+    w[2] += 0x80 - f_d;                                  /* 0x005524 */
+    w[3] += 0x80 - f_o;
+    w[4] += 0x40 - f_a;
+    if (m->o != 0) {                                     /* 0x005558 */
+        int32_t near;
+        if (blocked)
+            near = ((pl->flags & 0x20000000) || cid == 9) ? dist * 2 : dist * 8;
+        else near = dist;
+        w[7] += 0x80 - near;
+        if (pl->flags & 4) {                             /* 0x01344c */
+            int ss = m->state & 0xff;
+            if (!(ss >= 1 && ss <= 5)) w[7] += 0x60;
+        }
+        if (shot && m->omax > 0x18000) w[7] += 0x10;
+        if (w[7] > 0x80) w[7] = 0x80;                    /* 0x005684 */
+    }
+    if (!blocked) {                                      /* 0x005690 */
+        int ss = m->state & 0xff;
+        if (ss == 1 || ss == 5 || ss == 12) w[ss] += 0xa;
+    }
+    if (m->flag16 == 0 && (pl->sight >> 1) + cid * 4 > dist)
+        w[7] += 0x14;                                    /* 0x0056cc */
+    {                                                    /* 0x005708 */
+        int32_t u = 0;
+        if (pl->omax <= m->omax) u += 0xff - doa_fraction(pl->omax, m->omax);
+        if (pl->o <= m->o) u += 0xff - doa_fraction(pl->o, m->o);
+        u >>= 3;
+        w[7] += u; w[1] -= u; w[5] -= u;
+    }
+    {                                                    /* 0x005774 */
+        int ss = m->state & 0xff;
+        if (ss <= 12) {
+            if (ss == 7) w[7] += B->weight[cid][7] >> 1;
+            else if (ss != 0) w[ss] += 0xa;
+        }
+    }
+    if (cid <= 5 && cid - 1 > tier) w[7] -= 0x60;        /* 0x0057ec */
+    if (pl->power == 0) { w[2] = -0x80; w[3] = -0x80; }  /* 0x00581c */
+    if (cid == 15) w[7] = -0x80;
+    return decide_pick(s, w);
+}
+
+/* --------------------------------------------- MoverEnterState, 0x0058f0 */
+
+static void set_gait(Mover *m, int g) { m->gait = g; }
+
+/* Four things come out of every arm: the destination pair at `+0x44`/`+0x46`,
+ * what to aim at at `+0x70`, the arrival radius at `+0x75` and the gait.
+ * docs/26 §4 tabulates all fifteen and `behave.py --arms` runs them. */
+static void enter_state(Sim *s, const Pack *p, Mover *m)
+{
+    Player *pl = &s->pl;
+    int st = m->state & 0xff;
+    int sx = (int)(m->x >> 16), sy = (int)(m->y >> 16);   /* 0x005944 */
+    int px = (int)(pl->x >> 16), py = (int)(pl->y >> 16);
+    int ax, ay;
+
+    if (st == 7) {                                       /* chase */
+        m->target = TGT_YOU; m->radius = 0x20; set_gait(m, 2);
+    } else if (st == 0) {                                /* wander */
+        pick_destination(s, p, m, sx, sy, 0xfa, 0x64);
+        m->target = TGT_PAIR; m->radius = 0x10; set_gait(m, 1);
+    } else if (st == 1 || st == 5) {                     /* rush and mark */
+        ax = px + (rng_bits(&s->rng, 1) ? 0x100 : -0x100);
+        ay = py + (rng_bits(&s->rng, 1) ? 0x100 : -0x100);
+        clamp_to_world(p, &ax, &ay);
+        pick_destination(s, p, m, ax, ay, 0, 0x64);
+        m->target = TGT_PAIR; m->radius = 0x10;
+        if (st == 1) m->gait |= 3;                       /* 0x005b80: no bic */
+        else set_gait(m, m->flag16 ? 1 : 0);
+    } else if (st == 2) {                                /* feed D */
+        nearest_source(s, m, FEEDS_D, &ax, &ay);
+        m->dest_x = (int16_t)ax; m->dest_y = (int16_t)ay;
+        m->target = TGT_PAIR; m->radius = 0x0e;
+        m->gait |= 3;                                    /* 0x005c4c: no bic */
+    } else if (st == 3) {                                /* feed O */
+        nearest_source(s, m, FEEDS_O, &ax, &ay);
+        m->dest_x = (int16_t)ax; m->dest_y = (int16_t)ay;
+        m->target = TGT_PAIR; m->radius = 0x0e; set_gait(m, 2);
+    } else if (st == 4) {                                /* halt */
+        m->dest_x = (int16_t)sx; m->dest_y = (int16_t)sy;
+        m->target = TGT_PAIR; m->radius = 0x10; set_gait(m, 0);
+    } else if (st == 6) {                                /* escort */
+        if (pick_companion(s, m)) { m->radius = 0x20; set_gait(m, 1); }
+        else {
+            m->state = 0;                                /* 0x005d1c */
+            pick_destination(s, p, m, sx, sy, 0xfa, 0x64);
+            m->target = TGT_PAIR; m->radius = 0x10; set_gait(m, 1);
+        }
+    } else if (st == 8) {                                /* rejoin */
+        if (m->cid != 4) {                               /* 0x005cd4 */
+            m->target = m->mate; m->radius = 0x20; set_gait(m, 2);
+            m->mate = 0;                                 /* 0x005cf8 */
+        }
+    } else if (st == 9) {                                /* follow */
+        m->target = nearest_mover(s, m, 0);
+        if (m->target) { m->radius = 0x20; set_gait(m, 1); }
+        else {
+            m->state = 0;
+            pick_destination(s, p, m, sx, sy, 0xfa, 0x64);
+            m->target = TGT_PAIR; m->radius = 0x10; set_gait(m, 1);
+        }
+    } else if (st == 10) {                               /* patrol */
+        pick_destination(s, p, m, sx, sy, 0, 0x64);      /* the near corner */
+        m->save_x = m->dest_x; m->save_y = m->dest_y;    /* 0x0059f4 */
+        pick_destination(s, p, m, sx, sy, 0xfa, 0x64);   /* and the far one */
+        m->leg = 1;
+        m->target = TGT_PAIR; m->radius = 0x10; set_gait(m, 1);
+    } else if (st == 11) {                               /* circle */
+        ax = px + (rng_bits(&s->rng, 1) ? 0x32 : -0x32);
+        ay = py + (rng_bits(&s->rng, 1) ? 0x32 : -0x32);
+        clamp_to_world(p, &ax, &ay);
+        pick_destination(s, p, m, ax, ay, 0, 0x64);
+        m->target = TGT_PAIR; m->radius = 0x10; set_gait(m, 1);
+    } else if (st == 12) {                               /* watch */
+        m->radius = 0x10;
+        if (!m->flag16 && m->dist < CHASE_GIVE_UP) {
+            set_gait(m, 0); m->target = TGT_YOU;
+        } else {
+            ax = px + (rng_bits(&s->rng, 1) ? 0x100 : -0x100);
+            ay = py + (rng_bits(&s->rng, 1) ? 0x100 : -0x100);
+            clamp_to_world(p, &ax, &ay);
+            pick_destination(s, p, m, ax, ay, 0, 0x64);
+            m->target = TGT_PAIR; set_gait(m, 1);
+        }
+    } else if (st == ST_SCRAMBLE) {
+        m->dest_x = (int16_t)sx; m->dest_y = (int16_t)sy;
+        m->target = TGT_PAIR; m->radius = 0x10; set_gait(m, 1);
+    } else if (st == ST_HOME) {
+        if (m->cid >= 0x10) {                            /* 0x005a88 */
+            m->dest_x = m->dest_y = 0; m->radius = 0x87;
+        } else {
+            const int32_t *b = s->B->home[m->cid - 6];
+            m->dest_x = (int16_t)(((b[2] + b[0]) >> 1) >> 16);
+            m->dest_y = (int16_t)(((b[3] + b[1]) >> 1) >> 16);
+            m->radius = 0x20;
+        }
+        m->target = TGT_PAIR; set_gait(m, 2);
+    }
+    /* the encounter trailers at 0x005ba0, 0x005e54 and 0x005f54 are Loki's
+     * and the overworld never reaches them */
+}
+
+/* --------------------------------------------- MoverStateDone, 0x004a88 */
+
+static int state_done(Sim *s, Mover *m)
+{
+    Player *pl = &s->pl;
+    int st = m->state & 0xff, done = 0;
+    int32_t dist = oct_dist(m->x, m->y, (int32_t)m->dest_x << 16,
+                            (int32_t)m->dest_y << 16);
+    int32_t rad = (int32_t)m->radius << 16;
+
+    if (st == 7) done = m->dist > CHASE_GIVE_UP;
+    else if (st == 0 || st == 1 || st == 8 || st == 11) done = dist <= rad;
+    else if (st == 2) {
+        set_gait(m, dist > rad ? 2 : 0);                 /* 0x004cd8 */
+        done = doa_fraction(m->d, m->dmax) >= FED ? 1 : (pl->power == 0);
+    } else if (st == 3) {
+        set_gait(m, dist > rad ? 2 : 0);
+        done = doa_fraction(m->o, m->omax) >= FED ? 1 : (pl->power == 0);
+    } else if (st == 4) {
+        set_gait(m, 0);
+        done = doa_fraction(m->a, m->amax) >= FED;
+    } else if (st == 5) {
+        if (!m->flag16) { set_gait(m, 0); m->target = TGT_NONE; done = 1; }
+        else done = dist <= rad;
+    } else if (st == 6 || st == 9) {
+        const Mover *t = &s->w[m->target - TGT_MOVER];
+        done = oct_dist(m->x, m->y, t->x, t->y) <= rad;
+    } else if (st == 10) {
+        if (dist <= rad) {
+            m->leg = m->leg + 1 > 4 ? 1 : m->leg + 1;
+            int dx = m->dest_x, dy = m->dest_y, sxv = m->save_x, syv = m->save_y;
+            if (m->leg & 1) {                            /* 0x004e1c, the Y */
+                m->dest_y = syv; m->save_y = dy;
+            } else {                                     /* 0x004c00, the X */
+                m->dest_x = sxv; m->save_x = dx;
+            }
+            (void)dy;
+        }
+    } else if (st == 12) {
+        if (!m->flag16) { set_gait(m, 0); m->target = TGT_YOU; done = 1; }
+        else if (m->gait) done = dist <= rad;
+        else if (m->dist < CHASE_GIVE_UP &&
+                 !line_blocked(&s->probe, m->x, m->y, pl->x, pl->y)) {
+            m->target = TGT_YOU; m->radius = 0x20; set_gait(m, 1);
+        }
+    } else if (st == ST_HOME) {
+        if (dist <= rad) { m->parked = 1; m->until = 0; done = 1; }
+    }
+    /* 0x40 is never done: the scramble runs until something else clears it */
+    return done;
+}
+
+/* --------------------------------------- MoverAim, 0x005fa0, and the crowd */
+
+/* `CrowdAim`, 0x006ac8.  Quiet, a crowd is a knot of rithms facing their own
+ * centre; alarmed, every one of them turns on whoever hit one of them and
+ * fires on the spot, once an aim.  Note it writes only `+0x7c`. */
+static void crowd_aim(Sim *s, Mover *m)
+{
+    if (m->cid != 0 || m->loner) return;                 /* 0x006af4 */
+    Crowd *c = &s->crowd[m->crowd];
+    int32_t tx, ty;
+    if (c->alarm && m->o) {                              /* 0x006b40 */
+        if (c->at < 0) { tx = s->pl.x; ty = s->pl.y; }
+        else { tx = s->w[c->at].x; ty = s->w[c->at].y; }
+    } else { tx = c->x << 16; ty = c->y << 16; }         /* 0x006b70 */
+    m->want = (int32_t)(atan2_fine(s->B, tx - m->x, ty - m->y) & 0xffffff);
+    if (!c->alarm) return;                               /* 0x006bc8 */
+    if (m->o < 0) return;
+    m->o -= 0x2000;                                      /* 0x006bdc */
+    if (m->o < 0) m->o = 0;
+    m->hitmark |= 0x80;
+    m->shots++;
+}
+
+/* Four cases on `+0x70`, and a door in arm 0: a Goner that belongs to a crowd
+ * never looks at its own target.  The bearing goes through `ATan2Fine` and
+ * **not** through the ramp `MoverFrame` writes `+0x37` with. */
+static int mover_aim(Sim *s, Mover *m)
+{
+    Player *pl = &s->pl;
+    if ((m->state & 0xff) == ST_SCRAMBLE) {              /* 0x005fc4 */
+        m->want = (int32_t)((rng_bits(&s->rng, 8) << 16) & 0xffffff);
+        return 1;
+    }
+    if (m->cid == 6 && (pl->flags & 0x20000000)) return 1;
+    if ((m->cid == 0 || m->cid == 6) && !m->loner) {     /* 0x00605c */
+        crowd_aim(s, m);
+        return 0;
+    }
+    int32_t tx, ty;
+    if (m->target == TGT_YOU) { tx = pl->x; ty = pl->y; }
+    else if (m->target == TGT_PAIR) {
+        tx = (int32_t)m->dest_x << 16; ty = (int32_t)m->dest_y << 16;
+    } else if (m->target == TGT_NONE) { tx = 0; ty = 0; }
+    else { tx = s->w[m->target - TGT_MOVER].x; ty = s->w[m->target - TGT_MOVER].y; }
+    m->aim = atan2_fine(s->B, tx - m->x, ty - m->y) & 0xffffff;
+    m->want = (int32_t)m->aim;                           /* SetMoverBearing */
+    return 1;
+}
+
+/* ---------------------------------------------- MoverShoot, 0x006128 */
+
+static int mover_shoot(Sim *s, Mover *m)
+{
+    Player *pl = &s->pl;
+    if (!m->o) return 0;                                 /* 0x006144 */
+    if (!m->target || (m->state & 0xff) == ST_SCRAMBLE) return 0;
+    int32_t reach = (int32_t)(((pl->sight >> 1) + m->cid * 4) << 16);
+    int32_t score = ((pl->flags & 0x20000000) || m->cid == 9) ? 0x60 : 0x40;
+    if (m->target == TGT_YOU) {
+        if (m->dist > reach) return 0;
+    } else if (m->target != TGT_PAIR) {
+        const Mover *t = &s->w[m->target - TGT_MOVER];
+        if (oct_dist(m->x, m->y, t->x, t->y) > reach) return 0;
+    }
+    int st = (int8_t)m->state;
+    if (st >= 6 && st <= 9) {                            /* 0x00621c */
+        int32_t want = m->target == TGT_YOU
+            ? (int32_t)(m->face_player << 16) : (int32_t)m->aim;
+        int32_t off = (int32_t)((uint32_t)m->heading - (uint32_t)want);
+        if (off < 0) off = -off;
+        off >>= 16;
+        score += off < 6 ? (6 - off) * 16 : -off;
+    } else score -= 0x40;
+    if (m->hitmark & 0x7f) {                             /* 0x006274 */
+        score += 0x32;
+        m->hitmark &= 0x80;
+    }
+    int32_t roll = (int32_t)rng_bits(&s->rng, 8);
+    if (m->cid > 5 && m->cid != 9 && !(pl->flags & 0x20000000) &&
+        m->mate != -1)                                   /* 0x0062b8 */
+        score >>= 2;
+    if (roll < score) {
+        m->o -= 0x2000;
+        if (m->o < 0) m->o = 0;
+        m->hitmark |= 0x80;
+        m->shots++;
+    }
+    return 1;
+}
+
+/* ------------------------------------------------ MoverThink, 0x0062f8 */
+
+static void sim_turn(const Pack *p, Mover *w);
+
+static void mover_think(Sim *s, const Pack *p, Mover *m)
+{
+    Player *pl = &s->pl;
+    if (state_done(s, m)) m->at_decide = s->now;         /* 0x006324 */
+    if (m->nudge) { m->nudge = 0; m->at_decide = 0; }    /* 0x006330 */
+    if (s->now >= m->at_decide) {
+        int nw = mover_decide(s, m);
+        if (nw != (int8_t)m->state) {                    /* 0x006360 */
+            m->state = nw;
+            enter_state(s, p, m);
+            m->at_decide = s->now + 0x3c;
+        }
+    }
+    if (s->now >= m->aim_at) {                           /* 0x006438 */
+        mover_aim(s, m);
+        sim_turn(p, m);                                  /* 0x00a600's tail */
+        m->aim_at = s->now + (m->gait ? AIM_MOVING : AIM_STILL);
+    }
+    if (s->now >= m->at_fire) {                          /* 0x006470 */
+        mover_shoot(s, m);
+        int gap;
+        if ((pl->flags & 0x20000000) || m->cid == 9) gap = 0xa;
+        else {
+            gap = 0xa - player_tier(s) - m->cid;
+            if (gap > 9) gap = 9;
+            if (gap < 0) gap = 0;
+            gap += 0xa;
+        }
+        m->at_fire = s->now + gap;
+    }
+}
+
+/* ------------------------------------------------- TurnMover and MoverStep */
 
 static void sim_velocity(const Pack *p, Mover *w)   /* 0x00a590 */
 {
@@ -322,13 +1177,22 @@ static void sim_set_heading(const Pack *p, Mover *w, int32_t h)  /* 0x00a608 */
     sim_velocity(p, w);
 }
 
-/* 0x00a4a4.  State 0x40 always takes the snap at 0x00a518. */
+/* `TurnMover`, 0x00a4a4.  The **gradual** arm below is the one nothing in
+ * this project had ever exercised: a scrambled rithm always snapped, because
+ * `0x00a510` sends state 0x40 straight to `0x00a518`.  Every other state goes
+ * through the ramp -- 1.0 unit a tick, plus Agility over 32. */
 static void sim_turn(const Pack *p, Mover *w)
 {
-    int32_t d = w->heading - w->want;
+    int32_t d = (int32_t)((uint32_t)w->heading - (uint32_t)w->want);
     int32_t ad = d < 0 ? -d : d;
-    if (ad < TURN_DEAD) return;
-    w->heading = w->want;
+    if (ad < TURN_DEAD) return;                          /* 0x00a4f0 */
+    if (ad < TURN_SNAP || (w->state & 0xff) == ST_SCRAMBLE) {
+        w->heading = w->want;                            /* 0x00a518 */
+    } else {
+        int32_t rate = 0x10000 + (w->agility >> 5);      /* 0x00a4d8 */
+        w->heading += d >= 0 ? -rate : rate;
+        w->heading &= 0xffffff;                          /* 0x00a588 */
+    }
     sim_velocity(p, w);
 }
 
@@ -342,15 +1206,26 @@ static int32_t sim_gait_rate(const Mover *w)        /* 0x00bdf0 */
     }
 }
 
+/* `MoverFrame`, 0x00bbf4: where a mover's base rate at `+0x20` comes from,
+ * once a frame.  A **loner** -- `+0x18` bit 6 -- carries its own at `+0x42`;
+ * everyone else takes its crowd's, and an **alarmed** crowd takes the second
+ * rate at `+0x1c`, which `NewCrowds` writes as exactly double the first. */
+static int32_t crowd_rate(const Sim *s, const Mover *m)
+{
+    if (m->loner) return m->own_rate;
+    const Crowd *c = &s->crowd[m->crowd];
+    return (c->alarm || c->flag80) ? c->fast : c->rate;
+}
+
 /* 0x007658: the step loop, and the turn it takes when the map says no. */
 static void sim_step(const Pack *p, const Probe *pr, Mover *w)
 {
     int32_t dx = w->vx, dy = w->vy;
-    if (w->slow) { dx >>= 2; dy >>= 2; }             /* 0x0077ec */
+    if (w->slow) { dx >>= 2; dy >>= 2; }                 /* 0x0077ec */
     int okx = 1, oky = 1;
     while (w->step <= w->acc) {
         w->acc -= w->step;
-        w->phase++;                                  /* 0x00785c */
+        w->phase++;                                      /* 0x00785c */
         if (okx) {
             int nx = (int)((w->x + dx) >> 16), ny = (int)(w->y >> 16);
             if ((probe_at(pr, nx, ny) & 1) && inside_world(p, nx, ny))
@@ -364,59 +1239,118 @@ static void sim_step(const Pack *p, const Probe *pr, Mover *w)
             else oky = 0;
         }
     }
-    w->phase &= 7;                                   /* 0x007950 */
+    w->phase &= 7;                                       /* 0x007950 */
     if (okx && oky) return;
     int quad = (w->vx < 0 ? 1 : 0) + (w->vy < 0 ? 2 : 0);
     int32_t h;
-    if (okx)                                         /* only y is blocked */
+    if (okx)                                             /* only y is blocked */
         h = (quad == 0 || quad == 3) ? w->heading - 0x80000
                                      : w->heading + 0x80000;
-    else if (oky)                                    /* only x is blocked */
+    else if (oky)                                        /* only x is blocked */
         h = (quad == 1 || quad == 2) ? w->heading - 0x80000
                                      : w->heading + 0x80000;
     else
-        h = w->heading + 0x200000;                   /* 0x0079d0 */
-    sim_set_heading(p, w, h & 0xff0000);             /* whole units only */
+        h = w->heading + 0x200000;                       /* 0x0079d0 */
+    sim_set_heading(p, w, h & 0xff0000);                 /* whole units only */
 }
 
-static void sim_init(Sim *s, const Pack *p, uint32_t seed)
+/* ------------------------------------------------------------ the frame */
+
+static void sim_init(Sim *s, const Pack *p, uint32_t seed, double ex, double ey)
 {
     s->n = p->h->nmover;
     s->first = p->h->nprops - s->n;
     s->w = s->n ? (Mover *)calloc(s->n, sizeof(Mover)) : NULL;
     s->probe.p = p;
     s->now = 0;
+    s->B = p->brains;
+    s->min_x = p->h->min_x; s->max_x = p->h->max_x;
+    s->min_y = p->h->min_y; s->max_y = p->h->max_y;
+    memcpy(s->field, s->B->field, sizeof(s->field));
+    memset(s->scratch, 0, sizeof(s->scratch));
     rng_srand(&s->rng, seed);
+
+    /* `0x01c5b0` writes 8.0, 8.0, 12.0 into both halves of the triple, zeroes
+     * both stat blocks and sets rank 255: a new game. */
+    memset(&s->pl, 0, sizeof(s->pl));
+    s->pl.x = (int32_t)(ex * 65536.0);
+    s->pl.y = (int32_t)(ey * 65536.0);
+    s->pl.d = s->pl.dmax = 0x80000;
+    s->pl.o = s->pl.omax = 0x80000;
+    s->pl.a = s->pl.amax = 0xc0000;
+    s->pl.rank = 0xff;
+    s->pl.sight = 0x96;                                  /* [0x058a40] */
+    s->pl.power = 7;                                     /* [0x058bb4] bits 28-31 */
+
+    for (int i = 0; i < 4; i++) {
+        s->crowd[i].x = s->B->crowd[i][0];
+        s->crowd[i].y = s->B->crowd[i][1];
+        s->crowd[i].alarm = s->crowd[i].flag80 = 0;
+        s->crowd[i].at = -1;
+        s->crowd[i].rate = 0x3000;                       /* 0x0085b8 */
+        s->crowd[i].fast = 0x6000;                       /* 0x0085c0 */
+    }
+
     for (uint32_t i = 0; i < s->n; i++) {
         const Prop *pr = &p->props[s->first + i];
-        const MoverEnt *m = &p->movers[i];
+        const MoverEnt *e = &p->movers[i];
         Mover *w = &s->w[i];
         w->x = (int32_t)pr->x << 16;
         w->y = (int32_t)pr->y << 16;
-        w->heading = w->want = (int32_t)pr->face << 16;   /* 0x00ac10 */
-        w->step = m->step;
-        w->rate = m->rate;
-        w->gait = m->gait;
+        w->heading = w->want = (int32_t)pr->face << 16;  /* 0x00ac10 */
+        w->step = e->step;
+        w->rate = w->own_rate = e->rate;
+        w->gait = e->gait;
+        w->cid = e->cid;
+        w->temper = e->temper;
+        w->loner = e->loner;
+        w->crowd = e->crowd & 3;
+        w->d = e->d; w->o = e->o; w->a = e->a;
+        w->dmax = e->dmax; w->omax = e->omax; w->amax = e->amax;
+        w->radius = 0x10;
     }
 }
 
 /* One tick of 0x00bacc, for every mover.  `ex, ey` is the player: it decides
- * which pair of radar tiles is resident, and the probe answers about those. */
+ * which pair of radar tiles is resident, and the probe answers about those.
+ *
+ *     0000bbf4   [+0x20] = the crowd's rate, or a loner's own
+ *     0000bc80   [+0x18] bit 28 = standing in the lake
+ *     0000bef0   [+0x4c] += the gait's share of it
+ *     0000bf0c   MoverThink
+ *     0000bf14   TurnMover
+ *     0000bf34   MoverStep, once the accumulator has paid for a stride
+ */
 static void sim_tick(Sim *s, const Pack *p, double ex, double ey)
 {
     probe_look_from(&s->probe, (int)floor(ex), (int)floor(ey));
+    s->pl.x = (int32_t)(ex * 65536.0);
+    s->pl.y = (int32_t)(ey * 65536.0);
+    for (int i = 0; i < 4; i++) {                        /* 0x006a5c */
+        Crowd *c = &s->crowd[i];
+        int32_t dx = (c->x << 16) - s->pl.x, dy = (c->y << 16) - s->pl.y;
+        if (dx < 0) dx = -dx;
+        if (dy < 0) dy = -dy;
+        if (dx > CROWD_ALARM_RANGE && dy > CROWD_ALARM_RANGE) {
+            c->alarm = 0; c->at = -1;
+        }
+    }
+    drink_from_field(s, NULL);                           /* 0x00bc38, you too */
     for (uint32_t i = 0; i < s->n; i++) {
         Mover *w = &s->w[i];
+        /* 0x00c6ec and 0x00c710: where you are, once, before anything else */
+        w->dist = oct_dist(w->x, w->y, s->pl.x, s->pl.y);
+        w->face_player = (int)((atan2_units((int32_t)(s->pl.x - w->x),
+                                            (int32_t)(s->pl.y - w->y)) >> 16)
+                               & 0xff);
+        drink_from_field(s, w);
+        w->rate = crowd_rate(s, w);
         w->slow = tile_at_world(p, (float)(w->x >> 16),
                                 (float)(w->y >> 16)) == LAKE_TILE;
-        w->acc += sim_gait_rate(w);                  /* 0x00bef0, dt = 1 */
-        if (s->now >= w->aim_at) {                   /* 0x006438 -> 0x005fa0 */
-            w->want = (int32_t)(rng_bits(&s->rng, 8) << 16);
-            w->aim_at = s->now + (w->gait ? AIM_MOVING : AIM_STILL);
-            sim_turn(p, w);                          /* 0x00a600's tail */
-        }
-        sim_turn(p, w);                              /* 0x00bf14 */
-        if (w->step <= w->acc)                       /* 0x00bf2c */
+        w->acc += sim_gait_rate(w);                      /* 0x00bef0, dt = 1 */
+        mover_think(s, p, w);
+        sim_turn(p, w);                                  /* 0x00bf14 */
+        if (w->step <= w->acc)                           /* 0x00bf2c */
             sim_step(p, &s->probe, w);
     }
     s->now++;
@@ -1251,6 +2185,8 @@ int main(int argc, char **argv)
             ticks = atoi(argv[++i]);
         } else if (!strcmp(argv[i], "--seed") && i + 1 < argc) {
             seed = (uint32_t)strtoul(argv[++i], NULL, 0);
+        } else if (!strcmp(argv[i], "--dump-deep")) {
+            dump = 2;                  /* every field, for a bisect */
         } else if (!strcmp(argv[i], "--dump-movers")) {
             dump = 1;
         } else if (!strcmp(argv[i], "--bench") && i + 1 < argc) {
@@ -1279,13 +2215,20 @@ int main(int argc, char **argv)
     Walls walls;
     walls_build(&walls, &p);
     Sim sim;
-    sim_init(&sim, &p, seed);
+    sim_init(&sim, &p, seed, c.ex, c.ey);
     for (int i = 0; i < ticks; i++) sim_tick(&sim, &p, c.ex, c.ey);
     if (dump) {
         for (uint32_t i = 0; i < sim.n; i++) {
             const Mover *w = &sim.w[i];
-            printf("mover %u %d %d %d %d %d %d\n", i, w->x, w->y,
-                   w->heading, w->vx, w->vy, w->phase);
+            if (dump == 2)
+                printf("deep %u %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d\n",
+                       i, w->x, w->y, w->heading, w->want, w->phase,
+                       w->acc, w->rate, w->gait, w->state, w->dest_x,
+                       w->dest_y, (int)w->target, w->radius, w->o,
+                       w->slow);
+            else
+                        printf("mover %u %d %d %d %d %d %d\n", i, w->x, w->y,
+                       w->heading, w->vx, w->vy, w->phase);
         }
         return 0;
     }

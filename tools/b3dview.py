@@ -259,7 +259,8 @@ UV_FLOOR = ((0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0))
 
 def render(path, out, eye, yaw, pitch, fov=70.0, size=(800, 500), far=6000.0,
            cels=None, allfloor=None, floor_radius=40, assets=None, clock=0.0,
-           draw_props=True, spawn=None, ticks=0, seed=1, hud=None):
+           draw_props=True, spawn=None, ticks=0, seed=1, hud=None,
+           spawn_seed=1):
     b = B3D(path)
     recs, failed = b.walk()
     bank = Bank(cels) if cels else None
@@ -485,22 +486,26 @@ def render(path, out, eye, yaw, pitch, fov=70.0, size=(800, 500), far=6000.0,
                                  phases=movermod.VIEWS)
         mtex = {k: [Texture(im[0], im[1], im[2], im[3])
                     for im in v['frames']] for k, v in art.items()}
-        # And now they walk.  spawns.Walk is the transcription of 0x007658 and
-        # its neighbours; native/view.c runs the same integers, which is why
-        # `--ticks` can be swept as well as the camera.
-        steps = {k: v['step'] for k, v in art.items()}
-        walk = spawnmod.Walk(spawn, steps, seed=seed,
-                             hud=hud or spawnmod.HUD,
-                             lake=ground.tile_at_world if ground else None)
+        # And now they decide, and walk to what they decided on.
+        # `behave.StateWalk` is `MoverFrame` with the whole of `MoverThink`
+        # under it -- docs/26, docs/27 and docs/28 -- and `native/view.c` runs
+        # the same integers, which is why `--ticks` can be swept as well as
+        # the camera.  There are three renderers of this walk and they have to
+        # move together: this one, the C one, and the pack that feeds it.
+        import behave
+        walk, cast, _pl, _w = behave.state_world(
+            spawn, hud=hud or spawnmod.HUD, seed=seed, assets=assets,
+            eye=(int(ex // 1), int(ey // 1)), spawn_seed=spawn_seed)
+        walk.walk.lake = ground.tile_at_world if ground else None
         walk.run(ticks, (ex, ey))
-        for m, w in zip(walk.movers, walk.walkers):
-            if m.kind not in art:
+        for w in cast:
+            if w.cid not in art:
                 continue
             mx, my = w.x >> 16, w.y >> 16
             if (mx - ex) ** 2 + (my - ey) ** 2 > far * far:
                 continue
-            a = art[m.kind]
-            frames = mtex[m.kind]
+            a = art[w.cid]
+            frames = mtex[w.cid]
             views = a['views']
             # 0x017cfc and 0x017d60: `phase * views + view`, the phase being
             # the mover's own step counter while its gait bits are set.
@@ -567,7 +572,7 @@ def main():
         a.spawn_seed, tuple(a.spawn_eye), a.hud, a.crowds, a.crashes)
     render(a.b3d, a.png, a.eye, a.yaw, a.pitch, a.fov, tuple(a.size), a.far,
            a.cels, a.floor, a.floor_radius, a.assets, a.time, not a.no_props,
-           spawn, a.ticks, a.seed, a.hud)
+           spawn, a.ticks, a.seed, a.hud, a.spawn_seed)
 
 
 if __name__ == '__main__':

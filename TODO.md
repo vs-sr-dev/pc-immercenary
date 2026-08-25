@@ -25,10 +25,11 @@ in the mover loop, and every one of them is transcribed in
 [25](docs/25-where-the-movers-are.md), [26](docs/26-the-decision.md),
 [27](docs/27-the-doa-field.md), [28](docs/28-what-a-decision-does.md).
 
-**What is finished visually** is the city: `native/view.c` walks it at ~84 fps
-with 1,594 sprites and agrees with `tools/b3dview.py` to the pixel over a
-swept grid. The radar, the lake cut and the rest of `DrawMover` are the three
-things a viewer still owes, and none of them needs any more reversing.
+**What is finished visually** is the city, and the rithms in it: both
+renderers run the whole decision loop and `packdiff --walk 36000` holds them
+against each other to the bit. ~94 fps with 1,594 sprites. The radar, the
+lake cut and the rest of `DrawMover` are the three things a viewer still
+owes, and none of them needs any more reversing.
 
 ### And two thirds of `native/view.c` is scaffolding
 
@@ -63,59 +64,39 @@ the one that was wrong*, below.
 
 ## The work
 
-Do these in order. The first one has a deadline attached to it and the rest
-do not.
+Do these in order.
 
-### 1. Port the states into `native/view.c` — **before** any more reading
-
-`packdiff --walk` is a check only while both sides carry the same rules.
-`behave.StateWalk` runs the whole of `MoverThink`; `native/view.c`'s
-`sim_tick` still runs the one arm of `MoverAim` that `docs/25` knew, the
-scramble. Today the two agree because Python is still *offering*
-`spawns.Walk` for the comparison. Leave it ten sessions and `--walk` will go
-on printing **0 differing** about two things nobody cares about any more, and
-the only regression net this project has will have quietly stopped covering
-anything.
-
-It is not reversing. It is transcription with a green test at the end:
-
-* carry `behave.Body`'s new fields into `view.c`'s `Mover` — `dest`, `save`,
-  `leg`, `target`, `radius`, `until`, `aim`, `hitmark`, the three deadlines,
-  `loner` and `crowd`;
-* port `MoverDecide`, `MoverEnterState`, `MoverStateDone`, `MoverAim`,
-  `CrowdAim`, `MoverShoot`, `PickDestination`, `PickCompanion`,
-  `NearestMover`, `NearestSource`, `DrinkFromField`, `ATan2Fine` — all
-  transcribed and all verified, `behave.py` is the authority;
-* the pack has to carry the DOA field seed, the arctangent table, the nine
-  home boxes and the character records; `tools/scenepack.py` is where that
-  goes;
-* then swap `spawns.Walk.tick` for `StateWalk.tick` in `packdiff --walk` and
-  make it green again.
-
-**Do the two ends in the same session.** The moment either side moves alone
-the check goes red, and there is nothing else to tell you which side is
-wrong. `sim_*` is 181 lines today; expect 600.
-
-Loose ends that come with it, both cheap:
-
-* `TurnMover`'s **gradual** arm is in both renderers and has never once been
-  exercised, because a scrambled rithm snaps. Every state but the scramble
-  goes through it. The port is its first real test — watch it.
-* `PickDestination`'s retry loop and the three spawners all ask the wall
-  clock a question a port cannot answer (`AudioTicks()` against a deadline
-  three ticks out). Python picks 64 tries and C must pick the same number or
-  the two walks will not agree.
-
-### 2. Then read `ResolveHit`, `0x00bff0`
+### 1. Read `ResolveHit`, `0x00bff0`
 
 We can shoot and we cannot die. Thirteen arms inside an encounter, one per
 lieutenant and player form; six on the crowd shapes outside one, with
 everything above 5 falling to `0x00c370` where **only Silva** has an arm.
-Two lines of it are read already and both were worth having: the crowd alarm
-at `0x00c42c` and the hit credit into `+0x77` at `0x00c150`. `CrashMover`
-`0x00b4d8` is read and is what it calls when the answer is yes.
+Three lines of it are read already and all three were worth having: the crowd
+alarm at `0x00c42c`, the hit credit into `+0x77` at `0x00c150`, and the
+`+0x84` reset at `0x00c128` that lets a rithm shoot back on the next tick.
+`CrashMover` `0x00b4d8` is read and is what it calls when the answer is yes.
+
+It is also what the port is waiting on. `MoverShoot` spends the Offense and
+counts the shot; **no projectile is spawned** on either side, so nothing a
+rithm fires can hit anything, the crowd alarm can only be rung by hand, and
+`+0x77`'s low seven bits are never set by anything. The 64-slot table at
+`0x08a1ec` and whatever walks it are the other half.
+
+The port's **other** deliberate gap is smaller and is written down at the top
+of `native/view.c`'s mover section: the encounter trailers of
+`MoverEnterState`, `MoverStateDone` and `MoverAim` — Loki's and Medusa's —
+are in `tools/behave.py` and not in the C, because bit 29 of the render-flag
+word is clear for ever in a viewer. Port them before anything ever sets it.
 
 After it the combat loop is closed the way the mover loop now is.
+
+### 2. Then the three things the viewer still owes
+
+None of them needs any more reversing; all three are in
+[the viewer's backlog](#the-backlog-the-viewer--the-one-real-artefact) with
+the addresses already written down. The radar is the biggest and the most
+visible: `tools/hudmap.py` gives the tile, the transform and the rotation,
+and the pack already carries all 256 tiles of both maps.
 
 ## The backlog: the viewer  *(the one real artefact)*
 
@@ -142,10 +123,11 @@ after touching either renderer, and pass `--assets extracted/Perfect` to
 
 What is still missing:
 
-- ~~**The rithms still run state `0x40`.**~~ Still true of `native/view.c`,
-  and it is now [the work](#1-port-the-states-into-nativeviewc--before-any-more-reading),
-  not a backlog item. Everything above it is transcribed and verified in
-  Python; nothing here is left to read.
+- ~~**The rithms still run state `0x40`.**~~ Answered: both renderers run the
+  whole decision loop and `packdiff --walk 36000` holds them against each
+  other to the bit. What the rithms cannot do is **hit** anything -- no
+  projectile is spawned on either side, which is what
+  [`ResolveHit`](#1-read-resolvehit-0x00bff0) is for.
 - **The rest of `DrawMover`'s 2,400 bytes.** The Perfect One's three forms and
   the hit states. The stealth branch and the PPMPC are answered
   ([24](docs/24-the-cast.md)). Goner's three spare palettes are still unused:
@@ -264,6 +246,20 @@ What is still missing:
   consumes it.
 
 ## Notes to self
+
+- **Python's integers are unbounded and the ARM's are not, and that is a
+  transcription bug waiting in every shift.** `atan2_units` had been checked
+  against `math.atan2` on unit vectors, where it is exact, and against the
+  octant boundaries, where it is exact. It was wrong everywhere the game
+  overflows, which is most of the map, and nothing found it until a C
+  transcription with real `int32_t` sat beside it. Grep the transcriptions
+  for `<<` and ask what the operand can be.
+- **The renderer you forgot is the one that was already agreeing.** Switching
+  the walk meant changing `behave.py` and `native/view.c` -- and
+  `b3dview.py`, which had its own copy of the old walk and which
+  `packdiff --sweep` was quietly reporting as clean because its cameras had
+  no movers in them. Two checks, both green, neither covering the thing that
+  changed. Count the implementations before touching the rule.
 
 - **When a table is one entry longer than it needs to be, that is the
   interpolator asking for room.** `ATan2Fine`'s table is 257 entries and the
@@ -642,6 +638,44 @@ What is still missing:
 ## History
 
 Session logs, newest first. Nothing below this line is work to do.
+
+## Done in session 20
+
+- **The port is done and the check is green.** `native/view.c` runs the whole
+  of `MoverThink`: `MoverDecide`, `MoverEnterState`, `MoverStateDone`,
+  `MoverAim`, `CrowdAim`, `MoverShoot`, `PickDestination`, `PickCompanion`,
+  `NearestMover`, `NearestSource`, `DrinkFromField`, `GainDOA`, `ATan2Fine`
+  and the gradual arm of `TurnMover`. **`packdiff --walk 36000` is 0
+  differing** -- ten minutes of game time, 47 rithms, same 16.16 position,
+  heading, velocity and phase -- and so is a pixel frame with the crowd in
+  front of the camera at 1,800 ticks.
+- **Three renderers had to move together and they did**: `tools/behave.py`,
+  `native/view.c` and `tools/b3dview.py`, which was the third one and the
+  easy one to forget.
+- **The pack is v5.** A **brains block** carries what none of the renderers
+  can read off the disc -- the weight table, the arctangent table, the seeded
+  DOA field, the nine home boxes, the nine field anchors, the character
+  records' DOA and escort columns, `PlayerTier`'s two ladders and the four
+  crowds' centres -- and `MoverEnt` went from 12 bytes to 52.
+- **And the port found four things reading had not.**
+  - **`0x0184b4` overflows.** All eight arms are a bare `lsl r1, ip, #5`, so
+    `min << 5` runs into the sign bit at 1024.0 units and the divide comes
+    back negative. `MoverFrame` calls it for every mover every frame: **any
+    rithm past 1024 units from you in its smaller axis has a bearing byte at
+    `+0x37` that is not a bearing**, and that byte is what `MoverDecide`'s
+    sight cone is measured against. Python's unbounded integers had been
+    quietly right where the game is wrong. Both transcriptions overflow now.
+  - **A rithm is born at gait 0**, not 1. The pack had carried the half-speed
+    walk `MoverEnterState` gives the scramble; `NewMover` memsets the record.
+  - **The crowds belong to the spawn seed, not the walk seed.** `--walk`
+    agreed at seed 1 and at nothing else.
+  - **The pixel sweep had never had a rithm in frame.** Its eyes come from a
+    lattice that lands nowhere near where `population()` puts the crowd, so
+    four sessions of *0 differing pixels across six mover tick counts* were
+    sweeping frames with no mover in them. The spawn eye goes first now.
+- `behave.py --verify` is **156 checks**, `armmath.py` 20, `spawns.py` 19,
+  and the viewer is at ~94 fps.
+  [28](docs/28-what-a-decision-does.md) §8 is the write-up.
 
 ## Done in session 19
 

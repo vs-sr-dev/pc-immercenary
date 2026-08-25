@@ -544,6 +544,13 @@ class Walker:
 class Walk:
     """The three overworld spawners' output, walking.
 
+    **This is the walk with no decision under it**: one arm of `MoverAim`,
+    the scramble's, which was the only state `docs/25` knew a rithm to be in.
+    It is kept because it is the smallest thing that moves a mover and
+    `--draw` still uses it; the walk both renderers actually run is
+    `behave.StateWalk`, which is this frame with the whole of `MoverThink`
+    under it and borrows every method below unchanged.  See docs/28.
+
     One `Rng` of its own: the console draws every one of these bits from the
     single generator the whole frame shares, so a viewer cannot continue that
     stream past the spawn.  It can only run the same rule from the same seed,

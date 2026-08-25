@@ -25,8 +25,19 @@ cast. Offsets are from the start of the file.
                  tools/items.py -- the props first, then the item spawns,
                  then the movers.  Its ground offset, width and height are
                  12.4 fixed point, because a rolled tree's height is `h * 1.5`
-    MoverEnt[]   12 bytes each, one per mover, in the same order as the last
-                 `nmover` Props: step length, base rate and gait, 16.16
+    MoverEnt[]   52 bytes each, one per mover, in the same order as the last
+                 `nmover` Props: the stride, the base rate and the gait in
+                 16.16, then what `MoverDecide` reads of the record -- the
+                 character id, the temperament byte at `+0x42`, the loner bit
+                 at `+0x18` bit 6, which of the four crowds it belongs to,
+                 and the six DOA words at `+0x58`..`+0x6c`
+    Brains       one block of the tables `MoverThink` reads, none of which is
+                 on the disc: the weight table at `p` 0x057c0c, the 258-word
+                 arctangent table at 0x0590f4, the seeded DOA field, the nine
+                 home boxes `SetHomeBoxes` writes, the nine field anchors, the
+                 character records' DOA and escort columns, `PlayerTier`'s two
+                 ladders, and the four crowds' centres.  See BRAINS below and
+                 docs/26, docs/27, docs/28
     AnimEnt[]    4 bytes each: frame count and first frame, per `.anim`
     TexEnt[]     one per sprite frame, all the anims' frames end to end
     sine         4,097 words: the quarter-wave table at `p` 0x0594fc, each
@@ -42,7 +53,7 @@ axis at a time, and neither consults the wall geometry at all.
 The quads keep the game's own coordinates: X east, Y north, Z up, one world
 unit per texture pixel.
 """
-import sys, os, struct, argparse, time
+import sys, os, io, struct, argparse, time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from b3d import B3D
@@ -53,14 +64,33 @@ import props as propmod
 import items as itemmod
 import movers as movermod
 import spawns as spawnmod
+import behave
 
 MAGIC = b'IMPK'
-VERSION = 4
-HEADER = '<4sI 2I 2I 2I 2I I 3i 2I 2I 2I 2I 2I 4i I 12x'   # 128 bytes
+VERSION = 5
+HEADER = '<4sI 2I 2I 2I 2I I 3i 2I 2I 2I 2I 2I 4i I I 8x'  # 128 bytes
 QUAD = '<12h hh HH'                       # 32 bytes
 TEXENT = '<HHI'                           # 8 bytes
 PROP = '<3h 3h 3B x'                      # 16 bytes
-MOVERENT = '<3i'                          # 12 bytes: step, rate, gait
+MOVERENT = '<3i 4i 6i'                    # 52 bytes: see the docstring
+
+# One block, in this order, all little-endian and 4-byte aligned.  Everything
+# in it is read out of `p` or out of `PerfectMovers.B3D` by the modules that
+# already own those files, so C never parses anything.
+BRAINS = (
+    ('weight',  '<247b', 1),          # 0x057c0c, nineteen rows of thirteen
+    ('pad',     '<b',    1),          # to a word
+    ('atan',    '<258I', 1),          # 0x0590f4, ATan2Fine's table
+    ('field',   '<256H', 1),          # 0x060adc seeded: kind << 14 | charge
+    ('home',    '<36i',  1),          # 0x060170 as SetHomeBoxes leaves it
+    ('anchor',  '<18i',  1),          # 0x007b90, nine (x, y)
+    ('recdoa',  '<54i',  1),          # the eighteen records' D, O, A
+    ('recesc',  '<18b',  1),          # and their escort probability
+    ('pad2',    '<2b',   1),
+    ('statthr', '<5i',   1),          # PlayerTier's stat ladder
+    ('rankthr', '<5i',   1),          # and its rank ladder
+    ('crowd',   '<8i',   1),          # the four crowds' centres
+)
 ANIMENT = '<HH'                           # 4 bytes
 
 # Every overworld animation is an eight-view turntable -- docs/24 -- and a
@@ -68,7 +98,10 @@ ANIMENT = '<HH'                           # 4 bytes
 # being the step counter at its own `+0x34` (docs/25).
 VIEWS = 8
 PHASES = 8
-GAIT = 1                        # the half-speed walk state 0x40 is given
+# `NewMover` memsets the whole 0x90-byte record, so a rithm is born at gait
+# **0** and standing, and `MoverEnterState` writes the gait on its first
+# decision.  This was 1 while the viewer only ever ran the scramble.
+GAIT = 0
 
 
 def u4(v):
@@ -130,8 +163,48 @@ def flatten(im, bgnd=True):
     return w, h, bytes(out)
 
 
+def brains(image, assets, spawn_seed):
+    """The tables `MoverThink` reads, none of which is on the disc.
+
+    `tools/behave.py` is the authority on every one of them and it reads them
+    out of the ARM image; this only lays them end to end in the order `BRAINS`
+    declares, so the C side can cast the block and never parse anything.
+
+    The DOA field goes in **seeded** -- `SeedDOAField`'s own sweep, before any
+    of the clock's refills -- because that is the state a fresh walk starts
+    from.  A cell with no source is a zero word, which is what bit 15 clear
+    means to the game.
+    """
+    b = io.BytesIO()
+    movers_b3d = os.path.join(assets, 'PerfectMovers.B3D')
+    tab = behave.weight_table(image)
+    b.write(struct.pack('<247b', *[v for row in tab for v in row]))
+    b.write(struct.pack('<b', 0))
+    from armmath import ATan2Fine
+    at = ATan2Fine(open(image, 'rb').read())
+    b.write(struct.pack('<258I', *[at._t(i) for i in range(258)]))
+    field = behave.field_seed(image)
+    b.write(struct.pack('<256H', *[0 if c is None else
+                                   (c[0] << 14) | (c[1] & 0x1ff)
+                                   for c in field]))
+    b.write(struct.pack('<36i', *[v for box in behave.home_boxes(image)
+                                  for v in box]))
+    b.write(struct.pack('<18i', *[v for pt in behave.field_anchors(image)
+                                  for v in pt]))
+    recs = behave.character_records(movers_b3d)
+    b.write(struct.pack('<54i', *[int(v * 65536) for r in recs
+                                  for v in r['doa']]))
+    b.write(struct.pack('<18b', *[r['escort'] for r in recs]))
+    b.write(struct.pack('<2b', 0, 0))
+    b.write(struct.pack('<5i', *[sum(r['doa']) for r in recs[:5]]))
+    b.write(struct.pack('<5i', *behave.rank_thresholds(image)[1:6]))
+    zones = spawnmod.new_zones(spawnmod.Rng(spawn_seed))
+    b.write(struct.pack('<8i', *[v for z in zones for v in (z.x, z.y)]))
+    return b.getvalue()
+
+
 def pack(b3dpath, celpath, floorpath, assets, out, spawn=None,
-         hud=spawnmod.HUD, image=spawnmod.IMAGE):
+         hud=spawnmod.HUD, image=spawnmod.IMAGE, spawn_seed=1):
     t0 = time.time()
     b = B3D(b3dpath)
     recs, failed = b.walk()
@@ -264,16 +337,24 @@ def pack(b3dpath, celpath, floorpath, assets, out, spawn=None,
                 sents.append((w, h, span))
                 blobs.append(px)
                 span += len(px)
+        recs = behave.character_records(
+            os.path.join(assets, 'PerfectMovers.B3D'))
         for m in mlist:
             a = art[m.kind]
             props_bin += struct.pack(PROP, m.x, m.y, u4(a['z']),
                                      u4(a['w']), u4(a['h']),
                                      m.face, VIEWS, midx[m.kind], 8)
             # What the walk needs and the art does not carry: how far one
-            # stride goes, the crowd's base rate and the gait the wander
-            # state is given.  docs/25 and tools/spawns.py are the authority.
-            movers_bin += struct.pack(MOVERENT, a['step'],
-                                      spawnmod.CROWD_RATE, GAIT)
+            # stride goes, the crowd's base rate and the gait a fresh mover
+            # is given, and then everything `MoverDecide` weighs.  `+0x18`
+            # bit 6 is the loner bit -- `FillCrowd` clears it and the entry
+            # burst sets it -- and it picks the aim *and* the rate.
+            doa = m.doa or recs[m.kind - 1]['doa']
+            d, o, aa = [int(v * 65536) for v in doa]
+            movers_bin += struct.pack(
+                MOVERENT, a['step'], spawnmod.CROWD_RATE, GAIT,
+                m.kind, m.temper, 0 if m.source == 'zone' else 1,
+                m.zone or 0, d, o, aa, d, o, aa)
 
     nprops = len(plist) + len(ilist) + len(mlist)
 
@@ -282,6 +363,8 @@ def pack(b3dpath, celpath, floorpath, assets, out, spawn=None,
     # viewer walks the whole city; and both because the probe falls through
     # from the near tile to the far one wherever the near one does not reach
     # (`0x0111a4`).
+    brains_bin = brains(image, assets, spawn_seed)
+
     near_bin = open(os.path.join(hud, 'NearHUD.Maps'), 'rb').read()
     far_bin = open(os.path.join(hud, 'FarHUD.Maps'), 'rb').read()
     sine_bin = sine_table(image)
@@ -296,7 +379,8 @@ def pack(b3dpath, celpath, floorpath, assets, out, spawn=None,
     anim_off = mover_off + len(movers_bin)
     spr_off = anim_off + len(anims) * struct.calcsize(ANIMENT)
     sine_off = spr_off + len(sents) * struct.calcsize(TEXENT)
-    near_off = sine_off + len(sine_bin)
+    brains_off = sine_off + len(sine_bin)
+    near_off = brains_off + len(brains_bin)
     far_off = near_off + len(near_bin)
     texdata_off = far_off + len(far_bin)
 
@@ -315,7 +399,7 @@ def pack(b3dpath, celpath, floorpath, assets, out, spawn=None,
                             near_off, far_off,
                             spawnmod.MIN_X, spawnmod.MAX_X,
                             spawnmod.MIN_Y, spawnmod.MAX_Y,
-                            sine_off))
+                            sine_off, brains_off))
         f.write(b''.join(quads))
         for w, h, o in ents:
             f.write(struct.pack(TEXENT, w, h, o))
@@ -329,6 +413,7 @@ def pack(b3dpath, celpath, floorpath, assets, out, spawn=None,
         for w, h, o in sents:
             f.write(struct.pack(TEXENT, w, h, o))
         f.write(sine_bin)
+        f.write(brains_bin)
         f.write(near_bin)
         f.write(far_bin)
         for blob in blobs:
@@ -372,7 +457,7 @@ def main():
     pack(a.b3d, a.cels, a.floor, a.assets, a.out,
          None if a.no_movers else spawnmod.population(
              a.spawn_seed, tuple(a.spawn_eye), a.hud, a.crowds, a.crashes),
-         a.hud, a.image)
+         a.hud, a.image, a.spawn_seed)
 
 
 if __name__ == '__main__':

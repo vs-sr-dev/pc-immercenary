@@ -15,13 +15,15 @@ This is that routine read, the two switches on either side of the vote
 transcribed, `MoverAim` and the crowd behind it, and the two arctangents the
 frame turns out to have. The transcription is
 [`tools/behave.py`](../tools/behave.py) and
-[`tools/armmath.py`](../tools/armmath.py), 153 checks and 20:
+[`tools/armmath.py`](../tools/armmath.py), 156 checks and 20, and
+`native/view.c`, which now runs all of it too:
 
 ```sh
 python tools/behave.py --verify
 python tools/behave.py --arms           # run all fifteen arms of 0x0058f0
 python tools/behave.py --live           # the real population, walking
 python tools/behave.py --live --shoot   # and the same after you shoot one
+python tools/packdiff.py --walk 36000   # and the C side, to the bit
 ```
 
 ## 1. `MoverThink` has three deadlines and only one of them is the decision
@@ -406,18 +408,60 @@ of eight turns 1 shot in thirty seconds into 477, and the share of the cast's
 time spent in *feed O* goes from 3% to 19% - they empty themselves and go to
 the field for more.
 
-## 8. The walk, driven by the states
+## 8. The walk, driven by the states -- in both renderers
 
 `behave.StateWalk` is `MoverFrame` with `MoverThink` under it rather than the
-scramble, and everything below the think - `TurnMover`, `MoverStep`, the
-velocity - is `spawns.Walk`'s own code, borrowed unchanged, which is why
-`Body` now carries `spawns.Walker`'s field names.
+scramble, and everything below the think -- `TurnMover`, `MoverStep`, the
+velocity -- is `spawns.Walk`'s own code, borrowed unchanged, which is why
+`Body` carries `spawns.Walker`'s field names.
 
-`spawns.Walk` is deliberately left alone. It is the walk `native/view.c`
-matches to the bit and `packdiff --walk` checks, and until the C side carries
-the states too the two are different walks on purpose: only `spawns.Walk` is
-under test. Swapping one for the other is the next session's job and the
-check for it already exists.
+`native/view.c` runs the same thing. Its `sim_tick` is `0x00bacc` and the
+five hundred lines above it are every routine in this document, transcribed a
+second time in C from the Python that `--verify` pins to the image. The pack
+grew a **brains block** to carry what none of it can read off the disc -- the
+weight table, the arctangent table, the seeded DOA field, the nine home boxes
+and field anchors, the character records' DOA and escort columns,
+`PlayerTier`'s two ladders and the four crowds' centres -- and `MoverEnt`
+grew from 12 bytes to 52 for the seven fields a decision reads off a mover.
+
+**`packdiff --walk 36000` is 0 differing**: ten minutes of game time, 47
+rithms, and the same 16.16 position, heading, velocity and step phase on both
+sides. So is a pixel frame with the crowd in front of the camera at 1,800
+ticks.
+
+Three things had to move together and all three are one commit:
+`tools/behave.py`, `native/view.c`, and `tools/b3dview.py`, which was the
+third renderer of this walk and the easy one to forget.
+
+### Four things the port found that reading had not
+
+**The bearing byte overflows.** `0x0184b4` is eight arms and every one of
+them is a bare `lsl r1, ip, #5` with nothing under it, so `min << 5` runs
+into the sign bit at 1024.0 world units and the divide that follows comes
+back negative. `MoverFrame` calls it for every mover every frame, so **any
+rithm more than 1024 units from you in its smaller axis carries a bearing at
+`+0x37` that is not a bearing** -- and that byte is what `MoverDecide`'s
+sight cone is measured against. Python's integers are unbounded and the
+transcription had quietly been right where the game is wrong. Both
+`behave.atan2_units` and `armmath.atan2_ramp` overflow now, and two checks
+pin it.
+
+**A rithm is born at gait 0.** The pack had carried `gait = 1` since the
+viewer only ever ran the scramble, which `MoverEnterState` gives a half-speed
+walk. `NewMover` memsets the whole 0x90-byte record, so the right answer is
+0, and `MoverEnterState` writes the gait on the first decision. It showed up
+as tick zero disagreeing before a single decision had been made.
+
+**The crowds belong to the spawn, not to the walk.** `NewCrowds` runs once,
+off the same generator the population comes from; the reference side was
+rolling their four centres from the *walk* seed. `--walk --seed 1` agreed and
+every other seed did not.
+
+**And the pixel sweep had never had a rithm in frame.** Its eyes come from a
+lattice that walks the whole city and lands nowhere near where
+`population()` puts the crowd, so four sessions of *0 differing pixels*
+across six mover tick counts had been sweeping frames with no mover in them.
+The spawn eye goes first in the lattice now.
 
 ## 9. What is still open in the loop
 
@@ -432,7 +476,8 @@ Nothing in `MoverThink` is unread now. What is left around it:
 * **`0x023e34`**, Medusa's aim inside an encounter, and `0x006ac8`'s cousin
   `0x021aec`, which `0x01a9c4` asks about the city's power while it draws a
   spire.
-* **The port.** `Body` carries `spawns.Walker`'s fields, `StateWalk` is
-  `MoverFrame` with the real loop under it, and `native/view.c` still runs
-  the scramble. `packdiff --walk` is the check and it is clean today; making
-  it clean again with the states under both sides is the work.
+* ~~**The port.**~~ Done, and `packdiff --walk 36000` is clean with the
+  states under both sides. What the port did *not* carry over is the shot
+  itself: `MoverShoot` spends the Offense and counts, and no projectile is
+  spawned, so nothing a rithm fires can hit anything and the crowd alarm can
+  only be rung by hand. That needs `ResolveHit` first.

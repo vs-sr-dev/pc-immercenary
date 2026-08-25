@@ -207,21 +207,39 @@ def oct_dist(ax, ay, bx, by):
     return dy + (dx >> 1) if dx <= dy else dx + (dy >> 1)
 
 
+def div32(a, b):
+    """The C runtime divide `0x00016c` -- 32 bits, and it truncates **toward
+    zero** where Python floors."""
+    if not b:
+        return 0
+    q = abs(a) // abs(b)
+    return -q if (a < 0) != (b < 0) else q
+
+
 def atan2_units(dx, dy):
     """`0x0184b4`: a 24-bit angle, a full turn being `0x1000000`.
 
     An octant from the two signs and which of the two is larger, then
     `32 * min / max` inside it.  Truncating, and the result is a whole unit
     shifted up sixteen -- there is no fraction in it.
+
+    **The shift is 32 bits wide and the game lets it overflow.**  `0x018530`
+    and its seven neighbours are a plain `lsl r1, ip, #5` with nothing under
+    it, so a `min` of 1024.0 world units or more runs into the sign bit and
+    the divide that follows comes back negative.  `MoverFrame` calls this for
+    every mover every frame, so **any rithm more than 1024 units from you in
+    its smaller axis has a nonsense bearing byte at `+0x37`** -- which is the
+    byte `MoverDecide`'s sight cone is measured against.  It is transcribed
+    rather than fixed, and it is why `packdiff --walk` and not eyeballing.
     """
     dx, dy = s32(dx), s32(dy)
     ax, ay = abs(dx), abs(dy)
     o = (1 if dx < 0 else 0) | (2 if dy < 0 else 0) | (4 if ax < ay else 0)
     if o < 4:                                   # the shallow four
-        q = 0 if ax == 0 else (ay * 32) // ax
+        q = 0 if ax == 0 else div32(s32((ay * 32) & M32), ax)
         r = (q, 0x80 - q, -q, q - 0x80)[o]
     else:                                       # the steep four
-        q = 0 if ay == 0 else (ax * 32) // ay
+        q = 0 if ay == 0 else div32(s32((ax * 32) & M32), ay)
         r = (0x40 - q, q + 0x40, q - 0x40, -0x40 - q)[o - 4]
     return s32(r << 16)
 
@@ -1940,6 +1958,25 @@ def verify(args):
     check('and a full one costs the city nothing',
           sum(c[1] for c in f if c is not None) == before)
 
+    print('== 0x0184b4 overflows, and the transcription overflows with it')
+    check('every one of the eight arms is a bare `lsl #5`, nothing under it',
+          [text(a) for a in (0x018530, 0x018540, 0x018550, 0x018560,
+                             0x018570, 0x018584, 0x01859c, 0x0185b4)] ==
+          ['lsl r1, ip, #5'] * 4 + ['lsl r1, r0, #5'] * 4,
+          '   %s' % [text(0x018530), text(0x018570)])
+    far = [(dx, dy) for dx in (1500, 2000, 3000) for dy in (1100, 1400, 1500)]
+    wrong = [(dx, dy) for dx, dy in far
+             if (atan2_units(dx << 16, dy << 16) >> 16) & 0xff !=
+             round(math.atan2(dy, dx) * 256 / (2 * math.pi)) % 256]
+    check('so a rithm past 1024 units in its smaller axis gets a bearing '
+          'byte that is not a bearing at all',
+          len(wrong) == len(far), '   %d of %d far pairs' % (len(wrong), len(far)))
+    near = [(dx, dy) for dx in (100, 300, 900) for dy in (50, 200, 700)]
+    ok_near = all(abs(((atan2_units(dx << 16, dy << 16) >> 16) & 0xff) -
+                      math.atan2(dy, dx) * 256 / (2 * math.pi)) < 4
+                  for dx, dy in near)
+    check('and inside 1024 it is the plain ramp, within four units', ok_near)
+
     print('== 0x04cd00, the other arctangent')
     from armmath import ATan2Fine, atan2_ramp
     at = ATan2Fine(im.d)
@@ -2212,6 +2249,7 @@ class StateWalk(object):
                 m.step = steps.get(m.cid, m.step)
 
     def tick(self, eye):
+        import spawns
         w, pl = self.w, self.pl
         self.walk.probe.look_from(int(eye[0] // 1), int(eye[1] // 1))
         for c in w.crowds:                           # 0x006a5c, UpdateCrowds
@@ -2221,6 +2259,8 @@ class StateWalk(object):
             look_at_player(m, pl)                    # 0x00c6ec and 0x00c710
             drink_from_field(m, pl, w.field, w.box)
             m.rate = crowd_rate(m, w)                # 0x00bbf4
+            if self.walk.lake is not None:           # 0x00bc80, `+0x18` bit 28
+                m.slow = self.walk.lake(m.x >> 16, m.y >> 16) == spawns.LAKE_TILE
             m.acc += self.walk.gait_rate(m)          # 0x00bef0, with dt = 1
             mover_think(m, pl, self.d, w, turn=self.walk.turn)
             self.walk.turn(m)                        # 0x00bf14
@@ -2234,6 +2274,62 @@ class StateWalk(object):
         return self.bodies
 
 
+def bodies_from(pop, d, image=IMAGE, movers_b3d=MOVERS_B3D):
+    """One `Body` per `spawns.Mover`, carrying what the record carries.
+
+    `scenepack.py` writes the same seven fields into the pack's `MoverEnt`,
+    so this is the one place the two renderers can disagree about what a
+    rithm *is* -- keep them together.
+    """
+    out = []
+    for m in pop:
+        b = Body(m.kind, m.doa or d.records[m.kind - 1]['doa'])
+        b.x, b.y = m.x << 16, m.y << 16
+        b.heading = b.want = m.face << 16       # 0x00ac10
+        b.temper = m.temper
+        b.crowd = m.zone or 0
+        b.loner = 0 if m.source == 'zone' else 1
+        out.append(b)
+    return out
+
+
+def state_world(pop, image=IMAGE, movers_b3d=MOVERS_B3D, world=WORLD_B3D,
+                hud=None, seed=1, assets='extracted/Perfect', eye=(0, 0),
+                spawn_seed=None):
+    """Everything `StateWalk` needs, built the way the pack is built.
+
+    Returns `(walk, cast, player, world)`.  `packdiff --walk` and `--live`
+    both come through here so that the reference side of the check and the
+    thing being demonstrated cannot drift apart.
+    """
+    import spawns
+    import movers as moversmod
+    d = Decider(image, movers_b3d)
+    pl = Player(eye[0] << 16, eye[1] << 16, image, movers_b3d)
+    probe = spawns.Probe(hud or spawns.HUD)
+    probe.look_from(*eye)
+    w = World(spawns.Rng(seed), probe, [], field_seed(image),
+              world_box(world), image, movers_b3d)
+    # The crowds belong to the **spawn**, not to the walk: `NewCrowds` runs
+    # once, off the same generator the population comes from, and the pack
+    # freezes their four centres with it.  Two different seeds, and mixing
+    # them is a divergence `packdiff --walk --seed N` will find at once.
+    for i, z in enumerate(spawns.new_zones(
+            spawns.Rng(seed if spawn_seed is None else spawn_seed))):
+        w.crowds[i] = Crowd(z.x, z.y, z.want)
+    try:
+        steps = moversmod.mover_steps(assets, {m.kind for m in pop})
+    except Exception:
+        steps = {}
+    # `spawns.Walk` drops a mover whose character has no run animation and so
+    # does `scenepack.py`, so this has to as well or the three renderers will
+    # not even agree on how many rithms there are.
+    pop = [m for m in pop if m.kind in steps] if steps else list(pop)
+    cast = bodies_from(pop, d)
+    w.movers = cast
+    return StateWalk(cast, pl, d, w, steps, hud=hud), cast, pl, w
+
+
 def live(args):
     """The whole loop, walking, and what a rithm does with its day.
 
@@ -2245,42 +2341,16 @@ def live(args):
     after that is the pack.
     """
     import spawns
-    import movers as moversmod
-    d = Decider(args.image, args.movers)
-    pl = Player(args.eye[0] << 16, args.eye[1] << 16, args.image, args.movers)
-    pl.jump_ticks = args.hours * 0xe10
-    field, box = field_seed(args.image), world_box(args.world)
-
     pop = spawns.population(seed=args.seed, eye=tuple(args.eye),
                             crowds='inrange')
-    pop = [m for m in pop if m.kind == args.cid] if args.cid else pop
+    if args.cid:
+        pop = [m for m in pop if m.kind == args.cid]
     del pop[args.count:]
-    probe = spawns.Probe()
-    probe.look_from(*args.eye)
-    rng = spawns.Rng(args.seed)
-    w = World(rng, probe, [], field, box, args.image, args.movers)
-
-    zones = spawns.new_zones(spawns.Rng(args.seed))
-    for i, z in enumerate(zones):
-        w.crowds[i] = Crowd(z.x, z.y, z.want)
-
-    cast = []
-    for m in pop:
-        doa = m.doa or d.records[m.kind - 1]['doa']
-        b = Body(m.kind, doa)
-        b.x, b.y = m.x << 16, m.y << 16
-        b.heading = b.want = m.face << 16       # 0x00ac10
-        b.temper = m.temper
-        b.crowd = m.zone or 0
-        b.loner = 0 if m.source == 'zone' else 1
-        cast.append(b)
-    w.movers = cast
-    try:
-        steps = moversmod.mover_steps(args.assets, {b.cid for b in cast})
-    except Exception as e:
-        print('  (no animation stride: %s -- using 1.0)' % e)
-        steps = {}
-    sw = StateWalk(cast, pl, d, w, steps)
+    sw, cast, pl, w = state_world(pop, args.image, args.movers, args.world,
+                                  seed=args.seed, assets=args.assets,
+                                  eye=tuple(args.eye))
+    pl.jump_ticks = args.hours * 0xe10
+    field, box = w.field, w.box
 
     print('%d rithms round (%d, %d), %d hours of play, tier %d, power %d'
           % (len(cast), args.eye[0], args.eye[1], pl.hours, pl.tier, pl.power))

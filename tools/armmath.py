@@ -194,6 +194,14 @@ class ATan2Fine:
         return a + (oct_ << 21)                         # 0x04cda8
 
 
+def _div32(a, b):
+    """`0x00016c`: 32 bits, truncating toward zero where Python floors."""
+    if not b:
+        return 0
+    q = abs(a) // abs(b)
+    return -q if (a < 0) != (b < 0) else q
+
+
 def atan2_ramp(dx, dy):
     """`0x0184b4`, the *other* one, for comparison.
 
@@ -201,14 +209,18 @@ def atan2_ramp(dx, dy):
     `32 * min / max` inside it: a straight ramp where `ATan2Fine` has a
     curve.  `tools/behave.py` carries the same transcription because the
     decision reads its answer out of `+0x37`.
+
+    The shift is a plain 32-bit `lsl #5` and the game lets it **overflow**:
+    past a `min` of 1024.0 world units the divide comes back negative and the
+    bearing is nonsense.  Transcribed, not fixed.
     """
     ax, ay = abs(s32(dx)), abs(s32(dy))
     o = (1 if s32(dx) < 0 else 0) | (2 if s32(dy) < 0 else 0) | (4 if ax < ay else 0)
     if o < 4:
-        q = 0 if ax == 0 else (ay * 32) // ax
+        q = 0 if ax == 0 else _div32(s32((ay * 32) & M32), ax)
         r = (q, 0x80 - q, -q, q - 0x80)[o]
     else:
-        q = 0 if ay == 0 else (ax * 32) // ay
+        q = 0 if ay == 0 else _div32(s32((ax * 32) & M32), ay)
         r = (0x40 - q, q + 0x40, q - 0x40, -0x40 - q)[o - 4]
     return s32(r << 16)
 

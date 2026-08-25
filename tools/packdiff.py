@@ -105,6 +105,7 @@ def load(path):
 SWEEP_YAWS = (0, 45, 90, 180, -90, 213)
 SWEEP_PITCHES = (0, 2, -5)
 SWEEP_TICKS = (0, 37, 240, 601, 1800, 5400)   # of the mover walk
+SPAWN_EYE = (-279, 640)         # where population() puts you, and the crowd
 SWEEP_STRIDE = 384          # world units between candidate eyes
 SWEEP_CLEAR = 12            # open ground wanted this far to either side
 
@@ -121,7 +122,11 @@ def sweep_eyes(n, hud, clear=False):
     """
     import spawns
     probe = spawns.Probe(hud)
-    out = []
+    # The lattice below is geometry: it walks the whole city and lands
+    # nowhere near the population, so for four sessions the mover tick counts
+    # were swept over frames with no rithm in them.  The spawn eye goes first
+    # so that at least one camera has the crowd in front of it.
+    out = [tuple(SPAWN_EYE)]
     x = spawns.MIN_X + SWEEP_STRIDE
     while x < spawns.MAX_X and len(out) < n:
         y = spawns.MIN_Y + SWEEP_STRIDE
@@ -199,7 +204,7 @@ def walkcheck(o):
     shows up as the tick it started on rather than as a smear of pixels.
     """
     import spawns
-    import movers
+    import behave
     from floor import Floor
 
     env = dict(os.environ)
@@ -215,13 +220,14 @@ def walkcheck(o):
               for l in out.splitlines() if l.startswith('mover ')]
 
     pop = spawns.population(o.spawn_seed, tuple(eye), o.hud)
-    steps = movers.mover_steps(o.assets, {m.kind for m in pop})
     ground = Floor(o.floor)
-    walk = spawns.Walk(pop, steps, hud=o.hud, seed=o.seed,
-                       lake=ground.tile_at_world)
+    walk, cast, pl, world = behave.state_world(
+        pop, hud=o.hud, seed=o.seed, assets=o.assets, eye=tuple(eye),
+        spawn_seed=o.spawn_seed)
+    walk.walk.lake = ground.tile_at_world
     walk.run(o.walk, tuple(eye))
     ref = [(i, w.x, w.y, w.heading, w.vx, w.vy, w.phase)
-           for i, w in enumerate(walk.walkers)]
+           for i, w in enumerate(cast)]
 
     if len(native) != len(ref):
         print('%d movers native, %d reference' % (len(native), len(ref)))
