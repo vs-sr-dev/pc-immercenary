@@ -9,11 +9,12 @@
  *   python tools/scenepack.py out/world.pack
  *   make -C native && native/view out/world.pack
  *
- * The projection, the wall shading, the ground's near/far detail switch and
- * its sixteen-step distance fade are the same rules tools/b3dview.py renders
- * with, which were read off the game's own code -- see docs/05, docs/07 and
- * docs/08.  The two renderers are meant to agree pixel for pixel on a still
- * frame; --shot writes one out so they can be compared.
+ * The projection, the wall shading, the ground's near/far detail switch, its
+ * sixteen-step distance fade and the placed props are the same rules
+ * tools/b3dview.py renders with, which were read off the game's own code --
+ * see docs/05, docs/07, docs/08 and docs/22.  The two renderers are meant to
+ * agree pixel for pixel on a still frame; --shot writes one out so they can
+ * be compared.
  */
 #include <SDL.h>
 #include <stdio.h>
@@ -35,18 +36,30 @@ typedef struct {
     uint32_t nfloor, floor_off;
     uint32_t map_off;
     int32_t  col_bias, row_bias, tile;
-    uint32_t reserved[2];
+    uint32_t nprops, props_off;
+    uint32_t nspr, spr_off;
+    uint32_t nanim, anim_off;
+    uint32_t reserved[4];
 } Header;
 
 typedef struct { int16_t v[4][3]; int16_t texid, angle; uint16_t flags, pad; } Quad;
 typedef struct { uint16_t w, h; uint32_t off; } TexEnt;
+/* a placed sprite: position and size in world units, then which .anim and
+ * how it picks a frame.  tools/props.py is the authority on all of it. */
+typedef struct {
+    int16_t x, y, z, w, h, face;
+    uint8_t k, anim, mode, pad;     /* mode bit 0 clock, bit 1 do not fade */
+} Prop;
+typedef struct { uint16_t n, first; } AnimEnt;
 #pragma pack(pop)
 
 typedef struct {
     uint8_t        *blob;
     const Header   *h;
     const Quad     *quads;
-    const TexEnt   *tex, *floor;
+    const TexEnt   *tex, *floor, *spr;
+    const Prop     *props;
+    const AnimEnt  *anim;
     const uint8_t  *map;
     const uint32_t *texdata;
 } Pack;
@@ -64,17 +77,21 @@ static int pack_open(Pack *p, const char *path)
     }
     fclose(f);
     p->h = (const Header *)p->blob;
-    if (memcmp(p->h->magic, "IMPK", 4) || p->h->version != 1) {
-        fprintf(stderr, "%s: not a v1 scene pack\n", path); return 0;
+    if (memcmp(p->h->magic, "IMPK", 4) || p->h->version != 2) {
+        fprintf(stderr, "%s: not a v2 scene pack\n", path); return 0;
     }
     p->quads   = (const Quad *)(p->blob + p->h->quads_off);
     p->tex     = (const TexEnt *)(p->blob + p->h->tex_off);
     p->floor   = (const TexEnt *)(p->blob + p->h->floor_off);
     p->map     = p->blob + p->h->map_off;
+    p->props   = (const Prop *)(p->blob + p->h->props_off);
+    p->anim    = (const AnimEnt *)(p->blob + p->h->anim_off);
+    p->spr     = (const TexEnt *)(p->blob + p->h->spr_off);
     p->texdata = (const uint32_t *)(p->blob + p->h->texdata_off);
-    printf("%s: %u quads, %u texture slots, %u floor cels, %.1f MB of pixels\n",
-           path, p->h->nquads, p->h->ntex, p->h->nfloor,
-           p->h->texdata_len / 1048576.0);
+    printf("%s: %u quads, %u texture slots, %u floor cels, %u props in %u "
+           "anims, %.1f MB of pixels\n",
+           path, p->h->nquads, p->h->ntex, p->h->nfloor, p->h->nprops,
+           p->h->nanim, p->h->texdata_len / 1048576.0);
     return 1;
 }
 
@@ -291,10 +308,127 @@ static const float UV_WALL[4][2]  = {{1,0},{0,0},{0,1},{1,1}};
 /* floor quads are emitted south-west, south-east, north-east, north-west */
 static const float UV_FLOOR[4][2] = {{0,0},{1,0},{1,1},{0,1}};
 
-typedef struct { int textured, ground, walls, floor_radius; } Opts;
+typedef struct { int textured, ground, walls, props, floor_radius; } Opts;
+
+/* ---------------------------------------------------------------- the props
+ *
+ * A prop is one cel drawn as a *screen-aligned rectangle*.  `0x0183a8` takes
+ * the base point's camera-space depth and the record's width, height and
+ * ground offset and writes four corners -- left/right about the projected
+ * centre, the base at the bottom -- and nothing anywhere rotates them.  It
+ * divides by the same 160-pixel half screen the walls and the horizon table
+ * use, so the camera's own `f` serves here with no second constant.
+ *
+ * Which frame shows is the difference between the two record kinds, and
+ * tools/props.py is the authority on both: an eight-view turntable for
+ * `sub = 3`, a one-second clock for `sub = 6`.
+ */
+
+/* `0x0184b4`: an octant plus `32 * min/max`, truncating, 256 to the turn */
+static int atan2_3do(int dx, int dy)
+{
+    int a = dx < 0 ? -dx : dx, b = dy < 0 ? -dy : dy, q;
+    if (!a && !b) return 0;
+    if (a < b) {
+        q = (a << 5) / b;
+        if (dx >= 0) return dy >= 0 ? 64 - q : q - 64;
+        return dy >= 0 ? 64 + q : -64 - q;
+    }
+    q = (b << 5) / a;
+    if (dx >= 0) return dy >= 0 ? q : -q;
+    return dy >= 0 ? 128 - q : q - 128;
+}
+
+/* `DepthToShade`, 0x012298: sixteen bands counted down from the draw distance
+ * in steps of seven, so nothing inside 145 units is faded at all.  The band
+ * indexes the ground's own PIXC table at `0x581d4`. */
+static int depth_shade(double depth)
+{
+    double limit = 250.0;
+    int level = 15;
+    for (int i = 0; i < 15; i++) {
+        if (depth > limit) break;
+        limit -= 7.0;
+        level--;
+    }
+    return level;
+}
+
+static int draw_prop(Raster *r, const Cam *c, const Pack *p, const Prop *pr,
+                     double t, int textured)
+{
+    const AnimEnt *a = &p->anim[pr->anim];
+    if (!a->n) return 0;
+    CV b = to_cam(c, pr->x, pr->y, pr->z, 0.0, 0.0);
+    if (b.z < NEARZ) return 0;
+
+    int frame;
+    if (pr->mode & 1) {                /* 0x2222 of a frame per 1/60 s tick */
+        frame = (int)(t * 59.94 * (0x2222 / 65536.0)) % a->n;
+    } else {                           /* k views, `face` naming view zero */
+        int sector = pr->k ? 256 / pr->k : 256;
+        int ang = (atan2_3do((int)(pr->x - c->ex), (int)(pr->y - c->ey))
+                   - (pr->face - sector / 2) + 128) & 0xff;
+        frame = (ang / sector) % a->n;
+    }
+    const TexEnt *e = &p->spr[a->first + frame];
+    if (!e->w || !e->h) return 0;
+
+    double iz = 1.0 / b.z;
+    double sx = r->w / 2.0 - b.x * c->f * iz;
+    double sy = r->h / 2.0 - b.y * c->f * iz;
+    double left = sx - 0.5 * pr->w * c->f * iz;
+    double right = sx + 0.5 * pr->w * c->f * iz;
+    double bot = sy, top = sy - pr->h * c->f * iz;
+    double dw = right - left, dh = bot - top;
+    if (dw < 1e-9 || dh < 1e-9) return 0;
+    /* the reciprocals are taken here, not left as divisions in the loop:
+     * -ffast-math would hoist them out anyway and the reference renderer has
+     * to do the same thing in the same place or the two stop agreeing. */
+    double idw = 1.0 / dw, idh = 1.0 / dh;
+
+    int minx = (int)left;      if (minx < 0) minx = 0;
+    int maxx = (int)right + 1; if (maxx > r->w - 1) maxx = r->w - 1;
+    int miny = (int)top;       if (miny < 0) miny = 0;
+    int maxy = (int)bot + 1;   if (maxy > r->h - 1) maxy = r->h - 1;
+    if (minx > maxx || miny > maxy) return 0;
+
+    /* `tst r1, #0x20` in both cullers: a prop that carries the bit keeps a
+     * fixed shade instead of fading with depth.  One prop has it, the flame. */
+    int shade = fade_shade[(pr->mode & 2) ? 1 : depth_shade(b.z)];
+    const uint32_t *tex = textured ? p->texdata + e->off / 4 : NULL;
+    for (int py = miny; py <= maxy; py++) {
+        double v = (py + 0.5 - top) * idh;
+        if (v < 0.0 || v >= 1.0) continue;
+        int sv = (int)(v * e->h);
+        int base = py * r->w;
+        for (int px = minx; px <= maxx; px++) {
+            double u = (px + 0.5 - left) * idw;
+            if (u < 0.0 || u >= 1.0) continue;
+            int i = base + px;
+            if (iz <= r->z[i]) continue;
+            uint32_t texel;
+            if (!tex) {
+                texel = 0xffc060a0u;
+            } else {
+                texel = tex[sv * e->w + (int)(u * e->w)];
+                if (!(texel >> 24)) continue;      /* the CEL's clear index */
+            }
+            r->z[i] = iz;
+            uint32_t bb = (texel & 0xff) * shade >> 8;
+            uint32_t gg = ((texel >> 8) & 0xff) * shade >> 8;
+            uint32_t rr = ((texel >> 16) & 0xff) * shade >> 8;
+            if (bb > 255) bb = 255;
+            if (gg > 255) gg = 255;
+            if (rr > 255) rr = 255;
+            r->col[i] = 0xff000000u | (rr << 16) | (gg << 8) | bb;
+        }
+    }
+    return 1;
+}
 
 static void draw_scene(Raster *r, const Cam *c, const Pack *p, const Opts *o,
-                       int *out_quads, int *out_tiles)
+                       double t, int *out_quads, int *out_tiles, int *out_props)
 {
     int nq = 0, nt = 0;
     float far2 = c->far_ * c->far_;
@@ -369,8 +503,19 @@ static void draw_scene(Raster *r, const Cam *c, const Pack *p, const Opts *o,
             nq++;
         }
     }
+
+    int np = 0;
+    if (o->props) {
+        for (uint32_t i = 0; i < p->h->nprops; i++) {
+            const Prop *pr = &p->props[i];
+            float dx = pr->x - c->ex, dy = pr->y - c->ey;
+            if (dx * dx + dy * dy > far2) continue;
+            np += draw_prop(r, c, p, pr, t, o->textured);
+        }
+    }
     *out_quads = nq;
     *out_tiles = nt;
+    *out_props = np;
 }
 
 /* ------------------------------------------------------------------ walking
@@ -717,9 +862,10 @@ int main(int argc, char **argv)
 {
     const char *packpath = NULL, *shot = NULL;
     int W = 960, H = 600, fly = 0, bench = 0, noclip = 0, walktest = 0;
+    double shot_t = 0.0;
     Cam c = { -279.0, 640.0, EYE_HEIGHT, 90.0, 0.0, 70.0, 6000.0, 0,0,0,0,0 };
     Walker walk = { 0, 0, 0 };
-    Opts o = { 1, 1, 1, 40 };
+    Opts o = { 1, 1, 1, 1, 40 };
 
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--size") && i + 2 < argc) {
@@ -739,6 +885,10 @@ int main(int argc, char **argv)
             o.floor_radius = atoi(argv[++i]);
         } else if (!strcmp(argv[i], "--shot") && i + 1 < argc) {
             shot = argv[++i];
+        } else if (!strcmp(argv[i], "--no-props")) {
+            o.props = 0;
+        } else if (!strcmp(argv[i], "--time") && i + 1 < argc) {
+            shot_t = atof(argv[++i]);
         } else if (!strcmp(argv[i], "--bench") && i + 1 < argc) {
             bench = atoi(argv[++i]);
         } else if (!strcmp(argv[i], "--walktest") && i + 1 < argc) {
@@ -774,12 +924,12 @@ int main(int argc, char **argv)
     if (bench) {                               /* n frames, no window */
         cam_update(&c, W);
         clock_t t0 = clock();
-        int nq = 0, nt = 0;
+        int nq = 0, nt = 0, np = 0;
         for (int i = 0; i < bench; i++) {
             c.yaw = 90.0 + i * (360.0 / bench);
             cam_update(&c, W);
             raster_clear(&r, 0xff181a28, 0xff1e1c1a);
-            draw_scene(&r, &c, &p, &o, &nq, &nt);
+            draw_scene(&r, &c, &p, &o, i / 60.0, &nq, &nt, &np);
         }
         double sec = (double)(clock() - t0) / CLOCKS_PER_SEC;
         printf("%d frames at %dx%d in %.2fs = %.1f fps (%.1f ms a frame)\n",
@@ -790,10 +940,10 @@ int main(int argc, char **argv)
     if (shot) {                                /* one frame, no window */
         cam_update(&c, W);
         raster_clear(&r, 0xff181a28, 0xff1e1c1a);
-        int nq, nt;
-        draw_scene(&r, &c, &p, &o, &nq, &nt);
-        printf("%d wall quads, %d floor tiles from (%.0f,%.0f,%.0f) "
-               "yaw=%g pitch=%g\n", nq, nt, c.ex, c.ey, c.ez, c.yaw, c.pitch);
+        int nq, nt, np;
+        draw_scene(&r, &c, &p, &o, shot_t, &nq, &nt, &np);
+        printf("%d wall quads, %d floor tiles, %d props from (%.0f,%.0f,%.0f) "
+               "yaw=%g pitch=%g\n", nq, nt, np, c.ex, c.ey, c.ez, c.yaw, c.pitch);
         write_bmp(shot, &r);
         return 0;
     }
@@ -831,6 +981,7 @@ int main(int argc, char **argv)
                 case SDLK_t:      o.textured = !o.textured; break;
                 case SDLK_g:      o.ground = !o.ground; break;
                 case SDLK_b:      o.walls = !o.walls; break;
+                case SDLK_p:      o.props = !o.props; break;
                 case SDLK_n:      noclip = !noclip; break;
                 case SDLK_F10: {
                     char name[64];
@@ -903,8 +1054,8 @@ int main(int argc, char **argv)
 
         cam_update(&c, W);
         raster_clear(&r, 0xff181a28, 0xff1e1c1a);
-        int nq, nt;
-        draw_scene(&r, &c, &p, &o, &nq, &nt);
+        int nq, nt, np;
+        draw_scene(&r, &c, &p, &o, SDL_GetTicks() / 1000.0, &nq, &nt, &np);
 
         SDL_UpdateTexture(fb, NULL, r.col, W * 4);
         SDL_RenderCopy(ren, fb, NULL, NULL);
@@ -914,9 +1065,9 @@ int main(int argc, char **argv)
             char title[160];
             snprintf(title, sizeof title,
                      "Immercenary  %.1f fps  (%.0f, %.0f, %.0f) yaw %.0f  "
-                     "%d quads  %d tiles  [%s %.1f]",
+                     "%d quads  %d tiles  %d props  [%s %.1f]",
                      frames * 1000.0f / (now - fps_t + 1), c.ex, c.ey, c.ez,
-                     c.yaw, nq, nt, fly ? "fly" : "walk", walk.speed);
+                     c.yaw, nq, nt, np, fly ? "fly" : "walk", walk.speed);
             SDL_SetWindowTitle(win, title);
             frames = 0; fps_t = now;
         }

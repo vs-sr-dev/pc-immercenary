@@ -62,7 +62,7 @@ every reference beyond 255 bytes.
 | `0x014348` | **BuildReciprocalTable** — 1,600 calls to Operamath slot -28 | `0x143c0` |
 | `0x056a34` | **MulSF16** — open-coded 16.16 multiply | `mla r0, r2, r1, r3` |
 | `0x013e4c` | **LoadWorld** — loads and indexes `CondensedPerfectWorld.B3D` | *"Starting to load the world..."* |
-| `0x015c08` | LoadStaticObjects | *"Loaded static objects ..."* |
+| `0x015c08` | **LoadStaticObjects** — clears the five entity lists and hand-writes 20 44-byte object records at `0x07b758`: `+4` width, `+8` height, `+0xc` ground offset, all 16.16. Ids 0-3 have their own, id 4 is 6 x 6 at ground level and 5-19 are copies of it | *"Loaded static objects ..."* |
 | `0x0018a4c` | **OpenAllFolios** — math, graphics, audio, event broker | its four failure messages |
 | `0x01cc58` | LoadCelGroup(name, out, count) | splits a chunked cel file |
 | `0x036ca8` | LoadWorldCels — opens `PerfectWorld.Cels` | *"$Perfect/PerfectWorld.Cels"* |
@@ -160,6 +160,15 @@ every reference beyond 255 bytes.
 | `0x01220c` | **CameraTransform** — offsets the vertex table at `0x080ec0` by `-camera` and rotates it through Operamath 5:9; the one call every frame loop makes first, so its caller list *is* the list of frame loops | `svc #0x50009`, count `([0x0582bc]+1)>>1` |
 | `0x012370` | **BuildVisibleFaces** — the shared world face builder: `GatherCorners`, drop the face when both first corners are past `[0x058a40]`, clear bit 0 on all four corners, LOD-band at 50 and 100, append. Calls `GatherCorners` and never `ProjectFace`, which is why a `ProjectFace` scan cannot see it | `lsl r7, r0, #0x10` then `cmp/cmpgt` |
 | `0x012c94` | **ProjectVisibleFaces** — the second half: `ProjectFace` over the list `BuildVisibleFaces` filled, then compact out anything wholly off screen | `cmp ip, #0x14000` four times |
+| `0x012bc4` | **ClipVisibleFaces** — `GatherCorners`, `RejectByBounds`, `SignCount` and the two-edge test at `0x013534` over the visible list; entries whose kind is 2 pass through untouched, being sprites and not faces | `and r0, sb, r0, asr #20` then `teq r0, #2` |
+| `0x012e3c` | **SortVisibleByDepth** — gathers a key per entry and quicksorts the visible list and the keys together at `0x012f64` | the three key loops, then `bl 0x12f64` |
+| `0x0169a4` | **DrawVisibleList** — walks the sorted visible list **back to front** and dispatches on bits 20-23 of each entry's flags: 1 and 5 to `0x01715c`, 3 to `DrawPropByAngle`, 4 to `0x017998`, 6 to `DrawPropByClock`, 7 to `0x045d68`, 8 to `0x01582c`, `0xf` skipped, everything else to the wall-face path | eight `teq r1, #n` in a row |
+| `0x0127d0` | **CullProps** — the world file's 44-byte prop list at `0x069478` against the near plane, a 90-degree side test and the draw distance; radius is the record's own width halved. See [22](22-the-props.md) | `[r4, #0x18], asr #1` then `cmp r3, #0x20000` |
+| `0x0175c0` | **DrawPropByAngle** — `sub = 3`: `ProjectSprite` from the record's own width, height and ground offset, then the frame `k` views and `ATan2` choose | `teq r1, #0x10` ladder on `k` |
+| `0x017398` | **DrawPropByClock** — `sub = 6`: the same, sized from the static object table at `0x07b758`, and the frame stepped `0x2222` a tick | `bl 0x4437c` twice |
+| `0x0183a8` | **ProjectSprite(vec, groundOffset, width, height, out)** — four screen corners of a screen-aligned cel rectangle, on the same 160-pixel half screen as the walls | `rsb r8, r0, #0x5000` |
+| `0x0184b4` | **ATan2(dx, dy)** — an octant from the signs and the larger of `abs(dx)`, `abs(dy)`, then `32 * min / max` inside it; −128..128 for a full turn, truncating | `addls pc, pc, lr, lsl #2` over eight arms |
+| `0x04ccb8` | **OperamathDivSF16(a, b)** — `(a << 16) / b`, folio slot −20; 51 call sites | pinned in [09](09-os-surface.md) |
 | `0x022084` | **WorldFrame** — the overworld's frame loop, and the widest user of the shared builder; also latches the seven per-frame maxima | five `cmp`/`strgt` pairs into `0x058a24`.. |
 | `0x00eea8` | **FilmFrame** — the frame loop the intro films run on: floor only, no world faces; reached from every driver and from the stream path | calls `DrawFloor` and no face loop |
 | `0x045738` | **FrameService** — input and events, the first `bl` of every frame loop; a path under it runs a *whole overworld frame* for the pause screen, so a call-graph walk has to cut it or every driver reaches every frame loop | 11 callers, all frame loops |
@@ -377,6 +386,9 @@ that the released game does in C instead.
 | `0x07b6e0` | animation pointer table, indexed by object id |
 | `0x07b758` | object records, 44 bytes each, indexed by object id |
 | `0x069474`, `0x069478` | the live sprite count and the sprite list it counts, 44-byte records; reached as `0x60cdc + 0x8798` and `+ 0x879c`, and compacted per frame at `0x038f38` |
+| `0x06b22c`, `0x06b230` | the **visible list**: how many entries and an array of pointers to `record + 8`, which the face builders and all three sprite cullers append to and which `DrawVisibleList` walks. Reached as `0x060cdc + 0xa550` and `+ 0xa554` |
+| `0x07bac8` | each entity's world position, eight bytes an index: X at `+0`, Y at `+4`, both 16.16. `ParseWorldRecord` allocates the index and writes the pair |
+| `0x080ec0` | the same positions camera-relative and rotated, written by `CameraTransform`: depth at `+0`, lateral at `+4`. A record's `+0x0c` points straight at its slot |
 | `0x0862b8` | the DOAsys cel table: the pedestal, the two spires and the three `.far.scel` props |
 | `0x058a40`, `0x058bc0` | the draw distance in whole units, and the fade step derived from it; `0x0027d0` gates faces on the first and `0x012298` picks a fade band with both. See [08](08-the-ground.md) |
 | `0x058640` | **the character name table** — nineteen `char *`, NULL-terminated: Goner, Picasso, Tork, Kilroy, Venus, David, Medusa, Tesla, Balkan, Silva, Fly, Riberto, Chameleon, Chance, Loki, Raven, PerfectMale, PerfectFemale, PerfectRobot. The id space of `PerfectMovers.B3D` and of the DOA conversation, written down by the program. See [19](19-the-doasys-spire.md) |

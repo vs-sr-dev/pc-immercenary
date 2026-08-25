@@ -3,6 +3,54 @@
 Everything below has a concrete starting address or file. Nothing here is
 open-ended research.
 
+## Done in session 14
+
+- **The props are drawn, and the record's third byte was not an angle.**
+  [`tools/props.py`](tools/props.py) is the whole read, [docs/22](docs/22-the-props.md)
+  the whole write-up. `sub = 3` and `sub = 6` place 373 sprites on the
+  overworld and the byte written down as `angle` is the **height of the
+  sprite's base above the ground**: `0x0175c0` hands it to the sprite
+  projector as such, and `sub = 6`'s own bytes then agree, to the unit, with
+  the 20 hand-written object records `LoadStaticObjects` builds at `0x015c04`
+  — 26 x 26 base −2 for the DOAsys spire, 4 x 5 base **+21** for the flame on
+  its pole. The first two bytes are a size in world units, not a scale factor.
+- **A prop is a screen-aligned rectangle, on the projection that was already
+  there.** `0x0183a8` is five `MulSF16`s: `0x5000 - v * 0.3125` read as 1/128
+  of a pixel is the **same 160-pixel half screen** the walls and the horizon
+  table use, and `[0x582a4]` is the same pitch offset. Nothing in the path
+  touches `MapCel` or rotates anything. It also pins two more folio slots
+  ([09](docs/09-os-surface.md)): Operamath **−20 is `DivSF16(a, b)`**, because
+  only `(a << 16) / b` puts `ccb_HDX` in 12.20 and `ccb_VDY` in 16.16 from
+  corners measured in 1/128 of a pixel, and −32 is a second 16.16 reciprocal.
+- **The two record kinds pick their frame two different ways.** `sub = 3` is a
+  **turntable**: `k` views round the circle, `face` naming view zero, and the
+  angle from `ATan2` at `0x0184b4` — which is not a table but an octant plus
+  `32 * min / max`, a *tangent* inside the octant, 3.85 units of 256 short of
+  real trigonometry at worst. `sub = 6` is a **clock**: `0x2222` of a frame per
+  tick of `0x04437c`, and `0x04437c` is the audio folio's tick count shifted
+  right by two — 59.9 Hz — so an eight-frame anim cycles once a second exactly.
+- **Black is transparent, and skipping that rule paints a slab across the
+  skyline.** Five of the sixteen prop `.anim` files carry no transparent index
+  at all and are 34% to 96% flat black; the fountain is 96%. The console
+  discards a pixel that comes out zero unless the CCB asks otherwise, and the
+  cels say which they are: **bit 5 of `ccb_Flags`** is set on every prop anim
+  that uses a transparent index and has no black in it, and clear on every one
+  that is full of black. Sixteen files, no overlap.
+- **The viewer draws them, and still matches the reference exactly.**
+  `native/view.c` grew a screen-aligned sprite blitter and `tools/b3dview.py`
+  the same one; `tools/scenepack.py` freezes the props and the 80 frames of
+  the twelve anims they use into the pack. 400,000 of 400,000 pixels
+  identical with props on, and 116 fps against 115 with them off — they cost
+  nothing measurable.
+- **`0x0169a4` is the draw, and it dispatches on kind.** Bits 20-23 of each
+  visible-list entry: 1 and 5 the item spawns, 3 and 6 the props, 4, 7 and 8
+  three more, `0xf` skipped, everything else the wall-face path. The list
+  itself is `0x06b22c` / `0x06b230`, filled by the face builders and by three
+  sibling cullers — `CullProps` at `0x0127d0` and the two at `0x0128e0` and
+  `0x0137e4` — and depth-sorted at `0x012e3c`. Named in
+  [docs/06](docs/06-code-map.md); `tools/p.sym` now covers 307 function starts,
+  141 of them named.
+
 ## Done in session 13
 
 - **The call graph is closed, and there was no dispatch mechanism to find.**
@@ -680,8 +728,8 @@ open-ended research.
 
 ## 1. The interactive viewer  *(the one real artefact)*
 
-**It exists and it walks.** `native/view.c` at 117 fps, pixel-identical to
-`tools/b3dview.py`, collision included. Build and run:
+**It exists, it walks, and the props are in it.** `native/view.c` at 116 fps,
+pixel-identical to `tools/b3dview.py`, collision included. Build and run:
 
 ```sh
 python tools/scenepack.py out/world.pack
@@ -689,23 +737,33 @@ make -C native
 native/view.exe out/world.pack
 ```
 
-`--shot FILE.bmp` renders one frame headless, `--bench N` times N of them, and
-`--walktest N` wanders the city checking the walker never ends up inside a
-wall. `tools/packdiff.py out/ref.png out/native.bmp` is the check that the two
-renderers still agree; run it after touching either.
+`--shot FILE.bmp` renders one frame headless, `--time SECONDS` fixes the phase
+of the clock-animated props so that shot is reproducible, `--bench N` times N
+frames and `--walktest N` wanders the city checking the walker never ends up
+inside a wall. `tools/packdiff.py out/ref.png out/native.bmp` is the check that
+the two renderers still agree; run it after touching either, and pass
+`--assets extracted/Perfect` to `b3dview.py` or its props will be missing.
 
 What is still missing:
 
-- **Object sprites.** `sub = 1` / `3` / `6` place `.anim` props by object id;
-  the assets are already decoded to PNG. Billboard them at the recorded
-  position, scale and angle. `PerfectMovers`' per-animation columns give the
-  sprite width, height and ground offset for the nineteen characters, so the
-  movers can be placed to the same rule.
-- **Collision.** The walls are quads and the ground is a tile map, so a simple
-  2D segment sweep against the section C quads of the current cell is enough.
-  The game itself culls per grid cell already. The near `.Maps` are a
-  ready-made second opinion: value 1 is open ground at two units a pixel, and
-  they agree with the geometry to within a pixel.
+- **The item spawn points, `sub = 1` and `sub = 5`.** 1,174 records on the
+  overworld, 569 of them a random weapon roll. They build the same record shape
+  at `0x03af04` and are drawn by `0x01715c`, which reads the same ground
+  offset, width and height the props do — so the geometry is done. What is not
+  done is the id: it is an `i16` that reaches 1,139 on the overworld and does
+  **not** index the object table `ObjectAnimById` owns, so where the art comes
+  from is the whole of the question. The answer is one branch away.
+  `0x03afa4` turns the id into a pointer to a **12-byte descriptor** and parks
+  it at the record's `+0x20`, choosing the table on bit 1 of the record's flag
+  byte: `0x0862b8 + 12 * id` when it is clear, `[0x0582cc] + 12 * id` when it
+  is set. `0x01715c` then reads a cel out of `+0` or `+4` of that descriptor
+  and two signed bytes out of `+8`..`+0xb`. Read the twelve bytes and the item
+  spawns fall out.
+- **The movers.** `0x0137e4` is the props' sibling culler for the 36-byte list
+  at `0x06267c`, kind 5, with a far distance of 150 for one sub-kind and 75 for
+  the rest; `0x017398`'s cousin draws them. `PerfectMovers.B3D`'s
+  per-animation columns give width, height and ground offset for the nineteen
+  characters, which is the same triple `ProjectSprite` wants.
 - **The radar.** `tools/hudmap.py` gives the tile, the world-to-pixel
   transform and the rotation the CCB applies. A viewer can draw the real HUD
   map with no further reversing. `tools/armmath.py` now gives the exact
@@ -717,8 +775,14 @@ What is still missing:
   pixel. Adding them to the pack would settle the disagreements the game
   itself settles that way — and `STEP_OVER`, the height below which a quad is
   scenery rather than a wall, is a guess of 16 units until they do.
-- The eye height is a guess too: 40 world units, which is `b3dview.py`'s
-  default and not read off anything.
+- **The pixel-for-pixel check is one camera, not a claim about all of them.**
+  At `--eye -279 640 30 --yaw 90 --pitch 2` the two renderers agree on
+  400,000 of 400,000. At `--eye 760 380 6 --yaw 0 --pitch 0` they disagree on
+  **22**, and they did so before the props existed — the same 22 come out of
+  the pre-session build. They are single pixels on the edges of distant floor
+  tiles and wall slivers, so it is a fill-rule difference in `_span`/`tri` and
+  not a rule read wrongly. Worth an hour: pick the camera that maximises the
+  count, then find which of the two is off by half a pixel.
 
 ## 2. Small unread call sites
 
@@ -805,6 +869,19 @@ What is still missing:
   consumes it.
 
 ## Notes to self
+
+- **The reference renderer is the one that was wrong.** Props went in and the
+  pixel check fell from 400,000 to 399,210 — 790 pixels, all inside two
+  fountains. Every number matched: the same four corners to four decimals, the
+  same depth, the same fade band, the same texel, the same frame index when
+  computed by hand. The bug was that `render()` in `b3dview.py` took the
+  animation clock as a parameter named `t`, and forty lines above, the floor
+  loop assigns `t = ground.tile_at_world(...)`. By the time the props drew,
+  `t` was a tile id, so the reference was showing frame 7 of the fountain and
+  the native viewer frame 0. Two lessons. A short parameter name in a long
+  function is a bug waiting for a second author, and **when two
+  implementations disagree, do not assume the new one is the wrong one** —
+  half an hour went into instrumenting the C.
 
 - **A tool's noise looks exactly like a discovery.** "356 functions nothing
   calls" survived eleven sessions as the last open question about the call

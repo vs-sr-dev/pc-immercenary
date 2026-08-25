@@ -460,9 +460,9 @@ encode.
 ```
 +8   i16 X
 +10  i16 Y
-+12  u8  scaleX
-+13  u8  scaleY
-+14  i8  angle
++12  u8  width          world units
++13  u8  height         world units
++14  i8  groundOffset   the height of the sprite's base, world units
 +15  i16 id
 +17  u8  flag
 ```
@@ -480,8 +480,8 @@ handler rolls dice at `0x3a4e0`:
 Ids 5–16 are the twelve weapon pickups in
 [06-code-map.md](06-code-map.md), so **`sub = 1` with `id = 0` is a random
 weapon spawn**. The overworld has 569 of them out of 1,174 `sub = 1` records.
-A second roll, `Random(50)` at `0x3a4dc`, scales a value derived from the two
-scale bytes.
+A second roll, `Random(50)` at `0x3a4dc`, scales a value derived from the
+width and height.
 
 ### `sub = 2` — inline geometry
 
@@ -514,15 +514,22 @@ were being read out of the wrong field.
 +8   i16 X
 +10  i16 Y
      u32 extra            sub 6 only
-     u8  scaleX
-     u8  scaleY
-     i8  angle
-     i8  face
-     u8  k
+     u8  width            world units
+     u8  height           world units
+     i8  groundOffset     the height of the sprite's base, world units
+     i8  face             the direction view zero is seen from
+     u8  k                how many views share the circle
      u8  id               object id
-     u8  flag
+     u8  flag             bit 3: do not fade with distance
      char name[20]        sub 6 only
 ```
+
+The three middle bytes were `scaleX`, `scaleY` and `angle` until
+[22-the-props.md](22-the-props.md) read the two drawers. There is no angle in
+the record: the third byte is where the sprite's **base** sits above the
+ground — `+21` on the flame that stands on a pole — and the first two are a
+size in world units rather than a scale factor. `sub = 1` and `sub = 5` carry
+the same three fields in the same order.
 
 The `id` byte indexes the object table recovered in
 [06-code-map.md](06-code-map.md), and it checks out exactly. On the overworld:
@@ -544,7 +551,9 @@ The `id` byte indexes the object table recovered in
 
 `sub = 6` carries the asset name inline as well as the id, and the two always
 agree — the name is redundant, which is what you would expect from an exporter
-that emits both for a debug build.
+that emits both for a debug build. Its `width`, `height` and `groundOffset` are
+redundant too, and in one case wrong: the drawer for `sub = 6` reads them from
+the static object table instead ([22](22-the-props.md)).
 
 ## Textures
 

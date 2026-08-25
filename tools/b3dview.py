@@ -20,6 +20,7 @@ from cel import write_png, rgb555
 
 from celbank import Bank
 from floor import Floor, TILE
+import props as propmod
 
 
 def flat_hue(texid):
@@ -31,10 +32,14 @@ def flat_hue(texid):
 
 
 class Texture:
-    """A decoded cel flattened to RGB plus a transparency mask."""
+    """A decoded cel flattened to RGB plus a transparency mask.
+
+    `bgnd` false adds the console's second transparency rule -- a pixel whose
+    finished colour is black is not written -- which the prop cels need and
+    tools/props.py explains."""
     __slots__ = ('w', 'h', 'px', 'clear')
 
-    def __init__(self, rows, bpp, plut):
+    def __init__(self, rows, bpp, plut, bgnd=True):
         self.h = len(rows)
         self.w = len(rows[0]) if rows else 0
         self.px = bytearray(self.w * self.h * 3)
@@ -52,6 +57,10 @@ class Texture:
                     r, g, b = rgb555(plut[v % len(plut)])
                 else:
                     r = g = b = (v * 255) // ((1 << bpp) - 1)
+                if not (bgnd or r or g or b):
+                    self.clear[i // 3] = 1
+                    i += 3
+                    continue
                 self.px[i] = r
                 self.px[i + 1] = g
                 self.px[i + 2] = b
@@ -129,6 +138,50 @@ class Raster:
                 self.col[i * 3 + 1] = 255 if c1 > 255 else c1
                 self.col[i * 3 + 2] = 255 if c2 > 255 else c2
 
+    def _sprite(self, left, right, top, bot, iz, shade, tex):
+        """One screen-aligned cel rectangle, z-tested at a single depth.
+
+        This is what the 3DO does when it draws a prop: XPos, YPos, HDX and
+        VDY, no rotation and no per-pixel depth. `native/view.c` computes the
+        same four numbers with the same arithmetic in the same order, so the
+        two renderers still agree pixel for pixel."""
+        w, h = self.w, self.h
+        dw, dh = right - left, bot - top
+        if dw < 1e-9 or dh < 1e-9:
+            return
+        # multiply by the reciprocal, not divide: the native viewer is built
+        # with -ffast-math and would hoist the division out of the loop, and
+        # the two renderers have to round the same way to stay identical.
+        idw, idh = 1.0 / dw, 1.0 / dh
+        minx = max(0, int(left))
+        maxx = min(w - 1, int(right) + 1)
+        miny = max(0, int(top))
+        maxy = min(h - 1, int(bot) + 1)
+        for py in range(miny, maxy + 1):
+            v = (py + 0.5 - top) * idh
+            if v < 0.0 or v >= 1.0:
+                continue
+            sv = int(v * tex.h)
+            base = py * w
+            for px in range(minx, maxx + 1):
+                u = (px + 0.5 - left) * idw
+                if u < 0.0 or u >= 1.0:
+                    continue
+                i = base + px
+                if iz <= self.z[i]:
+                    continue
+                t = sv * tex.w + int(u * tex.w)
+                if tex.clear[t]:
+                    continue
+                self.z[i] = iz
+                j = t * 3
+                c0 = (tex.px[j] * shade) >> 8
+                c1 = (tex.px[j + 1] * shade) >> 8
+                c2 = (tex.px[j + 2] * shade) >> 8
+                self.col[i * 3] = 255 if c0 > 255 else c0
+                self.col[i * 3 + 1] = 255 if c1 > 255 else c1
+                self.col[i * 3 + 2] = 255 if c2 > 255 else c2
+
     def png(self, path):
         raw = bytearray()
         for y in range(self.h):
@@ -149,6 +202,7 @@ FADE_PIXC = (0x1e00, 0x1a00, 0x1600, 0x1200, 0x1f00, 0x1b00, 0x1700, 0x1300,
              0x0000)
 _SF = (16, 2, 4, 8)
 FADE = tuple((((v >> 10) & 7) + 1) / _SF[(v >> 8) & 3] for v in FADE_PIXC)
+FADE_SHADE = tuple(min(1024, int(v * 256)) for v in FADE)
 
 NEAR_DETAIL = 52.0          # 0x340000 in 16.16, the compare at 0x10260
 
@@ -172,7 +226,8 @@ UV_FLOOR = ((0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0))
 
 
 def render(path, out, eye, yaw, pitch, fov=70.0, size=(800, 500), far=6000.0,
-           cels=None, allfloor=None, floor_radius=40):
+           cels=None, allfloor=None, floor_radius=40, assets=None, clock=0.0,
+           draw_props=True):
     b = B3D(path)
     recs, failed = b.walk()
     bank = Bank(cels) if cels else None
@@ -277,11 +332,51 @@ def render(path, out, eye, yaw, pitch, fov=70.0, size=(800, 500), far=6000.0,
             r._span(p[0], p[1], p[2], shade, tex, flat)
             r._span(p[0], p[2], p[3], shade, tex, flat)
             nq += 1
+
+    # The placed props: one cel each, drawn as a screen-aligned rectangle at
+    # the depth of its base point. tools/props.py has every rule.
+    np_ = 0
+    if draw_props and assets:
+        acache = {}
+        for prop in propmod.props(b, recs):
+            if (prop.x - ex) ** 2 + (prop.y - ey) ** 2 > far * far:
+                continue
+            if prop.oid not in acache:
+                name = propmod.OBJECT_ANIM.get(prop.oid)
+                fpath = os.path.join(assets, name) if name else None
+                fr = (propmod.anim_frames(fpath)
+                      if fpath and os.path.exists(fpath) else [])
+                acache[prop.oid] = [Texture(im[0], im[1], im[2], im[3])
+                                    for im in fr]
+            frames = acache[prop.oid]
+            if not frames:
+                continue
+            if prop.sub == 6:
+                frame = propmod.clock_frame(clock, len(frames))
+            else:
+                frame = propmod.view_frame(int(prop.x - ex), int(prop.y - ey),
+                                           prop.face, prop.k, len(frames))
+            tex = frames[frame]
+            x, y, z = prop.x - ex, prop.y - ey, prop.z - ez
+            fx = x * cy + y * sy
+            rx = -x * sy + y * cy
+            fz = fx * cp + z * sp
+            uz = -fx * sp + z * cp
+            if fz <= 1.0:
+                continue
+            iz = 1.0 / fz
+            sx = W / 2 - rx * f * iz
+            sbot = H / 2 - uz * f * iz
+            shade = FADE_SHADE[1 if prop.bright else propmod.depth_shade(fz)]
+            r._sprite(sx - 0.5 * prop.w * f * iz, sx + 0.5 * prop.w * f * iz,
+                      sbot - prop.h * f * iz, sbot, iz, shade, tex)
+            np_ += 1
     r.png(out)
-    print("%s: %d wall quads%s from (%d,%d,%d) yaw=%g pitch=%g%s -> %s"
+    print("%s: %d wall quads%s%s from (%d,%d,%d) yaw=%g pitch=%g%s -> %s"
           % (os.path.basename(path), nq,
-             ", %d floor tiles" % nf if ground else "", ex, ey, ez, yaw, pitch,
-             ", %d textures" % len([t for t in cache.values() if t]) if bank else "",
+             ", %d floor tiles" % nf if ground else "",
+             ", %d props" % np_ if np_ else "", ex, ey, ez, yaw, pitch,
+             ", %d textures" % len([tt for tt in cache.values() if tt]) if bank else "",
              out))
     if failed:
         print("  %d unwalked ranges" % len(failed))
@@ -300,9 +395,14 @@ def main():
     ap.add_argument('--fov', type=float, default=70.0)
     ap.add_argument('--size', nargs=2, type=int, default=[800, 500])
     ap.add_argument('--far', type=float, default=6000.0)
+    ap.add_argument('--assets', help="where the props' .anim files live, "
+                                     "e.g. extracted/Perfect")
+    ap.add_argument('--time', type=float, default=0.0,
+                    help='seconds, for the clock-animated props')
+    ap.add_argument('--no-props', action='store_true')
     a = ap.parse_args()
     render(a.b3d, a.png, a.eye, a.yaw, a.pitch, a.fov, tuple(a.size), a.far,
-           a.cels, a.floor, a.floor_radius)
+           a.cels, a.floor, a.floor_radius, a.assets, a.time, not a.no_props)
 
 
 if __name__ == '__main__':

@@ -285,7 +285,7 @@ vector slots over 104 sites, nothing left over in either image.
 
 ## Named vector slots
 
-Five of the 109 folio slots are now pinned to a name, each by what the game's
+Seven of the 109 folio slots are now pinned to a name, each by what the game's
 own code does with it rather than by guessing at an SDK header.
 
 | Folio | Slot | Wrapper | Name | How it was pinned |
@@ -293,7 +293,9 @@ own code does with it rather than by guessing at an SDK header.
 | Graphics | −4 | `0x04d8f8` | **MapCel** | `MapCel2x2` at `0x05664c` tail-branches here for any cel that is not 2x2, and the module's own full `MapCel` at `0x05795c` — which is read end to end in [06](06-code-map.md) — produces the same eight CCB words |
 | Graphics | −160 | `0x04d840` | **DisplayScreen** | see below |
 | Operamath | −8 | `0x04cce8` | **MulSF16** | `0x056c58` and `0x056ea8` are the same routine written twice; one calls this slot where the other calls the open-coded `MulSF16` |
+| Operamath | −20 | `0x04ccb8` | **DivSF16(a, b)** — `(a << 16) / b` | the sprite drawers at `0x017398` and `0x0175c0` feed it screen corners in 1/128 of a pixel and cel dimensions in 16.16, and only this reading lands `ccb_HDX` in 12.20 and `ccb_VDY` in 16.16, which is what the hardware wants. See [22](22-the-props.md). 51 call sites, second only to `MulSF16` |
 | Operamath | −28 | `0x04ccd0` | a 16.16 reciprocal | `BuildReciprocalTable` calls it 1,600 times |
+| Operamath | −32 | `0x04ccdc` | a 16.16 reciprocal too | one call site in `p`: the sprite projector `0x0183a8` divides by depth through it. Why the game reaches for a second reciprocal entry rather than −28 is not settled |
 | Kernel | −48 | `0x05656c` | **LookupItem** | every opener passes it the Item `OpenItem` returned and caches what comes back as the folio pointer; 27 call sites, all Item-to-pointer |
 
 ### Two corrections to `swiscan.py`

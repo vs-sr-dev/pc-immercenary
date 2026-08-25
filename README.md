@@ -15,9 +15,9 @@ only shipping build is the 3DO ARM6 executable on the retail CD.
 
 | Path | Contents |
 |---|---|
-| `native/` | A walkable viewer of the overworld: SDL2, a software span rasteriser, 117 fps at 960x600, and pixel-identical to the Python reference renderer |
-| `tools/` | Opera (3DO) filesystem reader, CEL/anim decoder, CEL bank reader, B3D world parser, ground tile map reader, OBJ exporter, textured software renderer, font decoder, DataStream demuxer with Cinepak and SDX2 decoders, HUD radar map decoder, ARM cross-referencer and call-graph reader, symbol-file builder, OS-surface scanner, DSP instrument reader, library-versus-game classifier, the hand-written ARM math module reimplemented and self-checking, the 512-byte game state read out of the code, a function-level pairing of the two game executables, a reachability pass over the call graph, a scene packer for the native viewer and a frame differ |
-| `docs/` | Findings: disc layout, file formats, executables, roadmap, B3D format, code map, CEL banks, the ground, the OS surface, the second B3D family, the fonts, the DataStream, the HUD maps, the DSP instruments, library versus game code, the DOA system and its lip sync, the front end, the save game, the DOAsys spire, the final encounter, the call graph |
+| `native/` | A walkable viewer of the overworld, props included: SDL2, a software span rasteriser, 116 fps at 960x600, and pixel-identical to the Python reference renderer |
+| `tools/` | Opera (3DO) filesystem reader, CEL/anim decoder, CEL bank reader, B3D world parser, ground tile map reader, OBJ exporter, textured software renderer, font decoder, DataStream demuxer with Cinepak and SDX2 decoders, HUD radar map decoder, ARM cross-referencer and call-graph reader, symbol-file builder, OS-surface scanner, DSP instrument reader, library-versus-game classifier, the hand-written ARM math module reimplemented and self-checking, the 512-byte game state read out of the code, a function-level pairing of the two game executables, a reachability pass over the call graph, the placed-prop reader, a scene packer for the native viewer and a frame differ |
+| `docs/` | Findings: disc layout, file formats, executables, roadmap, B3D format, code map, CEL banks, the ground, the OS surface, the second B3D family, the fonts, the DataStream, the HUD maps, the DSP instruments, library versus game code, the DOA system and its lip sync, the front end, the save game, the DOAsys spire, the final encounter, the call graph, the props |
 
 ## Quick start
 
@@ -39,6 +39,9 @@ python tools/b3d.py --check extracted/Perfect/CondensedPerfectWorld.B3D
 
 # ...and the second .B3D family, which is a different format again
 python tools/b3d2.py extracted/Perfect
+
+# The placed props: what they are, how big, and which frame is showing
+python tools/props.py --verify
 
 # Render a top-down map of the overworld
 python tools/b3dmap.py extracted/Perfect/CondensedPerfectWorld.B3D worldmap.png \
@@ -160,7 +163,7 @@ Early, but moving. Nothing is playable yet.
   seven of its sub-handlers, the CEL bank loader, the floor renderer, the object
   id table and the world globals are identified. `tools/symbols.py` turns the
   code map plus the image's own strings into a symbol file that
-  `armxref.py -S` reads, which names 295 of the 1,308 functions. The call
+  `armxref.py -S` reads, which names 307 of the 1,308 functions. The call
   graph is readable too, after three fixes: an APCS function starts one
   instruction before its `push`, a `push` that only *mentions* `lr` is a
   string literal rather than a function ([21](docs/21-the-call-graph.md)), and
@@ -168,14 +171,15 @@ Early, but moving. Nothing is playable yet.
   hand-written assembler module — `MulSF16`, `Sin`, `Cos`, `MapCel`, the point
   projector — that the rest of the executable calls 265 times, and that the
   cross-referencer had never looked at.
-- **The overworld is walkable, natively, at 117 fps.** `native/view.c` is
-  800 lines of C over SDL2 -- a software span rasteriser, a near-plane
-  clipper and a circle-versus-segment collider over the 7,229 wall segments --
-  and it draws **exactly** what the Python reference renderer draws: 400,000
-  of 400,000 pixels identical, which is the whole point of having kept a
-  reference. The data side never left Python: `tools/scenepack.py` freezes the
-  walked world, the 876 decoded wall cels, the 30 ground cels and the tile map
-  into one 3.7 MB file, so no C in this repository parses a game format.
+- **The overworld is walkable, natively, at 116 fps.** `native/view.c` is
+  1,076 lines of C over SDL2 -- a software span rasteriser, a near-plane
+  clipper, a screen-aligned sprite blitter and a circle-versus-segment
+  collider over the 7,229 wall segments -- and it draws **exactly** what the
+  Python reference renderer draws: 400,000 of 400,000 pixels identical, props
+  included, which is the whole point of having kept a reference. The data side
+  never left Python: `tools/scenepack.py` freezes the walked world, the 876
+  decoded wall cels, the 30 ground cels, the tile map and the 80 prop frames
+  into one 6.9 MB file, so no C in this repository parses a game format.
 - **The call graph is closed, and there is no dispatch mechanism to find.**
   Every function in `p` is reached by a `bl`, by a tail-call `b`, or by
   having its address handed to `CreateThread` or to a subscriber registrar —
@@ -189,6 +193,22 @@ Early, but moving. Nothing is playable yet.
   coordinates file, and `SetHUDPixel`, which *made* the radar maps the game
   only reads — never runs. A port can trust a static reading of who calls
   what: [docs/21](docs/21-the-call-graph.md).
+- **The props are solved, and the viewer draws them.** The 373 sprites the
+  overworld places — 108 traffic lights, 106 `hedra`, the ring of DOAsys
+  spires, the fountains — are the first **CEL** in this project rather than a
+  textured quad, and every rule behind them is read: a screen-aligned
+  rectangle sized in world units off the record's own bytes, on the same
+  160-pixel half screen the walls use. Three things had been wrong or missing.
+  The record's third byte is not an angle but the **height of the sprite's
+  base above the ground**, which is how the flame comes to stand twenty-one
+  units up its pole, and `sub = 6`'s bytes agree with the game's hand-written
+  object table on three of its four ids. `sub = 3` picks its frame from **which
+  way you are looking at it** — `k` views round the circle through an octant
+  arctangent that is a tangent inside the octant — while `sub = 6` runs a
+  clock, `0x2222` of a frame a tick, which is one cycle a second exactly. And
+  **black is transparent**: five of the sixteen prop cels carry no transparent
+  index at all and are 34% to 96% flat black, and the console's rule is written
+  in bit 5 of their own CCB flags. [22](docs/22-the-props.md).
 - **The HUD radar is solved**, the last unread asset format on the disc. The
   six `.Maps` files are 256 raw CEL tiles each, one per world grid cell — 2 bpp
   at two world units a pixel up close, 1 bpp at eight further out, both drawn

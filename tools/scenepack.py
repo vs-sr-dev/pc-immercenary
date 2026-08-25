@@ -16,12 +16,15 @@ has to draw it.
 The format is little-endian and 4-byte aligned, i.e. what x86 C reads with a
 cast. Offsets are from the start of the file.
 
-    Header       64 bytes, see HEADER below
+    Header       96 bytes, see HEADER below
     Quad[]       32 bytes each: four i16 corners, texid, angle, flags
     TexEnt[]     8 bytes each, indexed by texture id; w == 0 means unused
-    texdata      ARGB8888 pixels, alpha 0 for the CEL's transparent index
     TexEnt[30]   the floor tiles: 0-14 far, 15-29 near
     map          256 x 256 bytes, one tile id per cell, row 0 at the north
+    Prop[]       16 bytes each: a placed sprite, see tools/props.py
+    AnimEnt[]    4 bytes each: frame count and first frame, per `.anim`
+    TexEnt[]     one per sprite frame, all the anims' frames end to end
+    texdata      ARGB8888 pixels, alpha 0 for the CEL's transparent index
 
 The quads keep the game's own coordinates: X east, Y north, Z up, one world
 unit per texture pixel.
@@ -33,17 +36,23 @@ from b3d import B3D
 from celbank import Bank
 from cel import rgb555
 from floor import Floor, TILE, COL_BIAS, ROW_BIAS
+import props as propmod
 
 MAGIC = b'IMPK'
-VERSION = 1
-HEADER = '<4sI 2I 2I 2I 2I I 3i 8x'       # 64 bytes
+VERSION = 2
+HEADER = '<4sI 2I 2I 2I 2I I 3i 2I 2I 2I 16x'   # 96 bytes
 QUAD = '<12h hh HH'                       # 32 bytes
 TEXENT = '<HHI'                           # 8 bytes
+PROP = '<3h 3h 3B x'                      # 16 bytes
+ANIMENT = '<HH'                           # 4 bytes
 
 
-def flatten(im):
-    """(rows, bpp, plut) -> (w, h, ARGB8888 bytes), alpha 0 where clear."""
-    rows, bpp, plut = im
+def flatten(im, bgnd=True):
+    """(rows, bpp, plut) -> (w, h, ARGB8888 bytes), alpha 0 where clear.
+
+    `bgnd` false adds the console's own second transparency: a pixel whose
+    finished colour is black does not get written. See tools/props.py."""
+    rows, bpp, plut = im[0], im[1], im[2]
     h = len(rows)
     w = len(rows[0]) if h else 0
     out = bytearray(w * h * 4)
@@ -59,6 +68,9 @@ def flatten(im):
                 r, g, b = rgb555(plut[v % len(plut)])
             else:
                 r = g = b = (v * 255) // ((1 << bpp) - 1)
+            if not (bgnd or r or g or b):   # CCB_BGND clear: black is clear
+                i += 4
+                continue
             out[i] = b                      # ARGB8888 little-endian = B,G,R,A
             out[i + 1] = g
             out[i + 2] = r
@@ -67,7 +79,7 @@ def flatten(im):
     return w, h, bytes(out)
 
 
-def pack(b3dpath, celpath, floorpath, out):
+def pack(b3dpath, celpath, floorpath, assets, out):
     t0 = time.time()
     b = B3D(b3dpath)
     recs, failed = b.walk()
@@ -119,12 +131,38 @@ def pack(b3dpath, celpath, floorpath, out):
     # the tile map, one byte a cell, so the viewer needs no nibble arithmetic
     tmap = bytes(ground.tile_at(c, r) for r in range(256) for c in range(256))
 
+    # The placed props. One AnimEnt per distinct object id used, and every
+    # frame of that id's `.anim` decoded into the same pixel blob the walls
+    # and the ground live in -- see tools/props.py for what the fields mean.
+    plist = propmod.props(b, recs)
+    oids = sorted({p.oid for p in plist})
+    anims, sents, aidx = [], [], {}
+    for oid in oids:
+        name = propmod.OBJECT_ANIM.get(oid)
+        path = os.path.join(assets, name) if name else None
+        frames = propmod.anim_frames(path) if path and os.path.exists(path) else []
+        aidx[oid] = len(anims)
+        anims.append((len(frames), len(sents)))
+        for im in frames:
+            w, h, px = flatten(im, im[3])
+            sents.append((w, h, span))
+            blobs.append(px)
+            span += len(px)
+    props_bin = b''.join(
+        struct.pack(PROP, p.x, p.y, int(p.z), int(p.w), int(p.h), p.face,
+                    p.k, aidx[p.oid],
+                    (1 if p.sub == 6 else 0) | (2 if p.bright else 0))
+        for p in plist)
+
     hsz = struct.calcsize(HEADER)
     quads_off = hsz
     tex_off = quads_off + len(quads) * struct.calcsize(QUAD)
     floor_off = tex_off + ntex * struct.calcsize(TEXENT)
     map_off = floor_off + 30 * struct.calcsize(TEXENT)
-    texdata_off = map_off + len(tmap)
+    props_off = map_off + len(tmap)
+    anim_off = props_off + len(props_bin)
+    spr_off = anim_off + len(anims) * struct.calcsize(ANIMENT)
+    texdata_off = spr_off + len(sents) * struct.calcsize(TEXENT)
 
     with open(out, 'wb') as f:
         f.write(struct.pack(HEADER, MAGIC, VERSION,
@@ -133,18 +171,28 @@ def pack(b3dpath, celpath, floorpath, out):
                             texdata_off, span,
                             30, floor_off,
                             map_off,
-                            COL_BIAS, ROW_BIAS, TILE))
+                            COL_BIAS, ROW_BIAS, TILE,
+                            len(plist), props_off,
+                            len(sents), spr_off,
+                            len(anims), anim_off))
         f.write(b''.join(quads))
         for w, h, o in ents:
             f.write(struct.pack(TEXENT, w, h, o))
         for w, h, o in fents:
             f.write(struct.pack(TEXENT, w, h, o))
         f.write(tmap)
+        f.write(props_bin)
+        for n, first in anims:
+            f.write(struct.pack(ANIMENT, n, first))
+        for w, h, o in sents:
+            f.write(struct.pack(TEXENT, w, h, o))
         for blob in blobs:
             f.write(blob)
 
-    print("%s: %d quads, %d of %d textures, %d floor cels, %.1f MB, %.1fs"
+    print("%s: %d quads, %d of %d textures, %d floor cels, %d props in %d "
+          "anims (%d frames), %.1f MB, %.1fs"
           % (os.path.basename(out), len(quads), len(used), ntex, 30,
+             len(plist), len(anims), len(sents),
              os.path.getsize(out) / 1048576.0, time.time() - t0))
     if failed:
         print("  %d unwalked ranges" % len(failed))
@@ -156,8 +204,10 @@ def main():
     ap.add_argument('--b3d', default='extracted/Perfect/CondensedPerfectWorld.B3D')
     ap.add_argument('--cels', default='extracted/Perfect/PerfectWorld.CELS')
     ap.add_argument('--floor', default='extracted/Perfect/Floor/AllFloor')
+    ap.add_argument('--assets', default='extracted/Perfect',
+                    help="where the props' .anim files live")
     a = ap.parse_args()
-    pack(a.b3d, a.cels, a.floor, a.out)
+    pack(a.b3d, a.cels, a.floor, a.assets, a.out)
 
 
 if __name__ == '__main__':
