@@ -15,7 +15,7 @@ only shipping build is the 3DO ARM6 executable on the retail CD.
 
 | Path | Contents |
 |---|---|
-| `native/` | A walkable viewer of the overworld, props, item spawns and rithms included: SDL2, a software span rasteriser, 94 fps at 960x600 with 1,594 sprites in the world, and pixel-identical to the Python reference renderer |
+| `native/` | A walkable viewer of the overworld, props, item spawns and rithms included: SDL2, a software span rasteriser, ~96 fps at 960x600 with 1,594 sprites in the world, and pixel-identical to the Python reference renderer |
 | `tools/` | Opera (3DO) filesystem reader, CEL/anim decoder, CEL bank reader, B3D world parser, ground tile map reader, OBJ exporter, textured software renderer, font decoder, DataStream demuxer with Cinepak and SDX2 decoders, HUD radar map decoder, ARM cross-referencer and call-graph reader, symbol-file builder, OS-surface scanner, DSP instrument reader, library-versus-game classifier, the hand-written ARM math module reimplemented and self-checking, the 512-byte game state read out of the code, a function-level pairing of the two game executables, a reachability pass over the call graph, the placed-prop reader, a reimplementation of the three mover spawners and the radar-map probe they place against, a scene packer for the native viewer and a frame differ |
 | `docs/` | Findings: disc layout, file formats, executables, roadmap, B3D format, code map, CEL banks, the ground, the OS surface, the second B3D family, the fonts, the DataStream, the HUD maps, the DSP instruments, library versus game code, the DOA system and its lip sync, the front end, the save game, the DOAsys spire, the final encounter, the call graph, the props, the item spawns, the cast, where the movers are |
 
@@ -247,7 +247,14 @@ Early, but moving. Nothing is playable yet.
   maps: the near tile's footprint is exactly a 64 x 64 block of far pixels, the
   same block on all 256 cells, which is the "hole" in the far map arrived at
   from the reader's side. Both renderers now run the same spawner from the same
-  seed and still agree on 400,000 of 400,000 pixels.
+  seed and still agree on 400,000 of 400,000 pixels. Reading how the rithms are
+  *drawn* corrects [24](docs/24-the-cast.md) as well: the view is not a field
+  of the record but something `DrawMover` computes from the bearing to the
+  player and the mover's own heading — **the props' turntable to the
+  instruction** — and an animation is eight phases to a view rather than eight
+  views to a phase, with six characters storing five views and mirroring the
+  other three. That predicts **18 of the 19 run frame counts exactly**, and the
+  miss is the one character the code singles out.
   [25](docs/25-where-the-movers-are.md).
 - **The cast is resolved down to the filenames.** `PerfectMovers.B3D` gave the
   nineteen characters and their per-animation width, height and ground offset

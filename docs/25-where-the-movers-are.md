@@ -263,6 +263,101 @@ first run of `LoadWorldCels` `wanted == live == 0` and this spawner places
 nothing; it calls `RithmShapeCache` at its tail, which *chooses* the pair, and
 the next pass is the one that spawns them.
 
+## The view is not a field
+
+`DrawMover` at `0x017998` had been read as taking the view from a signed byte
+at the visible-list entry's `+0x1c` — the mover's own `+0x34`. Nothing writes
+that byte but `NewMover`, which zeroes it, and going looking for the writer is
+what shows why: **the view is not stored anywhere.** It is computed, every
+frame, from two things that are.
+
+`0x00bacc`, the per-frame mover pass, writes one of them:
+
+```
+0000bb3c   r2 = point.y ; r1 = player.y - r2       ; 0x07bac8[slot]
+0000bb50   r0 = player.x - point.x
+0000bb58   bl ATan2                                ; 0x0184b4, an octant
+0000bb5c   lsr r0, r0, #0x10
+0000bb60   strb r0, [entry, #0x1f]                 ; the bearing to the player
+```
+
+and `0x00a608` — the routine `NewMover` finishes with — writes the other, the
+mover's heading, at `+0x24`, whose `Cos` and `Sin` are also its velocity.
+`DrawMover` then subtracts one from the other:
+
+```
+00017a48   ldrb r0, [r4, #0x1f]           ; bearing to the player, 0..255
+00017a4c   ldr  ip, [r4, #0xc]            ; the heading, 16.16
+00017a50   sub  ip, ip, #0x100000         ; - 16.0, half a sector
+00017a54   rsb  r0, ip, r0, lsl #16
+00017a58   and  r0, r0, #0xff0000         ; mod 256
+00017a60   and  r6, #0xf0000, r0, asr #5  ; / 32  ->  view, 0..7, as 16.16
+```
+
+which is the **same turntable the props use**, to the instruction: `sub = 3`
+biases by half a sector and divides by `256 / k` ([22](22-the-props.md)), and
+`ATan2` from the mover to the player differs from `ATan2` from the prop to the
+eye by exactly the half turn the props' `+ 128` puts back. So a viewer that
+already draws props needs no new rule for the direction — only for the frame.
+
+## Eight phases to a view
+
+```
+00017cfc   lsl r6, r6, #3                 ; view * 8
+00017d34   and r0, #7, [block+0x20] asr #21   ; the phase
+00017d60   orr r6, r6, sb                 ; frame = view * 8 + phase
+00017d78   str r6, [anim, #4]!            ; the ANIM's current frame
+00017d90   bl  GetAnimCel(anim, 0)        ; 0 -- do not advance
+```
+
+Which way round that goes is the whole of it, and it is visible in the art:
+frames 0 to 7 of `Goner.2.anim` all face the camera with the legs cycling,
+while frames 0, 8, 16, 24 and 32 turn from front to profile to back.
+[24](24-the-cast.md)'s table had it the other way and is corrected.
+
+**Five characters store five views, not eight.** `0x017cb4` folds views 5, 6
+and 7 back onto 3, 2 and 1 for characters 0, 3, 4, 5, 7 and the three player
+forms, and `0x0180b0` draws those mirrored — negating `ccb_HDX` and swapping
+the sprite's two screen edges, which about a centred sprite is a plain
+horizontal flip. That is exactly why their runs are 40 frames where everyone
+else's is 64:
+
+| | run frames | 8 x views the rule leaves |
+|---|---|---|
+| Goner, Kilroy, Venus, David, Tesla, the three Perfect Ones | 40 | 8 x 5 |
+| Picasso, Tork, Medusa, Balkan, Silva, Riberto, Chameleon, Chance, Loki, Raven | 64 | 8 x 8 |
+| Fly | 48 | — |
+
+**Eighteen of the nineteen runs come out exact on that rule alone**, and the
+one that does not is character 10, which is the one character `0x017ccc`
+singles out with a remap of its own — view 2 to 6 mirrored, view 3 to 5
+mirrored, view 1 to −1, which `GetAnimCel` clamps to frame 0.
+`tools/movers.py --verify` checks all nineteen.
+
+### The phase is a constant, so a rithm does not walk
+
+`sb` is bits 21-23 of the character block's word at `+0x20`, and `0x017d08`
+reads it for characters **2 to 6** and nobody else. `0x008258` is the only
+thing that writes it, once, out of `NewGame`, and it writes exactly those five:
+
+| character | 2 Tork | 3 Kilroy | 4 Venus | 5 David | 6 Medusa | everyone else |
+|---|---|---|---|---|---|---|
+| phase | 7 | 6 | 6 | 6 | 5 | 0 |
+
+So on the overworld a rithm is drawn at one fixed phase of its run, turning as
+you circle it but never moving its legs. That is not an omission in the
+reading: the 44-byte animation record is **per character**, not per mover, so
+every rithm of a shape shares one `ANIM` and one current-frame field, which
+`DrawMover` overwrites for each of them before each `GetAnimCel`. Per-mover
+animation is not something the structure can express.
+
+What does animate is a **state**: the low nibble of the entry's flag word
+picks animation slot `nibble + 2`, and that path calls `GetAnimCel(anim,
+0x10000)` — advance one frame — for three draws before clearing itself
+(`0x017bd0`-`0x017c78`). The mask at the record's `+0x1c` gets the same frame
+written and the same call, which is [24](24-the-cast.md)'s mask offset
+confirmed from the drawing side.
+
 ## The city is populated
 
 **There is no authored mover placement anywhere on the disc.** A viewer cannot
@@ -276,26 +371,29 @@ python tools/scenepack.py out/world.pack          # --spawn-seed, --spawn-eye
 native/view.exe out/world.pack
 ```
 
-A mover needs no new draw path. It is a `sub = 3` turntable prop: eight views
-round the circle, `face` naming view zero, and for a rithm that is the heading
-`NewMover` rolls into its `+0x24` at `0x00ac10`. Its width, height and ground
+A mover needs no new draw path. The direction is the props' own turntable, to
+the instruction — see above — with `face` carrying the heading `NewMover`
+rolls into `+0x24` at `0x00ac10`. Its width, height and ground
 offset are three columns of `PerfectMovers.B3D` ([10](10-second-b3d-family.md))
 — 6.196 by 9.674 with its base 2.319 below the ground point, for Goner's run —
 quantised once in `movers.mover_art` so that the pack's 12.4 and the Python
 renderer's floats round the same way.
 
-The eight frames are the first eight of the run animation. A run is laid out
-`frame = phase * 8 + view`: frames 0 to 7 are one stride of the gait seen from
-eight sides, and the next eight the next stride. So the turntable is right and
-the walk is missing, which is the honest state of it — the *phase* the game
-shows comes from the byte at the mover's `+0x34`, and nothing has read who
-writes it.
+The eight frames are the eight the game would draw, resolved once in
+`movers.mover_art`: `frame_of` applies `view * 8 + phase` and the mirror rule,
+and hands back the mirrored pixels where the console would have negated
+`ccb_HDX`. So both renderers index the array with the view alone and neither
+needs a flip of its own — the Python side stays the authority on *what the
+frame is*, which is the same split the walls and the ground already use.
 
 ```sh
-python tools/b3dview.py extracted/Perfect/CondensedPerfectWorld.B3D        out/movers.png --cels extracted/Perfect/PerfectWorld.CELS        --floor extracted/Perfect/Floor/AllFloor --assets extracted/Perfect        --eye -292 636 8 --yaw -161.6 --fov 30 --size 480 360
+python tools/b3dview.py extracted/Perfect/CondensedPerfectWorld.B3D        out/movers.png --cels extracted/Perfect/PerfectWorld.CELS        --floor extracted/Perfect/Floor/AllFloor --assets extracted/Perfect        --eye -358.3 651.3 6 --yaw -45 --fov 26 --size 300 300
 ```
 
-That one is a rithm on the road, forty units off, between the trees.
+That is one rithm at forty units from view 0, broad and facing you; move the
+eye to `-330 583` at `--yaw 90` and the same rithm is view 3, narrow and
+side-on. The view steps through all eight exactly once round the circle, and
+frames 8, 16 and 24 each appear twice — once plain and once mirrored.
 
 The check that both renderers still agree survives the addition:
 
@@ -304,8 +402,8 @@ The check that both renderers still agree survives the addition:
 | `--eye -279 640 30 --yaw 90 --pitch 2` | 400,000 / 400,000 | 26 movers in frame |
 | `--eye 760 380 6 --yaw 0 --pitch 0` | 399,980 / 400,000 | the same 20 as before movers existed |
 
-94.1 fps at 960 x 600 against 96.8 without them, for 47 more sprites in the
-world.
+The 47 rithms cost nothing measurable: 95.3 and 97.6 fps at 960 x 600 with
+them against 94.9 and 96.1 without, which is run-to-run noise either way.
 
 One thing the pack cannot reproduce: the console has no static population.
 A crowd is made when its centre drifts into the streaming window and freed

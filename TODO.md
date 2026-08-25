@@ -3,6 +3,38 @@
 Everything below has a concrete starting address or file. Nothing here is
 open-ended research.
 
+## Done in session 16, second half
+
+- **The view was never a field, and `docs/24` had it wrong.** `DrawMover`
+  computes it: `0x00bacc` writes the bearing from the mover to the player into
+  the visible entry's `+0x1f` each frame, `0x00a608` keeps the heading at
+  `+0x24`, and `0x017a48` is
+  `view = ((bearing - heading + 16) & 0xff) / 32`. That is the **props' own
+  turntable to the instruction** — the half-sector bias and the half turn
+  between the two `ATan2` directions cancel exactly — so a viewer that draws
+  props needs no new rule for the direction. The byte at the entry's `+0x1c`
+  that had been written down as the view is a **frame counter**, used by two
+  of `DrawMover`'s five states and giving up at 7, the length of a death.
+- **Eight phases to a view, not eight views to a phase.** `0x017cfc` is
+  `frame = view * 8 + phase`; frames 0-7 of `Goner.2.anim` all face the camera
+  with the legs cycling and frames 0, 8, 16, 24, 32 rotate. Six characters
+  fold views 5, 6 and 7 onto 3, 2 and 1 **mirrored** (`0x017cb4`, and
+  `0x0180b0` negates `ccb_HDX`), which is exactly why their runs are 40 frames
+  where everyone else's is 64 — **18 of the 19 runs are predicted exactly**,
+  and the miss is character 10, the one character `0x017ccc` singles out.
+- **A rithm turns but does not walk.** The phase is bits 21-23 of the
+  character block's `+0x20`, written once by `0x008258` for characters 2 to 6
+  (7, 6, 6, 6, 5) and zero for the rest, and the default path calls
+  `GetAnimCel(anim, 0)` — no advance. It cannot be otherwise: the 44-byte
+  animation record is **per character**, so every rithm of a shape shares one
+  `ANIM` and one current-frame field. What does animate is a *state*: the low
+  nibble of the entry's flags picks slot `nibble + 2` and advances a frame a
+  draw for three draws.
+- **The viewer draws the right frames now.** `movers.frame_of` resolves the
+  view and the mirror in Python and `mover_art` hands the renderers eight
+  ready frames, so no C changed. Still 400,000 of 400,000 at the reference
+  camera. `tools/movers.py --verify` is 139 checks.
+
 ## Done in session 16
 
 - **The city is populated, and nothing on the disc places a rithm.**
@@ -44,7 +76,8 @@ open-ended research.
   `sub = 3` turntable prop: eight views, `face` the heading `NewMover` rolls,
   sizes from three columns of `PerfectMovers.B3D`. 400,000 of 400,000 pixels
   identical at the reference camera with 26 rithms in frame, the same 20
-  as before at the second one, 94.1 fps at 960x600 with 1,594 sprites.
+  as before at the second one, and ~96 fps at 960x600 with 1,594 sprites —
+  the 47 extra cost less than the noise between two runs.
   Twelve functions named; `tools/p.sym` now covers 335 starts, 172 named.
 
 ## Done in session 15, second half
@@ -861,7 +894,7 @@ open-ended research.
 ## 1. The interactive viewer  *(the one real artefact)*
 
 **It exists, it walks, and the props, the item spawns and the rithms are in
-it.** `native/view.c` at 94 fps with 1,594 sprites, pixel-identical to
+it.** `native/view.c` at ~96 fps with 1,594 sprites, pixel-identical to
 `tools/b3dview.py`, collision included.
 
 ```sh
@@ -879,20 +912,20 @@ the two renderers still agree; run it after touching either, and pass
 
 What is still missing:
 
-- **The movers stand still, and they should not.** They are placed and drawn
-  now ([25](docs/25-where-the-movers-are.md)) but each shows one frame: the
-  turntable is right and the *phase* of the walk is missing. `DrawMover` reads
-  the view from the visible entry's `+0x1c`, which is the mover's own `+0x34`,
-  and **nothing has read who writes it** — start there, and the animation
-  phase should come with it. Then the movement: `MoverDecide` at `0x004ff8` is
-  read, `0x00a608` turns a heading into `Cos`/`Sin` times an animation column,
-  and a mover that walked would need the same collision the camera already
-  has. Two smaller pieces sit beside it: the rest of `DrawMover`'s 2,400 bytes
-  (the Perfect One's three forms, the stealth and hit states) and the PPMPC
-  question — `0x018280` writes `0xe288e288` for one state and the neutral
-  `0x1f001f00` for the other, and decoding that word is also what settles what
-  the `.mask` is for. Goner's three spare palettes are unused too: the byte at
-  `+0x1e` picks one, and the pack carries no PLUT variants.
+- **The movers stand still, and the game's own drawer is why** — the phase is
+  a per-character constant and the `ANIM` is shared, so nothing more is to be
+  found on the drawing side ([25](docs/25-where-the-movers-are.md)). What is
+  left is **movement**: `MoverDecide` at `0x004ff8` is read, `0x00a608` turns a
+  heading into `Cos`/`Sin` times an animation column, and `0x00bacc` is the
+  per-frame pass that would apply it. A walking mover needs the same
+  circle-versus-segment collision the camera already has, and then the viewer
+  would show a live city instead of a snapshot. Two smaller pieces sit beside
+  it: the rest of `DrawMover`'s 2,400 bytes (the Perfect One's three forms,
+  the stealth and hit states) and the PPMPC question — `0x018280` writes
+  `0xe288e288` for one state and the neutral `0x1f001f00` for the other, and
+  decoding that word is also what settles what the `.mask` is for. Goner's
+  three spare palettes are unused too: the byte at `+0x1e` picks one, and the
+  pack carries no PLUT variants.
 - **The radar.** `tools/hudmap.py` gives the tile, the world-to-pixel
   transform and the rotation the CCB applies. A viewer can draw the real HUD
   map with no further reversing. `tools/armmath.py` now gives the exact

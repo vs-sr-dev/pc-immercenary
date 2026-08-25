@@ -148,7 +148,62 @@ def frames(path):
     return out
 
 
-def mover_art(assets, kinds, slot=RUN_SLOT, views=8):
+# How `DrawMover` at `0x017998` turns a direction into a frame.
+#
+# The view is *not* a field of the record.  `0x00bacc` writes the bearing from
+# the mover to the player into the visible entry's `+0x1f` every frame, and
+# `0x017a48` subtracts the mover's own heading from it, biases by half a
+# sector and divides by 32:
+#
+#     view = ((bearingToPlayer - heading + 16) & 0xff) / 32     0x017a4c
+#     frame = view * 8 + phase                                  0x017cfc
+#
+# Eight phases to a view, not eight views to a phase: frames 0..7 are one
+# stride of the gait seen from one side, and frames 0, 8, 16 ... rotate.
+#
+# Five characters draw views 5, 6 and 7 as the mirror images of 3, 2 and 1
+# (`0x017cb4`, and `0x0180b0` negates `ccb_HDX` for them), which is exactly
+# why their runs are 40 frames where everyone else's is 64.
+MIRRORED = {0, 3, 4, 5, 7, 16, 17, 18}
+VIEWS = 8
+
+# The phase is a constant per character: bits 21-23 of the character block's
+# word at `+0x20`, which `0x008258` hand-writes for five of them and leaves
+# zero for the rest.  `0x017d08` reads it for characters 2 to 6 and nobody
+# else, which is the same five.
+RUN_PHASE = {2: 7, 3: 6, 4: 6, 5: 6, 6: 5}
+
+# Character 10 has a remap of its own at `0x017ccc` -- view 2 becomes 6 and
+# view 3 becomes 5, both mirrored, and view 1 becomes -1, which `GetAnimCel`
+# clamps to frame 0.  It is also the one character whose run frame count the
+# plain rule does not predict: 48 where 5 views want 40 and 8 want 64.
+FLY = {10: {1: (-1, False), 2: (6, True), 3: (5, True)}}
+
+
+def frame_of(char, view, phase=None):
+    """`(frame, mirrored)` for one character seen from one of eight views."""
+    if phase is None:
+        phase = RUN_PHASE.get(char, 0)
+    mirror = False
+    if char in FLY and view in FLY[char]:
+        view, mirror = FLY[char][view]
+    elif char in MIRRORED and view > 4:
+        view, mirror = VIEWS - view, True
+    return (view * VIEWS + phase if view >= 0 else 0), mirror
+
+
+def flip(im):
+    """Mirror one decoded frame about its own centre.
+
+    The console does it by negating `ccb_HDX` and swapping the sprite's two
+    screen edges, and both renderers centre a sprite on its base point, so
+    reversing the pixel rows is the same picture.
+    """
+    rows, bpp, plut, bgnd = im
+    return ([list(reversed(r)) for r in rows], bpp, plut, bgnd)
+
+
+def mover_art(assets, kinds, slot=RUN_SLOT, views=VIEWS):
     """Everything a renderer needs to draw a spawned mover, per character.
 
     The three sizes are columns of `PerfectMovers.B3D` and are not whole
@@ -157,9 +212,9 @@ def mover_art(assets, kinds, slot=RUN_SLOT, views=8):
     that the scene pack and the Python viewer round them the same way and can
     still be compared pixel for pixel.
 
-    The frames are the first `views` of the animation.  A run is laid out
-    `frame = phase * 8 + view`, so those eight are one stride of the gait seen
-    from eight sides -- the turntable, without the walk.
+    `frames` is one image per view, already through `frame_of` and already
+    mirrored where the game would have mirrored it -- so a renderer indexes it
+    with the view alone and needs no flip of its own.
     """
     disc = Disc(assets)
     rows = {(r['char'], r['slot']): r
@@ -170,9 +225,15 @@ def mover_art(assets, kinds, slot=RUN_SLOT, views=8):
         if r is None or not r['animpath']:
             continue
         c = r['cols']
+        fr = frames(r['animpath'])
         q = lambda v: round(v / 65536.0 * 16) / 16.0
+        pick = []
+        for v in range(views):
+            i, mirror = frame_of(k, v)
+            im = fr[i] if i < len(fr) else fr[0]
+            pick.append(flip(im) if mirror else im)
         out[k] = dict(w=q(c['width']), h=q(c['height']), z=q(c['ground']),
-                      frames=frames(r['animpath'])[:views], row=r)
+                      frames=pick, row=r)
     return out
 
 
@@ -284,6 +345,34 @@ def main():
                 assert (r['char'], r['slot']) in ((0, 0), (16, 2), (17, 2),
                                                   (18, 2)), (r['anim'], n)
             checks += 1
+        # 3b. and it is eight *phases* to a view, not eight views to a
+        #     phase: a run holds one strip of eight per stored view, and a
+        #     character that mirrors 5, 6 and 7 onto 3, 2 and 1 stores five.
+        #     18 of the 19 runs come out exact on that rule alone, and the
+        #     one that does not is character 10, the one `0x017ccc` singles
+        #     out with a remap of its own.
+        predicted = mism = 0
+        for r in rows:
+            if r['slot'] != RUN_SLOT or not r['animpath']:
+                continue
+            n = len(frames(r['animpath']))
+            want = VIEWS * (5 if r['char'] in MIRRORED else VIEWS)
+            if n == want:
+                predicted += 1
+            else:
+                mism += 1
+                assert r['char'] in FLY, (r['name'], n, want)
+            checks += 1
+        assert mism == 1, mism
+        # 3c. every view the rule asks for is a frame the file has
+        for r in rows:
+            if r['slot'] != RUN_SLOT or not r['animpath']:
+                continue
+            n = len(frames(r['animpath']))
+            for v in range(VIEWS):
+                i, _ = frame_of(r['char'], v)
+                assert 0 <= i < n or r['char'] in FLY, (r['name'], v, i, n)
+            checks += 1
         # 4. the rule names every mover asset in `$Characters` but three
         leftover = sorted(v for k, v in disc.map.items()
                           if k.startswith('characters/')
@@ -296,9 +385,10 @@ def main():
         assert len(leftover) == 3, leftover
         checks += 1
         print('%d checks pass; %d of %d animations are an eight-view '
-              'turntable, %d masks are a frame short, and the three files the '
-              'rule never names are %s'
-              % (checks, turntable, turntable + odd, short,
+              'turntable, %d of 19 runs are exactly %d phases x the views the '
+              'mirror rule leaves, %d masks are a frame short, and the three '
+              'files the rule never names are %s'
+              % (checks, turntable, turntable + odd, predicted, VIEWS, short,
                  ', '.join(os.path.basename(x) for x in leftover)))
 
 

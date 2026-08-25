@@ -81,7 +81,7 @@ Eight views round the circle, exactly as `sub = 3` props are
 
 | animation | frames | views x frames each |
 |---|---|---|
-| runs | 40, 48 or 64 | 8 x 5, 8 x 6, 8 x 8 |
+| runs | 40, 48 or 64 | 5 x 8, 6 x 8, 8 x 8 |
 | stands | 8, 24 or 40 | 8 x 1, 8 x 3, 8 x 5 |
 
 30 of the 34 loaded animations divide by eight. The four that do not are
@@ -89,17 +89,25 @@ Goner's death — a death is not seen from eight sides — and the three player
 forms' stands, which are five frames because the only place you see yourself
 standing is the DOAsys and the menus.
 
-The drawer picks the view with a signed byte out of the visible-list entry:
+**It is eight phases to a view, not eight views to a phase**, and which way
+round matters: frames 0 to 7 are one stride of the gait seen from one side and
+frames 0, 8, 16 … rotate. [25](25-where-the-movers-are.md) reads the frame
+rule out of `DrawMover` and checks it against all nineteen runs.
 
-```
-00017a18  ldrb lr, [r4, #0x1c] ; lsl/asr #0x18     ; the view, 0..7
-00017a24  lsl  sb, lr, #0x10                       ; as 16.16
-00017a88  str  sb, [r2, #4]!                       ; -> the anim's frame field
-00017aa0  bl   0x4b3bc                             ; -> the CCB for that frame
-```
+> **Corrected.** This section first said the drawer picks the view with a
+> signed byte out of the visible-list entry's `+0x1c`. It does not. That byte
+> is a **frame counter**, and only for two of `DrawMover`'s five states — the
+> `play mode == 1` animations at `0x017ec0` and the one at `0x017a18` that
+> gives up at 7, which is the length of a death. The view is not stored
+> anywhere: `DrawMover` computes it, at `0x017a48`, from the bearing to the
+> player and the mover's own heading. See
+> [25](25-where-the-movers-are.md#the-view-is-not-a-field).
 
-`0x04b3bc` is the animation helper that turns an anim handle and a frame
-number into a CCB; `0x04b72c` is `LoadAnim`, its loader.
+`0x04b3bc` is `GetAnimCel(anim, delta)`, which turns an anim handle and a
+frame number into a CCB — `+0` frames, `+4` the current frame in 16.16, `+0xc`
+an array of 16-byte descriptors, and `delta` added afterwards, so a `delta` of
+zero pins the frame instead of advancing it. `0x04b72c` is `LoadAnim`, its
+loader.
 
 ## Two files per animation: the `.mask`
 
