@@ -231,12 +231,32 @@ typedef struct {
     double cy, sy, cp, sp, f;
 } Cam;
 
+/* (cos, sin), exact on the quarter turns.  `sin(M_PI)` is 1.2246e-16, not
+ * zero, and that is enough to matter: the ground's fade counts down in whole
+ * world units and the tiles sit on a whole-unit lattice, so at an axis-aligned
+ * yaw the fade metric lands *exactly* on a band boundary for one tile in
+ * three.  This renderer's `float` truncation threw the error away and
+ * b3dview.py's doubles did not, which is the whole of a 2,943-pixel
+ * disagreement at yaw 180.  Both snap now.  The game never had the problem:
+ * its Sin/Cos read a table indexed in 256ths of a circle. */
+static void sincos_deg(double deg, double *c, double *s)
+{
+    double q = floor(deg / 90.0), rem = deg - q * 90.0;
+    if (rem == 0.0) {
+        static const double C[4] = { 1.0, 0.0, -1.0, 0.0 };
+        static const double S[4] = { 0.0, 1.0, 0.0, -1.0 };
+        int i = ((int)q % 4 + 4) % 4;
+        *c = C[i]; *s = S[i];
+        return;
+    }
+    *c = cos(deg * M_PI / 180.0);
+    *s = sin(deg * M_PI / 180.0);
+}
+
 static void cam_update(Cam *c, int w)
 {
-    c->cy = cos(c->yaw * M_PI / 180.0);
-    c->sy = sin(c->yaw * M_PI / 180.0);
-    c->cp = cos(c->pitch * M_PI / 180.0);
-    c->sp = sin(c->pitch * M_PI / 180.0);
+    sincos_deg(c->yaw, &c->cy, &c->sy);
+    sincos_deg(c->pitch, &c->cp, &c->sp);
     c->f = (w / 2.0) / tan(c->fov * M_PI / 360.0);
 }
 

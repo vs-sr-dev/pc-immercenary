@@ -15,7 +15,7 @@ only shipping build is the 3DO ARM6 executable on the retail CD.
 
 | Path | Contents |
 |---|---|
-| `native/` | A walkable viewer of the overworld, props, item spawns and rithms included: SDL2, a software span rasteriser, ~96 fps at 960x600 with 1,594 sprites in the world, and pixel-identical to the Python reference renderer |
+| `native/` | A walkable viewer of the overworld, props, item spawns and rithms included: SDL2, a software span rasteriser, ~84 fps at 960x600 with 1,594 sprites in the world, and pixel-identical to the Python reference renderer over a swept grid of cameras |
 | `tools/` | Opera (3DO) filesystem reader, CEL/anim decoder, CEL bank reader, B3D world parser, ground tile map reader, OBJ exporter, textured software renderer, font decoder, DataStream demuxer with Cinepak and SDX2 decoders, HUD radar map decoder, ARM cross-referencer and call-graph reader, symbol-file builder, OS-surface scanner, DSP instrument reader, library-versus-game classifier, the hand-written ARM math module reimplemented and self-checking, the 512-byte game state read out of the code, a function-level pairing of the two game executables, a reachability pass over the call graph, the placed-prop reader, a reimplementation of the three mover spawners and the radar-map probe they place against, a scene packer for the native viewer and a frame differ |
 | `docs/` | Findings: disc layout, file formats, executables, roadmap, B3D format, code map, CEL banks, the ground, the OS surface, the second B3D family, the fonts, the DataStream, the HUD maps, the DSP instruments, library versus game code, the DOA system and its lip sync, the front end, the save game, the DOAsys spire, the final encounter, the call graph, the props, the item spawns, the cast, where the movers are |
 
@@ -187,6 +187,19 @@ Early, but moving. Nothing is playable yet.
   walked world, the 876 decoded wall cels, the 30 ground cels, the tile map,
   the 146 sprite frames and one run of the mover spawner into one 9.4 MB file,
   so no C in this repository parses a game format.
+- **Two renderers, one picture, at every camera.** The check that
+  `native/view.c` draws exactly what `tools/b3dview.py` draws used to be two
+  cameras, one of which disagreed on 20 pixels. Sweeping instead of sampling
+  found that those 20 and 2,943 more were both **ties** — places where a value
+  lands exactly on a threshold. The ground's fade counts down in whole world
+  units over a whole-unit tile lattice, so an axis-aligned yaw puts one tile in
+  three exactly on a band boundary, and `sin(180°)` being 1.2e-16 rather than
+  zero drops all of them a shade; and the rasteriser picks the owner of an edge
+  pixel by the sign of a barycentric that is exactly zero there, which
+  `-ffast-math` was free to reassociate. Both fixed, the flag dropped for about
+  4% of the frame rate, and `packdiff.py --sweep` is now 48 cameras and 4.8
+  million pixels with **zero** differing — 60 cameras and 8.6 million at
+  `--eyes 16 --size 480 300`.
 - **The call graph is closed, and there is no dispatch mechanism to find.**
   Every function in `p` is reached by a `bl`, by a tail-call `b`, or by
   having its address handed to `CreateThread` or to a subscriber registrar —

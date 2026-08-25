@@ -505,6 +505,24 @@ and the value, duplicated into both halves plus a mode constant, is written to
 the CCB's `PIXC` word at `+0x30`. That is the ground's entire fog: no
 per-pixel work, one pixel-processor setting per quad.
 
+### The bands land on exact ties, and that is a trap for a port
+
+`d` is half the Manhattan distance from the eye to the tile's centre, the
+tiles sit on a 16-unit lattice, and the limit counts down from 72 in whole
+units. Put the camera at a whole coordinate and an axis-aligned yaw — which is
+most screenshots anyone takes — and `d` comes out **exactly** on a band
+boundary for one tile in three. The comparison is `d < limit`, so which side
+of the tie you land on is the difference between two shades.
+
+The game never notices: it works in 16.16 and reads `Sin` and `Cos` out of a
+table indexed in 256ths of a circle, where a quarter turn is exactly 0 and 1.
+A port using `sin(180 * pi / 180)` gets 1.2246e-16 instead of zero, which
+drags every one of those tiles into the next band down —
+**2,943 pixels of a 400 x 250 frame**, and only at yaws that are multiples of
+90. `tools/b3dview.py`'s `sincos` and `native/view.c`'s `sincos_deg` snap the
+quarter turns for exactly this reason; `tools/packdiff.py --sweep` is the
+check, and with them it is clean over 60 cameras and 8.6 million pixels.
+
 ## Still open
 
 - `Floor/Highlight.cel` and `Floor/SpirePad.Cel`, loaded at `0x014b4c` and

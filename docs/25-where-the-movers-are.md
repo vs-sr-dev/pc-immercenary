@@ -395,15 +395,15 @@ eye to `-330 583` at `--yaw 90` and the same rithm is view 3, narrow and
 side-on. The view steps through all eight exactly once round the circle, and
 frames 8, 16 and 24 each appear twice — once plain and once mirrored.
 
-The check that both renderers still agree survives the addition:
+The check that both renderers still agree survives the addition, and the check
+itself got much stronger — `packdiff.py --sweep` now drives both over a grid of
+cameras and finds **no differing pixel anywhere**: 48 cameras and 4.8 million
+pixels by default, 60 and 8.6 million at `--eyes 16 --size 480 300`. Getting
+there took fixing two ties neither renderer had been asked the right question
+about — see [08](08-the-ground.md) and `tools/packdiff.py`.
 
-| camera | identical | note |
-|---|---|---|
-| `--eye -279 640 30 --yaw 90 --pitch 2` | 400,000 / 400,000 | 26 movers in frame |
-| `--eye 760 380 6 --yaw 0 --pitch 0` | 399,980 / 400,000 | the same 20 as before movers existed |
-
-The 47 rithms cost nothing measurable: 95.3 and 97.6 fps at 960 x 600 with
-them against 94.9 and 96.1 without, which is run-to-run noise either way.
+The 47 rithms cost nothing measurable: 84.2 and 83.3 fps at 960 x 600 with
+them against 84.2 and 83.7 without, back to back.
 
 One thing the pack cannot reproduce: the console has no static population.
 A crowd is made when its centre drifts into the streaming window and freed

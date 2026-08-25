@@ -28,7 +28,14 @@ export TEMP   := $(TMPD)
 SDL_CFLAGS := -I$(MINGW)/include -I$(MINGW)/include/SDL2 -Dmain=SDL_main
 SDL_LIBS   := -L$(MINGW)/lib -lmingw32 -lSDL2main -lSDL2
 
-CFLAGS := -O2 -ffast-math -Wall -Wextra -Wno-unused-parameter $(SDL_CFLAGS)
+# No -ffast-math.  It lets the compiler reassociate floating point, and this
+# rasteriser decides which of two surfaces owns an edge pixel by the sign of a
+# barycentric that is *exactly* zero there -- so a last-bit difference is a
+# whole pixel of a different colour.  It was worth 20 pixels of an 800 x 500
+# frame that had been written down as a fill-rule difference for four
+# sessions, and it costs about 4% of the frame rate to give up.  Keep it off:
+# agreeing with tools/b3dview.py to the pixel is the point of this program.
+CFLAGS := -O2 -Wall -Wextra -Wno-unused-parameter $(SDL_CFLAGS)
 LIBS   := $(SDL_LIBS) -lm
 
 view.exe: view.c

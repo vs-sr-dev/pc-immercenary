@@ -3,6 +3,34 @@
 Everything below has a concrete starting address or file. Nothing here is
 open-ended research.
 
+## Done in session 16, third pass
+
+- **The two renderers now agree at every camera, not one.** The 20 pixels the
+  second reference camera had carried for four sessions were written down as a
+  fill-rule difference in `_span`/`tri`. The two functions are identical line
+  for line; the difference was **`-ffast-math`** in `native/Makefile`. The
+  rasteriser decides which of two surfaces owns an edge pixel by the sign of a
+  barycentric that is *exactly zero* along the shared edge, and reassociating
+  that arithmetic flips it. The flag is gone; it cost about 4% of the frame
+  rate.
+- **And a bigger one nobody had looked for.** Sweeping cameras instead of
+  checking two found **2,943 differing pixels of a 400 x 250 frame at yaw
+  180** — the ground's fade. `d` is half the Manhattan distance, the tiles are
+  on a 16-unit lattice and the bands count down in whole units, so at an
+  axis-aligned yaw `d` lands *exactly* on a boundary for one tile in three.
+  `math.sin(math.radians(180))` is 1.2246e-16, not zero, and that is enough to
+  drop every one of them a band. Both renderers snap the quarter turns now
+  ([08](docs/08-the-ground.md)); the game never had the problem, because its
+  `Sin` reads a table indexed in 256ths of a circle.
+- **`packdiff.py --sweep` is the new check.** It drives both renderers over a
+  grid of cameras and places them the way the game places a rithm — on ground
+  `spawns.Probe` calls open, with clearance either side. That last part is not
+  fussiness: the native viewer clips against the near plane and `b3dview.py`
+  drops a straddling polygon whole, so an eye inside a building disagrees by
+  71,201 pixels for a reason that is **deliberate**. 48 cameras, 4.8 million
+  pixels, **zero differing**, and 60 cameras and 8.6 million at
+  `--eyes 16 --size 480 300`.
+
 ## Done in session 16, second half
 
 - **The view was never a field, and `docs/24` had it wrong.** `DrawMover`
@@ -76,8 +104,8 @@ open-ended research.
   `sub = 3` turntable prop: eight views, `face` the heading `NewMover` rolls,
   sizes from three columns of `PerfectMovers.B3D`. 400,000 of 400,000 pixels
   identical at the reference camera with 26 rithms in frame, the same 20
-  as before at the second one, and ~96 fps at 960x600 with 1,594 sprites —
-  the 47 extra cost less than the noise between two runs.
+  as before at the second one, and the 47 extra sprites cost less than the
+  noise between two runs.
   Twelve functions named; `tools/p.sym` now covers 335 starts, 172 named.
 
 ## Done in session 15, second half
@@ -894,8 +922,8 @@ open-ended research.
 ## 1. The interactive viewer  *(the one real artefact)*
 
 **It exists, it walks, and the props, the item spawns and the rithms are in
-it.** `native/view.c` at ~96 fps with 1,594 sprites, pixel-identical to
-`tools/b3dview.py`, collision included.
+it.** `native/view.c` at ~84 fps with 1,594 sprites, pixel-identical to
+`tools/b3dview.py` over a swept grid of cameras, collision included.
 
 ```sh
 python tools/scenepack.py out/world.pack
@@ -940,14 +968,15 @@ What is still missing:
   the two tiles. That would settle the disagreements the game settles that way,
   and `STEP_OVER`, the height below which a quad is scenery rather than a wall,
   is a guess of 16 units until it does.
-- **The pixel-for-pixel check is one camera, not a claim about all of them.**
-  At `--eye -279 640 30 --yaw 90 --pitch 2` the two renderers agree on
-  400,000 of 400,000. At `--eye 760 380 6 --yaw 0 --pitch 0` they disagree on
-  **22**, and they did so before the props existed — the same 22 come out of
-  the pre-session build. They are single pixels on the edges of distant floor
-  tiles and wall slivers, so it is a fill-rule difference in `_span`/`tri` and
-  not a rule read wrongly. Worth an hour: pick the camera that maximises the
-  count, then find which of the two is off by half a pixel.
+- **The pixel-for-pixel check is a grid now, and it is clean.**
+  `python tools/packdiff.py --sweep` — 48 cameras on open ground, 4.8 million
+  pixels, zero differing; `--eyes 16 --size 480 300` is 60 and 8.6 million,
+  also zero. Both of the ties that used to break it are fixed and
+  written down ([08](docs/08-the-ground.md), `tools/packdiff.py`). The one
+  remaining divergence is **deliberate**: the native viewer clips polygons
+  against the near plane and `b3dview.py` drops them whole, so the two do not
+  agree with the eye inside a wall. Giving the reference a Sutherland-Hodgman
+  clipper of its own would close that too, and is the only thing left.
 
 ## 2. Small unread call sites
 

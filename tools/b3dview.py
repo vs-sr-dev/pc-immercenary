@@ -210,6 +210,29 @@ FADE_SHADE = tuple(min(1024, int(v * 256)) for v in FADE)
 NEAR_DETAIL = 52.0          # 0x340000 in 16.16, the compare at 0x10260
 
 
+def sincos(deg):
+    """`(cos, sin)`, exact on the quarter turns.
+
+    `math.sin(math.radians(180))` is 1.2246e-16, not zero, and that is enough
+    to matter: the ground's fade counts down in whole world units and the
+    tiles are on a whole-unit lattice, so at an axis-aligned yaw the fade
+    metric lands *exactly* on a band boundary for one tile in three. A
+    1e-16 error there is not a rounding difference, it is a different band --
+    it dragged 2,943 pixels of a 400 x 250 frame one shade darker. The native
+    viewer's `float` truncation happens to throw the error away, so the two
+    renderers disagreed at every yaw that is a multiple of 90 and nowhere
+    else. The game has no such problem: it turns an angle in 256ths of a
+    circle through a table (`tools/armmath.py`), where a quarter turn is
+    exactly 0 and 1.
+    """
+    q, rem = divmod(deg, 90.0)
+    if rem == 0.0:
+        c, s = ((1.0, 0.0), (0.0, 1.0), (-1.0, 0.0), (0.0, -1.0))[int(q) & 3]
+        return c, s
+    r = math.radians(deg)
+    return math.cos(r), math.sin(r)
+
+
 def fade_level(depth, lateral, step=6):
     """The loop at 0x101e8: count down from 16 by `step` world units."""
     d = (abs(lateral) + depth) * 0.5
@@ -268,8 +291,8 @@ def render(path, out, eye, yaw, pitch, fov=70.0, size=(800, 500), far=6000.0,
 
     W, H = size
     r = Raster(W, H)
-    cy, sy = math.cos(math.radians(yaw)), math.sin(math.radians(yaw))
-    cp, sp = math.cos(math.radians(pitch)), math.sin(math.radians(pitch))
+    cy, sy = sincos(yaw)
+    cp, sp = sincos(pitch)
     f = (W / 2) / math.tan(math.radians(fov) / 2)
     ex, ey, ez = eye
 
