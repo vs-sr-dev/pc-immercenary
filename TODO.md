@@ -3,6 +3,48 @@
 Everything below has a concrete starting address or file. Nothing here is
 open-ended research.
 
+## Done in session 15, second half
+
+- **The cast's art is resolved: an animation number opens a file.**
+  [`tools/movers.py`](tools/movers.py) is the read,
+  [docs/24](docs/24-the-cast.md) the write-up. `LoadCharacterAnims` at
+  `0x009a54` formats one path per animation slot from a **thirteen-arm jump
+  table on `character - 6`**: characters 0-5 get
+  `$Characters/<Name>.<slot+1>.anim`, the bosses get
+  `$Perfect/<Name>/<Name>.Run.anim` and `.stand.anim`, Raven's art lives in
+  Loki's directory, Chameleon has no mask at all. Slot 1 is always the run and
+  slot 2 always the stand; slot 0, every character's death, is not this
+  loader's business. **67 of 67 generated names are on the disc**, and running
+  it backwards leaves exactly three files nothing can name:
+  `Medusa.1.anim`, `Medusa.2.mask` and `Picasso.1.plut`.
+- **The File folio folds case.** The code asks for `Tesla/Tesla.stand.anim`
+  and the disc holds `tesla.stand.anim`; a dozen names differ this way and the
+  game works. A port on a case-sensitive filesystem has to do it deliberately.
+- **Every overworld animation is an eight-view turntable**, the same shape as
+  a `sub = 3` prop: runs are 40, 48 or 64 frames and stands 8, 24 or 40, so
+  30 of the 34 divide by eight. The four that do not are Goner's death and the
+  three player forms' stands, and none of those is seen from eight sides. The
+  view is a signed byte at the visible-list entry's `+0x1c`, written into the
+  anim as 16.16 and handed to `GetAnimCel`.
+- **Every animation loads a `.mask` beside its `.anim`**, into the 44-byte
+  animation record's `+0x1c`. Same frame count (bar three lieutenants, one
+  frame short), same pixel size, 4 bpp against 6, a sixteen-entry **grey
+  ramp** for a palette, and drawn it is a thin outline of the body and its
+  parts. `DrawMover` copies the character's `ccb_XPos`, `YPos`, `HDX` and
+  `VDY` into it and draws it **first**. What it is *for* is still open: only
+  22% of its pixels land where the character is transparent.
+- **Only Goner has recolours.** `$Characters/Goner.<n>.plut`'s first three
+  `PLUT` chunks go to the animation record's `+0x20`, `+0x24` and `+0x28`, and
+  the mover's own byte at `+0x1e` picks one into `ccb_PLUTPtr` with
+  `CCB_PPABS`. The one character with three spare palettes is the generic
+  rithm, of which the city is full.
+- **`CullMovers` at `0x012a18` is the odd one out**: it walks a **circular
+  linked list**, not an array, splits detail at 50 units, and hands its
+  survivors to a caller's array rather than the visible list. `DrawMover` at
+  `0x017998` then inlines the projection off `BuildReciprocalTable`'s table
+  instead of calling `ProjectSprite`. Nine functions named; `tools/p.sym` now
+  covers 322 starts, 159 of them named.
+
 ## Done in session 15
 
 - **The item spawn id indexes one of two tables, and the branch names two
@@ -793,19 +835,16 @@ the two renderers still agree; run it after touching either, and pass
 
 What is still missing:
 
-- **The movers**, and they are the last sprite kind left. `0x012a18` is their
-  culler and it is not one of the array-walking siblings: it follows a
-  **linked list** from `[0x060cdc + 0xa544]`, takes a 16-bit id out of the
-  record's `+0x32` to index the pointer array at `0x0585c8`, splits detail at
-  50 units, and then appends up to 64 entries from a second array at
-  `0x08a1ec` (112-byte stride) that carry bit 19. Kind 2 is what it submits —
-  `ClipVisibleFaces` already passes kind 2 through untouched as a sprite, and
-  `RequestNearCels` streams near cels for exactly kinds 1 and 2.
-  `PerfectMovers.B3D`'s per-animation columns give width, height and ground
-  offset for the nineteen characters, which is the triple `ProjectSprite`
-  wants. (`0x0137e4`, written down here as the mover culler for two sessions,
-  is not: it walks the item spawn list and takes only kind 5, the DOAsys
-  spires. See [23](docs/23-the-item-spawns.md).)
+- **The movers.** Their art, geometry and draw path are read now
+  ([24](docs/24-the-cast.md)) — what is missing for a viewer is **where they
+  are**. They are not in the world file: `LoadStaticObjects` clears the list
+  and the game spawns rithms as it runs, through `NewMover` at `0x00a6b0`,
+  onto the circular linked list `CullMovers` walks. Read `NewMover` and its
+  callers and the city can be populated. Two smaller pieces sit beside it:
+  the rest of `DrawMover`'s 2,400 bytes (the Perfect One's three forms, the
+  stealth and hit states) and the PPMPC question — `0x018280` writes
+  `0xe288e288` for one state and the neutral `0x1f001f00` for the other, and
+  decoding that word is also what settles what the `.mask` is for.
 - **The radar.** `tools/hudmap.py` gives the tile, the world-to-pixel
   transform and the rotation the CCB applies. A viewer can draw the real HUD
   map with no further reversing. `tools/armmath.py` now gives the exact
@@ -911,6 +950,15 @@ What is still missing:
   consumes it.
 
 ## Notes to self
+
+- **A filename generator run backwards names the dead files.** The rule in
+  `LoadCharacterAnims` produces 67 names and all 67 are on the disc; asking
+  which files it can *never* produce left exactly three, and two of them say
+  Medusa used to be a lieutenant. Both directions are worth running.
+- **A shipped path's case is not the disc's.** The code asks for
+  `Tesla/Tesla.stand.anim` and the disc holds `tesla.stand.anim`. If a name
+  does not resolve, fold the case before doubting the rule — and write down
+  that the folio folds it, because a port on Linux will not.
 
 - **Look at the art.** Fifteen sessions of disassembly could not say what an
   item spawn id meant; decoding the 28 cel pairs and putting them in a contact

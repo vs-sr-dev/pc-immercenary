@@ -186,7 +186,7 @@ dispatches on **bits 20-23** of each entry's flags word:
 |---|---|
 | 1, 5 | `DrawItemSpawn` — item spawn points, [23](23-the-item-spawns.md) |
 | 3 | `0x0175c0` — a placed prop, turntable |
-| 4 | `0x017998` |
+| 4 | `DrawMover` — a character, [24](24-the-cast.md) |
 | 6 | `0x017398` — a placed prop, clock |
 | 7 | `0x045d68` |
 | 8 | `0x01582c` |

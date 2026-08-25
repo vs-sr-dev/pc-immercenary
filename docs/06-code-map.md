@@ -175,6 +175,14 @@ every reference beyond 255 bytes.
 | `0x037cc0` | **LoadCel4x** — slot `2402 + id` into `+0`, the cel the drawers reach for first | `str r0, [r1]` |
 | `0x013588` | **RequestNearCels** — signals `LoadThread` and queues the ids of visible sprites in detail band 4 whose near cel is still null, deduplicating against a 20-entry list | `mov r0, #0xc ; bl 0x354` on `desc - AllCels` |
 | `0x01b090` | **SetObjectCelPLUT(id)** — points both cels of one static object at the animated palette `[0x05825c] >> 1` selects | `str r2, [r0, #0xc]!` twice |
+| `0x009a54` | **LoadCharacterAnims(char)** — one path per animation slot, from a thirteen-arm jump table on `character - 6`; slot 1 the run, slot 2 the stand, slot 0 and 3+ not loaded here. 67 of 67 names land on the disc. See [24](24-the-cast.md) | `addls pc, pc, r1, lsl #2` at `0x009b2c` |
+| `0x012a18` | **CullMovers** — the only culler that walks a **circular linked list**, from `[0x060cdc + 0xa544]`; detail 1 under 50 units and 2 over, sizes taken from `0x0585c8[char] + 44*anim`, results into the caller's array | `ldrb ip, [r3, #0x32]` then `ldr r8, [r5, r7, lsl #2]` |
+| `0x035f5c` | **DrawMovers** — calls `CullMovers` into 250 slots of stack, drops anything with `abs(x) > z`, hands the rest to the z-order insert | `bl 0x12a18` then `bl 0x36448` |
+| `0x035fe8` | **DrawMoversCompacted** — the same, 500 slots, after first compacting kinds 4 and 7 out of the visible list | the compaction loop, then `bl 0x12a18` |
+| `0x036448` | **InsertMoverByDepth** — projects the mover's box and walks the visible list to find where it belongs among the faces | `ProjectSprite` then eight `lsl r0, r0, #1` |
+| `0x017998` | **DrawMover** — kind 4: the view from the entry's `+0x1c` byte, the frame from `0x04b3bc`, the mask cel drawn first at the same rectangle, and the projection inlined off the reciprocal table instead of `ProjectSprite` | `ldr sb, [r1, r2, lsl #2]` on `0x08c16c` |
+| `0x04b3bc` | **GetAnimCel(anim, n)** — the frame field is written as 16.16 before the call | called with `str sb, [r2, #4]!` in front |
+| `0x04b72c` | **LoadAnim(path, size)** — every mover animation and mask comes through it | 30-odd call sites in `LoadCharacterAnims` |
 | `0x0175c0` | **DrawPropByAngle** — `sub = 3`: `ProjectSprite` from the record's own width, height and ground offset, then the frame `k` views and `ATan2` choose | `teq r1, #0x10` ladder on `k` |
 | `0x017398` | **DrawPropByClock** — `sub = 6`: the same, sized from the static object table at `0x07b758`, and the frame stepped `0x2222` a tick | `bl 0x4437c` twice |
 | `0x0183a8` | **ProjectSprite(vec, groundOffset, width, height, out)** — four screen corners of a screen-aligned cel rectangle, on the same 160-pixel half screen as the walls | `rsb r8, r0, #0x5000` |
@@ -404,6 +412,8 @@ that the released game does in C instead.
 | `0x0582cc` | **`AllCels`**: 1,200 x 12, the same descriptor for every `PerfectWorld.CELS` texture id — `+0` the 4x cel, `+4` the 2x, `+8` the 1x, all three streamed in by `LoadThread` and null until it gets there |
 | `0x058a54`, `0x058a58`, `0x058a5c` | the bank's offset table in three 1,201-word arrays, one per mip level; `0x036ca8` reads them with three consecutive reads of `0x12c4` |
 | `0x058a40`, `0x058bc0` | the draw distance in whole units, and the fade step derived from it; `0x0027d0` gates faces on the first and `0x012298` picks a fade band with both. See [08](08-the-ground.md) |
+| `0x0585c8` | **the per-character animation arrays** — one pointer per character, each to that character's 44-byte animation records: `+4` width, `+8` height, `+0xc` ground offset from `PerfectMovers.B3D` ([10](10-second-b3d-family.md)), `+0x18` the `.anim`, `+0x1c` the `.mask`, `+0x20`..`+0x28` three recolour PLUTs. See [24](24-the-cast.md) |
+| `0x05857c` | the animation count per character, the bound `LoadCharacterAnims` and the cullers use |
 | `0x058640` | **the character name table** — nineteen `char *`, NULL-terminated: Goner, Picasso, Tork, Kilroy, Venus, David, Medusa, Tesla, Balkan, Silva, Fly, Riberto, Chameleon, Chance, Loki, Raven, PerfectMale, PerfectFemale, PerfectRobot. The id space of `PerfectMovers.B3D` and of the DOA conversation, written down by the program. See [19](19-the-doasys-spire.md) |
 | `0x057d14` | sixteen DOAsys art pointers: 0-3 the Gaz front and back, 4-12 the three player forms' stand/mask/glow, 13-15 the three speakers' `StandAA50.anim`, built at run time |
 | `0x057d0c` | the DOAsys record: `+0` the mover you are talking to, `+4` the character id `argv[1]` carries, `+0x58` a mask, `+0x5c`/`+0x60`/`+0x64` the three speakers' ids, `+0x68` four 44-byte pedestals |

@@ -205,6 +205,9 @@ count x {
 5,800 bytes, exact. Three of the fields, the names among them, are read with
 `0x4d46c` into stack scratch and never stored: the shipping build reaches its
 animations by number, and the names survive only as documentation.
+[24](24-the-cast.md) reads what a number opens — `LoadCharacterAnims` builds
+`$Characters/<Name>.<slot+1>.anim` or `$Perfect/<Name>/<Name>.Run.anim` per
+character, 67 names, all 67 on the disc.
 
 ### The seven columns
 

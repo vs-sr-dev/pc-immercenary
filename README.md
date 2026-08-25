@@ -17,7 +17,7 @@ only shipping build is the 3DO ARM6 executable on the retail CD.
 |---|---|
 | `native/` | A walkable viewer of the overworld, props and item spawns included: SDL2, a software span rasteriser, 97 fps at 960x600 with 1,547 sprites in the world, and pixel-identical to the Python reference renderer |
 | `tools/` | Opera (3DO) filesystem reader, CEL/anim decoder, CEL bank reader, B3D world parser, ground tile map reader, OBJ exporter, textured software renderer, font decoder, DataStream demuxer with Cinepak and SDX2 decoders, HUD radar map decoder, ARM cross-referencer and call-graph reader, symbol-file builder, OS-surface scanner, DSP instrument reader, library-versus-game classifier, the hand-written ARM math module reimplemented and self-checking, the 512-byte game state read out of the code, a function-level pairing of the two game executables, a reachability pass over the call graph, the placed-prop reader, a scene packer for the native viewer and a frame differ |
-| `docs/` | Findings: disc layout, file formats, executables, roadmap, B3D format, code map, CEL banks, the ground, the OS surface, the second B3D family, the fonts, the DataStream, the HUD maps, the DSP instruments, library versus game code, the DOA system and its lip sync, the front end, the save game, the DOAsys spire, the final encounter, the call graph, the props, the item spawns |
+| `docs/` | Findings: disc layout, file formats, executables, roadmap, B3D format, code map, CEL banks, the ground, the OS surface, the second B3D family, the fonts, the DataStream, the HUD maps, the DSP instruments, library versus game code, the DOA system and its lip sync, the front end, the save game, the DOAsys spire, the final encounter, the call graph, the props, the item spawns, the cast |
 
 ## Quick start
 
@@ -45,6 +45,9 @@ python tools/props.py --verify
 
 # The item spawns: which table the id indexes, and what the id-0 roll grows
 python tools/items.py --verify
+
+# The cast: which file each character's animations come from, and how big
+python tools/movers.py --verify
 
 # Render a top-down map of the overworld
 python tools/b3dmap.py extracted/Perfect/CondensedPerfectWorld.B3D worldmap.png \
@@ -166,7 +169,7 @@ Early, but moving. Nothing is playable yet.
   seven of its sub-handlers, the CEL bank loader, the floor renderer, the object
   id table and the world globals are identified. `tools/symbols.py` turns the
   code map plus the image's own strings into a symbol file that
-  `armxref.py -S` reads, which names 316 of the 1,308 functions. The call
+  `armxref.py -S` reads, which names 322 of the 1,308 functions. The call
   graph is readable too, after three fixes: an APCS function starts one
   instruction before its `push`, a `push` that only *mentions* `lr` is a
   string literal rather than a function ([21](docs/21-the-call-graph.md)), and
@@ -230,6 +233,21 @@ Early, but moving. Nothing is playable yet.
   the record's own easting, the canopy widened by a second roll. It had been
   written down as a random weapon spawn on the strength of an off-by-one in
   `RandomBelow`. [23](docs/23-the-item-spawns.md).
+- **The cast is resolved down to the filenames.** `PerfectMovers.B3D` gave the
+  nineteen characters and their per-animation width, height and ground offset
+  three sessions ago, but the animation *names* in it are read into scratch and
+  thrown away — the shipping build reaches an animation by number. What a
+  number opens is a thirteen-arm jump table in `LoadCharacterAnims`:
+  `$Characters/<Name>.<slot+1>.anim` for the six lieutenants,
+  `$Perfect/<Name>/<Name>.Run.anim` and `.stand.anim` for the bosses, Raven's
+  art inside Loki's directory, and no mask at all for the Chameleon. **All 67
+  names it can build are on the disc**, and run backwards it leaves exactly
+  three files nothing names — two of which say Medusa used to be a lieutenant.
+  Every overworld animation is an **eight-view turntable** (runs 40, 48 or 64
+  frames, stands 8, 24 or 40), every one loads a `.mask` beside its `.anim`
+  that is a grey outline of the body drawn underneath it, and only Goner — the
+  rithm the city is full of — carries three spare palettes.
+  [24](docs/24-the-cast.md).
 - **The HUD radar is solved**, the last unread asset format on the disc. The
   six `.Maps` files are 256 raw CEL tiles each, one per world grid cell — 2 bpp
   at two world units a pixel up close, 1 bpp at eight further out, both drawn
