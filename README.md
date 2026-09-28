@@ -15,9 +15,10 @@ only shipping build is the 3DO ARM6 executable on the retail CD.
 
 | Path | Contents |
 |---|---|
+| `3dokit/` | The 3DO half of the port, split out for the next 3DO game the way jaguarkit and saturnkit are: Opera disc images, AIF executables, the ARM60 cross-referencer, the Portfolio OS surface, library proofs and program pairing, cels, the DataStream with Cinepak and SDX2, AIFF, the DSP library, and a C99 runtime that reads files, cels, films and sound straight off a disc image. Its own [README](3dokit/README.md) is the reference |
 | `native/` | A walkable viewer of the overworld, props, item spawns and *walking* rithms included: SDL2, a software span rasteriser, ~84 fps at 960x600 with 1,594 sprites in the world, the game's own radar-map collision, and pixel-identical to the Python reference renderer over a swept grid of cameras and mover tick counts |
 | `tools/` | Opera (3DO) filesystem reader, CEL/anim decoder, CEL bank reader, B3D world parser, ground tile map reader, OBJ exporter, textured software renderer, font decoder, DataStream demuxer with Cinepak and SDX2 decoders, HUD radar map decoder, ARM cross-referencer and call-graph reader, symbol-file builder, OS-surface scanner, DSP instrument reader, library-versus-game classifier, the hand-written ARM math module reimplemented and self-checking, the 512-byte game state read out of the code, a function-level pairing of the two game executables, a reachability pass over the call graph, the placed-prop reader, a reimplementation of the three mover spawners, the radar-map probe they place against and the walk they then do, a scene packer for the native viewer and a frame differ |
-| `docs/` | Findings: disc layout, file formats, executables, roadmap, B3D format, code map, CEL banks, the ground, the OS surface, the second B3D family, the fonts, the DataStream, the HUD maps, the DSP instruments, library versus game code, the DOA system and its lip sync, the front end, the save game, the DOAsys spire, the final encounter, the call graph, the props, the item spawns, the cast, where the movers are, the decision, the DOA field |
+| `docs/` | Findings: disc layout, file formats, executables, roadmap, B3D format, code map, CEL banks, the ground, the OS surface, the second B3D family, the fonts, the DataStream, the HUD maps, the DSP instruments, library versus game code, the DOA system and its lip sync, the front end, the save game, the DOAsys spire, the final encounter, the call graph, the props, the item spawns, the cast, where the movers are, the decision, the DOA field, what 3dokit found |
 
 ## Quick start
 
@@ -132,6 +133,16 @@ python tools/armxref.py extracted/p1e -S tools/p1e.sym -d 162a4
 ## Status
 
 Early, but moving. Nothing is playable yet.
+
+- **The 3DO half is its own toolkit now.** [`3dokit/`](3dokit/) holds what
+  in this port is 3DO rather than Immercenary, checked on a second disc
+  (the OMF2097 port's) and with a C runtime that decodes every cel, film and
+  sound straight off the disc image, to the line what the Python does.
+  Reading the port back through it found that **153 frames, among them
+  eighteen of the ground's, had been decoded with the previous cel's
+  palette**, and that the CEL engine's transparency is the decoded colour's
+  rather than index 0's -- both in the viewer until its tools move onto the
+  kit. [29](docs/29-3dokit.md).
 
 - The Opera filesystem is fully readable: 747 files, 552 MiB.
 - The 3DO CEL format decodes: 449 asset files to 5,874 PNGs, no failures.

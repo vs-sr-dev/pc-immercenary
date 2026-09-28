@@ -66,6 +66,27 @@ the one that was wrong*, below.
 
 Do these in order.
 
+### 0. Move the tools onto `3dokit/`, and the ground gets its palettes back
+
+[`3dokit/`](3dokit/) is this port's 3DO half, split out and checked on a
+second disc ([29](docs/29-3dokit.md)). Reading it back against the port
+found two real bugs in `tools/cel.py` that the viewer inherits:
+
+- **153 frames take the previous cel's PLUT**, because a PLUT can come after
+  its PDAT: eighteen of `Floor/AllFloor`'s thirty-one frames among them, so
+  **the viewer's ground tiles are drawn in the wrong palettes**.
+- **Transparency is on the decoded colour, not on index 0**: an index 0
+  whose PLUT entry is not black is drawn.
+
+`packdiff` cannot see either, because both renderers read the same
+decoders. Switch `floor.py`, `celbank.py`, `props.py`, `items.py`,
+`movers.py` and `scenepack.py` to `3dokit.cel` (via
+`importlib.import_module('3dokit.cel')`), re-pack, and take new reference
+pictures: the sweep will differ from the old ones on purpose. Then retire
+the port's own copies of the disc, AIF, ARM, OS-surface, shape, stream and
+DSP readers the same way, checking each with the kit's `--verify`/`--check`
+and `tdkcheck`.
+
 ### 1. Read `ResolveHit`, `0x00bff0`
 
 We can shoot and we cannot die. Thirteen arms inside an encounter, one per
@@ -638,6 +659,28 @@ What is still missing:
 ## History
 
 Session logs, newest first. Nothing below this line is work to do.
+
+## Done in session 21
+
+- **`3dokit/`**: the 3DO half of the port, the way jaguarkit is
+  Highlander's -- `disc`, `aif`, `arm`, `portfolio`, `shapes`, `cel`,
+  `stream`, `cinepak`, `audio`, `dsp`, `pixels`, `check`, and a C99
+  `runtime/` (`tdk_opera`, `tdk_cel`, `tdk_stream`, `tdkcheck`) that reads
+  files, cels, films and sound straight off the disc image. Checked on
+  Immercenary and on the OMF2097 port's ISO; `tdkcheck` and
+  `python -m 3dokit.check` agree to the line on both, and the C decodes all
+  29,659 film frames in 20 seconds.
+- **The CEL rules come from the hardware now**, with the Opera emulator's
+  MADAM as the reference: PLUTA on 1/2/4 bpp, uncoded 8 bpp, bit 15 of 6 and
+  16 bpp, transparency on the decoded colour, and a PLUT that belongs to its
+  CCB's group. The last two are the bugs in item 0.
+- **The folio-0 SWI in [09](docs/09-os-surface.md) is the string
+  `"audio"`**; counting SWIs by control flow drops it and nothing else.
+- **The ROM tags are read**: offsets relative to the copy that holds them,
+  and Immercenary's launcher tag absolute. The 3DO binary header at 0x80 of
+  every AIF is read too.
+- [29](docs/29-3dokit.md) is the write-up; [the kit's README](3dokit/README.md)
+  is its reference.
 
 ## Done in session 20
 
