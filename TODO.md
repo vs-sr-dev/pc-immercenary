@@ -265,6 +265,15 @@ worth doing, but after the run.
   its signal freed in its owner's task), the timer's unit 1 `CMD_READ`.
   Nothing moves: `p`'s trace and the `--boot` replay to 300,000 calls are
   0903c17's byte for byte.
+- **Kit 075ad17** (pc-doctorhauzer's session 4): an AIFF's 80-bit rate read
+  a byte at a time, as the folio reads it -- the runtime's word loads were
+  unaligned, and this game's samples showed rates like 0x2006d622 for
+  22,050 Hz --; the kernel's quantum (equal priorities take turns every
+  15 ms). **A new baseline for the traces**, in those lines only: `p`'s
+  trace (10 lines) and the `--boot` replay to 300,000 calls (12 lines)
+  differ only in the `sample N: ... rate` lines, now right (0x56220000,
+  0x56ee0000, 0xac440000); the replay's sound to 1,500,000 calls
+  (471,859,208 bytes) is the same byte for byte.
 - pc-crashnburn's submodule follows the kit too (at ea1b2e5 since its
   f274f3f, the user's wish): after each kit commit, `git pull --ff-only` in
   both ports' submodules, regenerate pc-crashnburn's `build/recomp` when the
