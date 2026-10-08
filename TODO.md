@@ -140,6 +140,21 @@ worth doing, but after the run.
   world, the death, the debrief film with the faces and launchme's jump
   statistics, all with sound. `noise.dsp` reads a fixed xorshift32 for the
   DSP's noise register (the hardware's sequence is unknown).
+- **The second game (kit 502a40c)**: A is the map, B shoots; it stopped at
+  the first spire -- GoodSpire.ins names its output "OutPut", 23.10's audio
+  folio matches names without case -- and then at GetAudioItemInfo of an
+  instrument. `play3-pads.txt` now replays through Tork and Picasso to the
+  exit, 4,000,000 calls.
+- **The spires are silent**: GoodSpire, BadSpire and HealingSpire.ins are
+  the game's own DSP programs (33, 36, 25 words), and the runtime only has
+  hand-written models known by checksum. Rather than transliterate each,
+  **a DSP interpreter** in the runtime (the instruction set `3dokit.dsp
+  --dis` already decodes, Opera's opera_dsp.c to read where the guide is
+  silent) would run any instrument -- and check the hand-written models
+  against it, frame for frame.
+- Kernel -88 `GetSysErr` (an error's text) is not in: the game asks for it
+  only when a call has failed, so it now marks a call the runtime got
+  wrong rather than a missing feature.
 - **Next: play it again**, against the console: the world's sounds, the
   shots, the HUD, the debrief and the statistics screen; then a second
   jump (`p` is unloaded and loaded again).
