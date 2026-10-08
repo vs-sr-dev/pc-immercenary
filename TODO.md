@@ -145,13 +145,20 @@ worth doing, but after the run.
   folio matches names without case -- and then at GetAudioItemInfo of an
   instrument. `play3-pads.txt` now replays through Tork and Picasso to the
   exit, 4,000,000 calls.
-- **The spires are silent**: GoodSpire, BadSpire and HealingSpire.ins are
-  the game's own DSP programs (33, 36, 25 words), and the runtime only has
-  hand-written models known by checksum. Rather than transliterate each,
-  **a DSP interpreter** in the runtime (the instruction set `3dokit.dsp
-  --dis` already decodes, Opera's opera_dsp.c to read where the guide is
-  silent) would run any instrument -- and check the hand-written models
-  against it, frame for frame.
+- **The spires sound (session 24, kit aeb5a62).** GoodSpire, BadSpire and
+  HealingSpire.ins are the game's own DSP programs (33, 36, 25 words); the
+  runtime now has **a DSP interpreter** (FreeDO's reading of the
+  instruction set) that runs any instrument with no hand-written model
+  from its own code. GoodSpire is a state-variable filter on a constant,
+  its cutoff swept by an 8 Hz saw (a low pulsing hum, 65-160 Hz);
+  HealingSpire a triangle whose pitch a 21.5 Hz saw sweeps (a warble
+  around 1.9 kHz); BadSpire a triangle at 58 Hz driving a second one's
+  pitch (a harsh buzz, harmonics of 114 Hz). The game only connects them
+  to its mixer and sets the mixer's gains; it never turns their knobs.
+  `pfboot --dsp-check` holds every hand-written model against the
+  interpreter, frame for frame (all fourteen: 0 frames differ over games
+  3-6 and two Crash 'n Burn plays); `--dsp-code` plays everything from its
+  code.
 - Kernel -88 `GetSysErr` (an error's text) is not in: the game asks for it
   only when a call has failed, so it now marks a call the runtime got
   wrong rather than a missing feature.
@@ -162,25 +169,27 @@ worth doing, but after the run.
   groups never gave their buffers back -- and an ended task's IOReq still
   in progress (the fourth). Every game's presses are in this session's
   scratchpad (`play2-pads.txt` .. `play6-pads.txt`) and replay.
-- **Next session's plan (the user's): the spires, a final check, then
-  publish all three.**
-  1. **A DSP interpreter** (above): the spires are the only silent sound
-     left, and it would check every hand-written model too.
-  2. **The final check**: the regression set and Crash 'n Burn's
-     baselines re-recorded on the kit (item 3 below), a game replayed
-     from each `playN-pads.txt`, the user's last look.
+- **The plan (the user's): the spires, a final check, then publish all
+  three.**
+  1. **A DSP interpreter: done** (session 24, above).
+  2. **The final check**: the regression set (done: traces, self-test,
+     pfcheck, frames, the battery, all 5ff9786's but GoodSpire's line in
+     `p`'s trace) and Crash 'n Burn's baselines re-recorded (done:
+     pc-crashnburn 7bc0beb); a game replayed from each `playN-pads.txt`
+     (done: 2 to 6 and the playtest run to their end); **the user's last
+     look: open.**
   3. **Publish PC-Immercenary, pc-crashnburn and 3dokit together**: the
      submodules' URL from `D:/Homebrew6/3dokit` to the published one,
      both on the kit's head (see the memory's publishing note).
+     PC-Immercenary is on GitHub already (`vs-sr-dev/pc-immercenary`,
+     public); `vs-sr-dev/3dokit` and `vs-sr-dev/pc-crashnburn` do not
+     exist yet. Neither repository tracks anything from a disc, nor ever
+     has (their largest blobs are docs and `pf_audio.cpp`).
 - **Also open:**
-  1. (the interpreter, as above)
-  2. **The console against the window: done** (the user, end of session
+  1. **The console against the window: done** (the user, end of session
      23): substantially the same; smoother in the window, but at the
-     right speed, not faster.
-  3. **Crash 'n Burn's baselines on this kit**: its frames and pfcheck
-     snapshot numbers moved with the drive's time (pc-crashnburn docs/10).
-  4. **Publishing waits for the spires' sound** (the user's call): the
-     three repositories go out together once item 1 is done.
+     right speed, not faster. The spires are the one sound not yet
+     heard against the console.
 - **Seen on the console (session 23)**, side by side with `pfboot --window`:
   everything to the last film the same, the title and menu cels included,
   but the menu's music, which the console plays and the runtime did not.
@@ -209,6 +218,12 @@ worth doing, but after the run.
   kit), `traces.sh`, `frames.sh`, `pfcheck2.sh`; the battery is
   pc-crashnburn's `battery.sh` -- **run it with the normal PATH**: msys's
   python (mingw64 first on PATH) has no capstone and every discovery fails.
+- Session 24's regression (`8f5adf65-.../scratchpad/reg`): `regress.sh`
+  (the references: `cnb/ref`, Crash 'n Burn's C++ on 5ff9786's runtime,
+  and `reg/rop-old.exe`, session 23's `rop-n`), `pfcheck3.sh` (the
+  snapshots' new numbers); `wavdiff.py` in the scratchpad says where two
+  WAVs differ. The spires' clips: `goodspire-in-game.wav`,
+  `healingspire-in-game.wav`, `badspire-in-game.wav`.
 - The heredoc trap bit three times this session: C++ or Python with `\n`
   or `\\` goes through Edit, never through a shell heredoc.
 - pc-crashnburn's submodule follows the kit too (at ea1b2e5 since its
@@ -809,6 +824,24 @@ What is still missing:
 ## History
 
 Session logs, newest first. Nothing below this line is work to do.
+
+## Done in session 24
+
+- **The DSP's interpreter** (kit aeb5a62): any instrument with no model
+  runs from its code -- each sees the DSP's memory laid out for it alone,
+  its code relocated as the folio does it, with the subroutines it imports
+  (`sampler`'s `oscupdownfp`). The three spires sound in games 3 to 6.
+  23.10's knob calculation 4 read in its folio (0x95f4).
+- **Every hand-written model checked against it** (`--dsp-check`): all
+  fourteen, 0 frames differ in 6.4 billion instrument frames. With every
+  instrument interpreted (`--dsp-code`) the second game's sound is the
+  models' byte for byte.
+- **The final check, but the user's look**: the regression against
+  5ff9786 (Crash 'n Burn's C++ rebuilt on that runtime: the copy of its
+  `pfboot.exe` in its build was older, from before the drive's time, and
+  gave false differences); Crash 'n Burn's baselines re-recorded
+  (pfcheck's late snapshots are calls 1092, 1093, 1111 now); every
+  `playN-pads.txt` replayed to its end.
 
 ## Done in session 23
 
