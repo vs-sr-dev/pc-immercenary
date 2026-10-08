@@ -127,8 +127,31 @@ worth doing, but after the run.
   task beside `launchme`, which stays alive and talks to it over
   "ShellMsgPort". `pfboot extracted/p` alone runs to call 99
   (`SetAudioItemInfo` of item -1) -- a shortcut, not the console's path.
+- **To look at on Phoenix and the console** (the user's eyes; what the
+  runtime decided without the hardware's word):
+  1. The title and menu cels (PRE0's LITERAL bit passed over).
+  2. The intro's sound: SDX2 stereo and mono as transliterated (the stereo
+     sum has no CLIP: clicks on loud passages?), the envelope's fades, the
+     volume.
+  3. The films' pace and lip sync (the Perfect One speaking): the FIFOs'
+     own buffering is not modelled, their status is "a word to read".
+  4. How long from power-on to the title (here 105 s of guest time) and
+     how fast the credits scroll under the menu.
+  5. Anything random: CLIO's RandSample is a fixed xorshift32 here, so a
+     choice the game makes at random is always the same one (`launchme`
+     tests bits of `ReadHardwareRandomNumber`).
 - Each kit change: commit in `D:\Homebrew6\3dokit`, the kit's regression
   set (Crash 'n Burn included) before and after, `git pull --ff-only` here.
+  The regression scripts are in this session's scratchpad
+  (`bc8e42c9-.../scratchpad`): `regress.sh TAG CNB ROP` (builds under the
+  scratchpad: `cnb-old` the reference, `cnbN`/`ropN` regenerated from the
+  kit), `traces.sh`, `frames.sh`, `pfcheck2.sh`; the battery is
+  pc-crashnburn's `battery.sh` -- **run it with the normal PATH**: msys's
+  python (mingw64 first on PATH) has no capstone and every discovery fails.
+- The heredoc trap bit three times this session: C++ or Python with `\n`
+  or `\\` goes through Edit, never through a shell heredoc.
+- pc-crashnburn's submodule is still at c6a174b: pulling it to the kit's
+  head is the user's call.
 
 ### 0. Move the tools onto `3dokit/`, and the ground gets its palettes back
 
@@ -741,6 +764,12 @@ Session logs, newest first. Nothing below this line is work to do.
   Then 23.10's `LoadCode` / `ExecuteAsSubroutine` and the eight calls
   CinepakSubroutine needed next (kit 5af7ce1): the disc, started as the
   console starts it, runs 1,537 OS calls, to `MakeSample`.
+- **The front end runs from the disc, with its sound** (kit 1f23920,
+  ea1b2e5): logos, intro film, title, main menu over the credits; on A,
+  `launchme` asks for `LoadProgramPrio` (item R). Four 23.10 DSP
+  instruments transliterated; audio sample/attachment calls; the kernel's
+  exit, list vectors and semaphore deletion; QueryGraphics; discovery
+  follows lr-only local returns inside a function.
 - **23.10 differs from 1993 where it matters here**: its File folio has the
   loaders; its kernel numbers folio-0 SWIs from 0x100 as kernel SWIs and has
   `WaitPort` (vector -96, 0x87a0) and `CREATETASK_TAG_ALLOCDTHREADSP`; its
