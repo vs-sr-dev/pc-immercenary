@@ -80,12 +80,31 @@ worth doing, but after the run.
   "launchme=extracted/launchme"`: `p` 1,240 functions, 80,388
   instructions; `launchme` 74 and 2,142. Self-test: 891 functions, 10,580
   vectors, 0 failures.
-- `pfboot extracted/p --max-calls 50000` stops at call 27, `04C1C4 swi
-  0x30008 GetDirectory` (`r0=001FFEB0 r1=000000FF r2=00000001`): **the first
-  piece of work**. Read it in Portfolio 23.10's own code on this disc, do it
-  in the kit as that code does it, run on. Each kit change: commit in
-  `D:\Homebrew6\3dokit`, the kit's regression set (Crash 'n Burn included)
-  before and after, `git pull --ff-only` here.
+- `pfboot extracted/p --max-calls 50000` stopped at call 27, `GetDirectory`.
+  Session 22 did it and the two stops after it, each as the code on the
+  disc does it (kit 680b8d9, 107b27a): `GetDirectory`; `CreateThread`'s
+  tag 24, which is 23.10's; and the 1994 shell's `@` and `%`, without which
+  `AppStartup`'s aliases (`$Perfect`...) were never made.
+- **Where it stands.** `pfboot extracted --boot` (the console's way) runs
+  `launchme`, which stops at the File folio's `LoadCode`: launchme is
+  Immercenary's own little shell -- it runs
+  `$Perfect/Film/CinepakSubroutine` with `LoadCode` /
+  `ExecuteAsSubroutine` / `UnloadCode`, then `$boot/p` with
+  `LoadProgramPrio` and stays alive, talking to `p` over a message port.
+  `pfboot extracted/p` alone runs on to call 99 (`SetAudioItemInfo` of item
+  -1) -- a dev shortcut, not the console's path.
+- **Next: several programs in memory at once.** The recompiler assumes one
+  program at a time, linked and loaded at 0 ("one module is active at a
+  time", `recomp/__main__.py`). `LoadCode` and `LoadProgramPrio` put a
+  second and third image wherever the allocator has room, and the image
+  relocates itself (the AIF's own stub, entered by `ExecuteAsSubroutine`);
+  so the emitted C++ has to take every address it derives from pc from the
+  module's base at run time, and `arm_lookup` has to find the module an
+  address falls in. Then `LoadCode` and the rest as 23.10's File folio does
+  them (it is in 23.10's `os_code`, the third AIF, at 0x10064: the loader
+  is its 0x6fac).
+- Each kit change: commit in `D:\Homebrew6\3dokit`, the kit's regression
+  set (Crash 'n Burn included) before and after, `git pull --ff-only` here.
 
 ### 0. Move the tools onto `3dokit/`, and the ground gets its palettes back
 
@@ -690,6 +709,13 @@ Session logs, newest first. Nothing below this line is work to do.
   `3dokit.dsp --used` and `behave.py --verify` (156/156) all run on it.
 - **The native rewrite is the oracle**, the user's call.
 - The recompiler's baseline reproduced here: all of item R's numbers.
+- **Three OS calls done in the kit**, each read in the disc's or the ROM's
+  code and checked against Crash 'n Burn byte for byte (item R).
+- **23.10 brings its own File folio.** The disc's `os_code` is three AIFs --
+  the kernel, the operator and the File folio (15 SWIs and 14 vectors
+  against the ROM folio's 14 and 10: `LoadCode`, `UnloadCode`,
+  `ExecuteAsSubroutine`, `ExecuteAsThread` are new). Its `GetDirectory`
+  builds the path as the ROM's does.
 
 ## Done in session 21
 
