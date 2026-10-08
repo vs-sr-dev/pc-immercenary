@@ -102,19 +102,31 @@ worth doing, but after the run.
     "p=PC-Immercenary/extracted/p" "launchme=PC-Immercenary/extracted/launchme" \
     "p1e=PC-Immercenary/extracted/p1e" \
     "CinepakSubroutine=PC-Immercenary/extracted/Perfect/Film/CinepakSubroutine"
-  build/recomp-build/pfboot extracted --boot --max-calls 50000
+  build/recomp-build/pfboot extracted --boot --trace 0 --max-calls 800000 \
+    --frames DIR --frames-at 6000-100000 --wav out.wav     # the menu, waiting
+  build/recomp-build/pfboot extracted --boot --max-calls 800000 --pad a@7000x1
   ```
 
-  stops at call 1,537, the audio folio's **`MakeSample`** (slot -56), inside
-  CinepakSubroutine. 23.10's (`AUDIOFOLIO` on the disc, 0x27d4) allocates
-  first and then applies the tags; the 1993 one the runtime follows (0x29e4)
-  the other way round. Three DSP instruments it loads have no model yet and
-  play silent (`mixer2x2`, `envelope`, `dcsqxdhalfstereo`). After the
-  subroutine, `launchme` starts `$boot/p` with `LoadProgramPrio` (a task with
-  its own image: the kernel's tags 18-20, 23.10's loader again) and stays
-  alive, talking to it over a message port. `pfboot extracted/p` alone runs
-  to call 99 (`SetAudioItemInfo` of item -1) -- a shortcut, not the
-  console's path.
+  **The front end runs, with its sound** (kit 1f23920, ea1b2e5):
+  CinepakSubroutine plays the 3DO/EA logo, the Five Miles Out logo and the
+  intro film to the Immercenary title (105 s), then the title and the main
+  menu ("New Jump"...) over the credits, for as long as no one presses
+  anything. It took 23.10's `dcsqxdhalfstereo`, `dcsqxdhalfmono`,
+  `envelope` and `mixer2x2` transliterated (an instrument with no model never
+  reads its FIFO, and the stream's audio subscriber waited on that for ever),
+  the audio folio's sample and attachment calls, the kernel's list vectors,
+  and discovery following a hand-written Cinepak routine's lr returns.
+  **Look on Phoenix**: the title's cels carry PRE0's LITERAL bit, which the
+  runtime passes over as Opera does (the guide: reserved).
+- **Next: `LoadProgramPrio("$boot/p", 101)`.** With A at field 7000 the
+  subroutine unloads and `launchme` asks for it, call 291,636: a task with
+  its own image -- 23.10's loader 0x6fac with `program` set (the image from
+  `AllocMemBlocks`, then `CreateItem` of a task with the kernel's tags 18-20
+  and the File folio's 0x3000a/b), which the runtime's `CreateTask` does not
+  make yet (it stops on "a task rather than a thread"). `p` is then a second
+  task beside `launchme`, which stays alive and talks to it over
+  "ShellMsgPort". `pfboot extracted/p` alone runs to call 99
+  (`SetAudioItemInfo` of item -1) -- a shortcut, not the console's path.
 - Each kit change: commit in `D:\Homebrew6\3dokit`, the kit's regression
   set (Crash 'n Burn included) before and after, `git pull --ff-only` here.
 
