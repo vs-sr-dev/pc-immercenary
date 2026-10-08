@@ -118,15 +118,23 @@ worth doing, but after the run.
   and discovery following a hand-written Cinepak routine's lr returns.
   **Look on Phoenix**: the title's cels carry PRE0's LITERAL bit, which the
   runtime passes over as Opera does (the guide: reserved).
-- **Next: `LoadProgramPrio("$boot/p", 101)`.** With A at field 7000 the
-  subroutine unloads and `launchme` asks for it, call 291,636: a task with
-  its own image -- 23.10's loader 0x6fac with `program` set (the image from
-  `AllocMemBlocks`, then `CreateItem` of a task with the kernel's tags 18-20
-  and the File folio's 0x3000a/b), which the runtime's `CreateTask` does not
-  make yet (it stops on "a task rather than a thread"). `p` is then a second
-  task beside `launchme`, which stays alive and talks to it over
-  "ShellMsgPort". `pfboot extracted/p` alone runs to call 99
-  (`SetAudioItemInfo` of item -1) -- a shortcut, not the console's path.
+- **The game runs (session 23, kit c0614cd).** `LoadProgramPrio` makes `p`
+  a second task with its own image beside `launchme`; it plays the jump
+  film and the loading tube, loads the world, and plays the Garden: walls,
+  floor, sky, HUD, people, "WARNING: LOW DEFENSE / FIND A YELLOW SPIRE".
+  With no one at the pad the player dies, `p` exits ("GAME: Exiting main
+  game task"), the kernel deletes it, and `launchme` goes on to
+  CinepakSubroutine again -- 1.5 million calls without a stop. The replay:
+  `pfboot extracted --boot --pad start@2171+4 --pad a@3103+7 --pad
+  start@3612+1` (the user's own presses, the console's path).
+  **The drive's reading time is modelled now** (150 blocks a second): the
+  loading tube's fade must end before the loading's two signals, or they
+  merge and the game waits for ever. It moved every timing: the films
+  start ~0.9 s later each, the title at ~108 s, and Crash 'n Burn's frames
+  baseline wants re-recording (pc-crashnburn's docs/10).
+- **Next: play it.** The window, the pad, the user's eyes on the Garden
+  against the console. Then whatever the game asks for next; the death
+  film and `launchme`'s menu after it are the first unseen stretch.
 - **Seen on the console (session 23)**, side by side with `pfboot --window`:
   everything to the last film the same, the title and menu cels included,
   but the menu's music, which the console plays and the runtime did not.
