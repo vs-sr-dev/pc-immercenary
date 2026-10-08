@@ -226,6 +226,18 @@ worth doing, but after the run.
   `healingspire-in-game.wav`, `badspire-in-game.wav`.
 - The heredoc trap bit three times this session: C++ or Python with `\n`
   or `\\` goes through Edit, never through a shell heredoc.
+- **Kit 81c0e85 and 9a38b90** (pc-doctorhauzer's session 1, the third
+  game, Portfolio 20.21): `aif` with no relocation list after a NOP at
+  0x04; each folio's own version (`pf_system_version`) decides
+  `CreateScreenGroup`'s table and the Graphics and audio folios' **node
+  sizes** -- this disc's 23.10 sizes now (template 0x70, sample 0x9c,
+  ScreenGroup 0x74, VDL 0x44 ...), where 1993's were used. So **this
+  game's traces move**: they differ from 5ff9786/aeb5a62's only in OS
+  addresses (0 lines once 0x004xxxxx words are masked, over `p`'s 539,774
+  lines and a `--boot` replay's 810,152); a replayed game's 294 frames and
+  its sound are the same byte for byte. Traces taken from 9a38b90 on are
+  the new baseline (`osmask.py` in pc-doctorhauzer's session 1 scratchpad,
+  `21eda0d0-.../scratchpad`, compares two traces that way).
 - pc-crashnburn's submodule follows the kit too (at ea1b2e5 since its
   f274f3f, the user's wish): after each kit commit, `git pull --ff-only` in
   both ports' submodules, regenerate pc-crashnburn's `build/recomp` when the
