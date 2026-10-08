@@ -132,9 +132,17 @@ worth doing, but after the run.
   merge and the game waits for ever. It moved every timing: the films
   start ~0.9 s later each, the title at ~108 s, and Crash 'n Burn's frames
   baseline wants re-recording (pc-crashnburn's docs/10).
-- **Next: play it.** The window, the pad, the user's eyes on the Garden
-  against the console. Then whatever the game asks for next; the death
-  film and `launchme`'s menu after it are the first unseen stretch.
+- **Played (session 23, kit 93c5529).** The user's first game: menu music
+  confirmed, the jump film right but silent, the world silent, A stopped
+  at `DrawTo`. Now `DrawTo` (the shots' lines), `dcsqxdmono`, `halfmono8`
+  and `noise` are in: the user's presses (`play2-pads.txt` in this
+  session's scratchpad, `035e3872-.../scratchpad`) replay through the
+  world, the death, the debrief film with the faces and launchme's jump
+  statistics, all with sound. `noise.dsp` reads a fixed xorshift32 for the
+  DSP's noise register (the hardware's sequence is unknown).
+- **Next: play it again**, against the console: the world's sounds, the
+  shots, the HUD, the debrief and the statistics screen; then a second
+  jump (`p` is unloaded and loaded again).
 - **Seen on the console (session 23)**, side by side with `pfboot --window`:
   everything to the last film the same, the title and menu cels included,
   but the menu's music, which the console plays and the runtime did not.
