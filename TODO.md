@@ -165,13 +165,13 @@ worth doing, but after the run.
 - **Next:**
   1. **A DSP interpreter** (above): the spires are the only silent sound
      left, and it would check every hand-written model too.
-  2. **The console against the window**, at leisure: the world's sounds,
-     the HUD, the debrief, the statistics, the load times (the drive's
-     150 blocks a second, no seek).
+  2. **The console against the window: done** (the user, end of session
+     23): substantially the same; smoother in the window, but at the
+     right speed, not faster.
   3. **Crash 'n Burn's baselines on this kit**: its frames and pfcheck
      snapshot numbers moved with the drive's time (pc-crashnburn docs/10).
-  4. The memory's rule: the three repositories are published together
-     once Immercenary is playable -- **the user's call**, now that it is.
+  4. **Publishing waits for the spires' sound** (the user's call): the
+     three repositories go out together once item 1 is done.
 - **Seen on the console (session 23)**, side by side with `pfboot --window`:
   everything to the last film the same, the title and menu cels included,
   but the menu's music, which the console plays and the runtime did not.
