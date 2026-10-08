@@ -150,8 +150,10 @@ worth doing, but after the run.
   python (mingw64 first on PATH) has no capstone and every discovery fails.
 - The heredoc trap bit three times this session: C++ or Python with `\n`
   or `\\` goes through Edit, never through a shell heredoc.
-- pc-crashnburn's submodule is still at c6a174b: pulling it to the kit's
-  head is the user's call.
+- pc-crashnburn's submodule follows the kit too (at ea1b2e5 since its
+  f274f3f, the user's wish): after each kit commit, `git pull --ff-only` in
+  both ports' submodules, regenerate pc-crashnburn's `build/recomp` when the
+  emitter changes, and record the commit in its `docs/10-3dokit.md`.
 
 ### 0. Move the tools onto `3dokit/`, and the ground gets its palettes back
 
