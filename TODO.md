@@ -249,6 +249,15 @@ worth doing, but after the run.
 - **Kit aceddb7** (pc-doctorhauzer's session 2): Kernel -88 `GetSysErr`
   for the 20.21 kernel (`pf_err`; on 23.10 a call stops, and this game
   makes none). Nothing moves here: the same traces as 1f46573's.
+- **Kit 0903c17** (pc-doctorhauzer's session 3): the `ram` device and the
+  NVRAM (`pfboot --nvram DIR`), the File folio's linked-memory filesystem,
+  signed and privileged programs, the shell running `System/Programs`'
+  programs when the build has them (this build has no `lmadm`: passed over
+  as before). **A new baseline for the traces**: the device is one more
+  item, so later item numbers are one greater and later OS addresses
+  move; nothing else -- without the device, `p`'s trace (539,774 lines) and
+  the `--boot` replay to 300,000 calls (810,154 lines) are aceddb7's byte
+  for byte, and with it they differ in item numbers and OS addresses only.
 - pc-crashnburn's submodule follows the kit too (at ea1b2e5 since its
   f274f3f, the user's wish): after each kit commit, `git pull --ff-only` in
   both ports' submodules, regenerate pc-crashnburn's `build/recomp` when the
