@@ -85,24 +85,36 @@ worth doing, but after the run.
   disc does it (kit 680b8d9, 107b27a): `GetDirectory`; `CreateThread`'s
   tag 24, which is 23.10's; and the 1994 shell's `@` and `%`, without which
   `AppStartup`'s aliases (`$Perfect`...) were never made.
-- **Where it stands.** `pfboot extracted --boot` (the console's way) runs
-  `launchme`, which stops at the File folio's `LoadCode`: launchme is
-  Immercenary's own little shell -- it runs
-  `$Perfect/Film/CinepakSubroutine` with `LoadCode` /
-  `ExecuteAsSubroutine` / `UnloadCode`, then `$boot/p` with
-  `LoadProgramPrio` and stays alive, talking to `p` over a message port.
-  `pfboot extracted/p` alone runs on to call 99 (`SetAudioItemInfo` of item
-  -1) -- a dev shortcut, not the console's path.
-- **Next: several programs in memory at once.** The recompiler assumes one
-  program at a time, linked and loaded at 0 ("one module is active at a
-  time", `recomp/__main__.py`). `LoadCode` and `LoadProgramPrio` put a
-  second and third image wherever the allocator has room, and the image
-  relocates itself (the AIF's own stub, entered by `ExecuteAsSubroutine`);
-  so the emitted C++ has to take every address it derives from pc from the
-  module's base at run time, and `arm_lookup` has to find the module an
-  address falls in. Then `LoadCode` and the rest as 23.10's File folio does
-  them (it is in 23.10's `os_code`, the third AIF, at 0x10064: the loader
-  is its 0x6fac).
+- **Several programs in memory at once** (kit 13d7e68, 5af7ce1): the
+  emitted C++ takes every pc-derived address from its module's base, and
+  the runtime loads code beside the program; `launchme` -- Immercenary's own
+  little shell -- loads `$Perfect/Film/CinepakSubroutine` with 23.10's
+  `LoadCode` (its File folio is the third AIF of its `os_code`, the loader
+  its 0x6fac) at 0x3A60 and runs it with `ExecuteAsSubroutine`; the
+  subroutine relocates itself with its own AIF stub. On the way: GetEnv,
+  23.10's folio-0 SWI numbering, ReadHardwareRandomNumber (a fixed
+  xorshift32 for CLIO's RandSample), IOReqs with a reply port, WaitPort,
+  semaphores, LoadInsTemplate's search ($audio/dsp).
+- **Where it stands.** The build:
+
+  ```sh
+  cd D:/Homebrew6 && python -m 3dokit.recomp --out PC-Immercenary/build/recomp --optest \
+    "p=PC-Immercenary/extracted/p" "launchme=PC-Immercenary/extracted/launchme" \
+    "p1e=PC-Immercenary/extracted/p1e" \
+    "CinepakSubroutine=PC-Immercenary/extracted/Perfect/Film/CinepakSubroutine"
+  build/recomp-build/pfboot extracted --boot --max-calls 50000
+  ```
+
+  stops at call 1,537, the audio folio's **`MakeSample`** (slot -56), inside
+  CinepakSubroutine. 23.10's (`AUDIOFOLIO` on the disc, 0x27d4) allocates
+  first and then applies the tags; the 1993 one the runtime follows (0x29e4)
+  the other way round. Three DSP instruments it loads have no model yet and
+  play silent (`mixer2x2`, `envelope`, `dcsqxdhalfstereo`). After the
+  subroutine, `launchme` starts `$boot/p` with `LoadProgramPrio` (a task with
+  its own image: the kernel's tags 18-20, 23.10's loader again) and stays
+  alive, talking to it over a message port. `pfboot extracted/p` alone runs
+  to call 99 (`SetAudioItemInfo` of item -1) -- a shortcut, not the
+  console's path.
 - Each kit change: commit in `D:\Homebrew6\3dokit`, the kit's regression
   set (Crash 'n Burn included) before and after, `git pull --ff-only` here.
 
@@ -711,6 +723,18 @@ Session logs, newest first. Nothing below this line is work to do.
 - The recompiler's baseline reproduced here: all of item R's numbers.
 - **Three OS calls done in the kit**, each read in the disc's or the ROM's
   code and checked against Crash 'n Burn byte for byte (item R).
+- **Several recompiled programs in memory at once** (kit 13d7e68): every
+  pc-derived address of the emitted C++ is its module's base plus the
+  address linked at 0; Crash 'n Burn's traces and 6,204 frames unchanged.
+  Then 23.10's `LoadCode` / `ExecuteAsSubroutine` and the eight calls
+  CinepakSubroutine needed next (kit 5af7ce1): the disc, started as the
+  console starts it, runs 1,537 OS calls, to `MakeSample`.
+- **23.10 differs from 1993 where it matters here**: its File folio has the
+  loaders; its kernel numbers folio-0 SWIs from 0x100 as kernel SWIs and has
+  `WaitPort` (vector -96, 0x87a0) and `CREATETASK_TAG_ALLOCDTHREADSP`; its
+  shell knows `@` and `%`; its audio folio finds a bare `.dsp` name in
+  `$audio/dsp`. Each went into the kit as a version difference, not as an
+  Immercenary case.
 - **23.10 brings its own File folio.** The disc's `os_code` is three AIFs --
   the kernel, the operator and the File folio (15 SWIs and 14 vectors
   against the ROM folio's 14 and 10: `LoadCode`, `UnloadCode`,
