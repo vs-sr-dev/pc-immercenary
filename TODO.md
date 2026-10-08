@@ -155,9 +155,23 @@ worth doing, but after the run.
 - Kernel -88 `GetSysErr` (an error's text) is not in: the game asks for it
   only when a call has failed, so it now marks a call the runtime got
   wrong rather than a missing feature.
-- **Next: play it again**, against the console: the world's sounds, the
-  shots, the HUD, the debrief and the statistics screen; then a second
-  jump (`p` is unloaded and loaded again).
+- **Playable (end of session 23, kit 5ff9786).** The user played five
+  games in the window; the last three without a stop, two jumps in a row,
+  quitting by closing the window. Each stop on the way is in the kit's
+  log: SKIPX (the third game), the second jump's VRAM -- launchme's screen
+  groups never gave their buffers back -- and an ended task's IOReq still
+  in progress (the fourth). Every game's presses are in this session's
+  scratchpad (`play2-pads.txt` .. `play6-pads.txt`) and replay.
+- **Next:**
+  1. **A DSP interpreter** (above): the spires are the only silent sound
+     left, and it would check every hand-written model too.
+  2. **The console against the window**, at leisure: the world's sounds,
+     the HUD, the debrief, the statistics, the load times (the drive's
+     150 blocks a second, no seek).
+  3. **Crash 'n Burn's baselines on this kit**: its frames and pfcheck
+     snapshot numbers moved with the drive's time (pc-crashnburn docs/10).
+  4. The memory's rule: the three repositories are published together
+     once Immercenary is playable -- **the user's call**, now that it is.
 - **Seen on the console (session 23)**, side by side with `pfboot --window`:
   everything to the last film the same, the title and menu cels included,
   but the menu's music, which the console plays and the runtime did not.
@@ -786,6 +800,27 @@ What is still missing:
 ## History
 
 Session logs, newest first. Nothing below this line is work to do.
+
+## Done in session 23
+
+- **The playtest against the console**: the front end the same to the
+  last film, but the menu's music (kit 5d008e9: `fixedmonosample`,
+  `directout`).
+- **`LoadProgramPrio` and the game** (kit c0614cd): 23.10's loader with
+  `program` set, its kernel's CreateTask of a task with its own image,
+  Kernel -120's command line, a task's end; then what `p` asked for, each
+  read in the disc's 23.10 code -- the event broker's dropped listener,
+  Remove/DeleteScreenGroup and the Graphics ir_Delete, SetAudioItemInfo of
+  no item, Operamath's eight vectors (25,152 checks against the folio in
+  armemu) and its 4x4 engine, the GrafCon setters, SetCEControl, AbortIO,
+  the cel engine reading past VRAM. **The drive's reading time** (150
+  blocks a second): the loading tube's handshake needs it; it moved
+  every timing, Crash 'n Burn's frames baseline with it.
+- **The user's games** (kit 93c5529 .. 5ff9786): DrawTo, `dcsqxdmono`,
+  `halfmono8`, `noise`; audio names without case and an instrument's
+  info; SKIPX; the screen groups' buffers given back on 23.10
+  (`pf_os_release()` reads the disc's kernel version); an ended task's
+  IOReq aborted. Five games, the last three clean, two jumps in a row.
 
 ## Done in session 22
 
