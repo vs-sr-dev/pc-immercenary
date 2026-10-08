@@ -162,9 +162,18 @@ worth doing, but after the run.
   groups never gave their buffers back -- and an ended task's IOReq still
   in progress (the fourth). Every game's presses are in this session's
   scratchpad (`play2-pads.txt` .. `play6-pads.txt`) and replay.
-- **Next:**
+- **Next session's plan (the user's): the spires, a final check, then
+  publish all three.**
   1. **A DSP interpreter** (above): the spires are the only silent sound
      left, and it would check every hand-written model too.
+  2. **The final check**: the regression set and Crash 'n Burn's
+     baselines re-recorded on the kit (item 3 below), a game replayed
+     from each `playN-pads.txt`, the user's last look.
+  3. **Publish PC-Immercenary, pc-crashnburn and 3dokit together**: the
+     submodules' URL from `D:/Homebrew6/3dokit` to the published one,
+     both on the kit's head (see the memory's publishing note).
+- **Also open:**
+  1. (the interpreter, as above)
   2. **The console against the window: done** (the user, end of session
      23): substantially the same; smoother in the window, but at the
      right speed, not faster.
