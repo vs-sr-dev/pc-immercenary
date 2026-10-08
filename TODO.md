@@ -258,6 +258,13 @@ worth doing, but after the run.
   move; nothing else -- without the device, `p`'s trace (539,774 lines) and
   the `--boot` replay to 300,000 calls (810,154 lines) are aceddb7's byte
   for byte, and with it they differ in item numbers and OS addresses only.
+- **Kit c11e36d** (pc-doctorhauzer's session 4): KernelBase's and the
+  folios' versions as the kernel gives them -- here all 23.10 now, as on
+  the console --; OPERAMATH 20.53's `MulVec3Mat33_F16` and `Dot3_F16`,
+  `SleepAudioTicks`, a cue's deletion by KernelBase's version (above 0x13:
+  its signal freed in its owner's task), the timer's unit 1 `CMD_READ`.
+  Nothing moves: `p`'s trace and the `--boot` replay to 300,000 calls are
+  0903c17's byte for byte.
 - pc-crashnburn's submodule follows the kit too (at ea1b2e5 since its
   f274f3f, the user's wish): after each kit commit, `git pull --ff-only` in
   both ports' submodules, regenerate pc-crashnburn's `build/recomp` when the
