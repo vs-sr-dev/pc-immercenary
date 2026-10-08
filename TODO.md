@@ -246,6 +246,9 @@ worth doing, but after the run.
   0x4E0000), `pfcheck` on 20.45. **Nothing moves here**: `p`'s trace
   (539,774 lines) and the `--boot` replay to 300,000 calls (810,152 lines)
   are 9a38b90's byte for byte.
+- **Kit aceddb7** (pc-doctorhauzer's session 2): Kernel -88 `GetSysErr`
+  for the 20.21 kernel (`pf_err`; on 23.10 a call stops, and this game
+  makes none). Nothing moves here: the same traces as 1f46573's.
 - pc-crashnburn's submodule follows the kit too (at ea1b2e5 since its
   f274f3f, the user's wish): after each kit commit, `git pull --ff-only` in
   both ports' submodules, regenerate pc-crashnburn's `build/recomp` when the
