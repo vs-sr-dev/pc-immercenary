@@ -238,6 +238,14 @@ worth doing, but after the run.
   its sound are the same byte for byte. Traces taken from 9a38b90 on are
   the new baseline (`osmask.py` in pc-doctorhauzer's session 1 scratchpad,
   `21eda0d0-.../scratchpad`, compares two traces that way).
+- **Kit 1f46573** (pc-doctorhauzer's session 2): the System images'
+  decompressor in C++ (`pf_aif`; this disc's `ja.language` does not unpack,
+  on armemu either: its decompressor's copy of itself overruns itself),
+  GRAPHIX laid at 0x4E0000 with its built-in font for 20.45 only
+  (`pf_font`; on 23.10 nothing is laid, and the OS's allocations stop below
+  0x4E0000), `pfcheck` on 20.45. **Nothing moves here**: `p`'s trace
+  (539,774 lines) and the `--boot` replay to 300,000 calls (810,152 lines)
+  are 9a38b90's byte for byte.
 - pc-crashnburn's submodule follows the kit too (at ea1b2e5 since its
   f274f3f, the user's wish): after each kit commit, `git pull --ff-only` in
   both ports' submodules, regenerate pc-crashnburn's `build/recomp` when the
