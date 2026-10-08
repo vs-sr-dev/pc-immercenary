@@ -1,8 +1,11 @@
 # pc-immercenary
 
-Reverse-engineering notes and tooling for **Immercenary** (Panasonic 3DO, 1995,
-Five Miles Out / Panasonic Software Company), with the long-term goal of a
-native PC port.
+A PC port of **Immercenary** (Panasonic 3DO, 1995, Five Miles Out /
+Panasonic Software Company): **the game's own ARM60 code, statically
+recompiled to C++ and running on a reimplementation of the 3DO's
+Portfolio OS** -- from the power-on logos and the films to the menus, the
+jumps into Perfect and the game itself, with its sound, in a window in
+real time. It is playable.
 
 Immercenary never received a port or a re-release on any other platform. The
 only shipping build is the 3DO ARM6 executable on the retail CD.
@@ -11,11 +14,65 @@ only shipping build is the 3DO ARM6 executable on the retail CD.
 > assets, no copyrighted media. The tools here operate on a disc image that you
 > must supply yourself from your own copy of the game.
 
+## Two routes, and the pivot between them
+
+The port began as a **reverse-engineering and a rewrite**: every format on
+the disc read to the last byte, the engine's routines read one by one and
+transcribed -- the world loader, the ground, the fonts, the films, the
+save game, and the rithms' whole decision loop (`tools/behave.py`, 150-odd
+checks against the image) -- and the city redrawn by a native viewer
+(`native/`) that two independent renderers hold to the pixel. Half the
+code had a name; the CEL engine, the DSP, the front end and the
+encounters had not been opened.
+
+Then pc-crashnburn, the sister port of Crash 'n Burn, reached the end by
+another route: **static recompilation**. Its 3DO half grew into
+[**3dokit**](https://github.com/vs-sr-dev/3dokit), a toolkit of its own:
+an ARM60 decoder and interpreter, a recompiler that turns a 3DO program
+into C++, and a runtime that answers every OS call the way the console's
+own OS code does (read on the disc and in the console ROM) -- the kernel,
+the File, Graphics and audio folios, the cel engine, the DSP, the drive.
+**This port pivoted onto that route** ([30](docs/30-pipeline-pivot.md)):
+Immercenary's programs (`launchme`, its little shell; `p`, the game; `p1e`,
+the final encounter; `CinepakSubroutine`, the film player) are recompiled
+whole, and the game runs as the disc runs it, its own shell scripts
+included. (`SpeechSubroutine`, the DOAsys spire's talker, is not in the
+build yet.) What the rewrite read does not go
+to waste: it is the oracle the recompiled game is checked against, and
+every 3DO thing it found went into the kit.
+
+The kit is shared with pc-crashnburn and checked on both discs (and on
+OMF2097's): every change to it is held against Crash 'n Burn's traces,
+frames, sound and the 1993 OS's own code before it lands here.
+
+## Running the game
+
+You need your own disc image, extracted, and the toolchain in
+[3dokit's README](3dokit/README.md) (clang++ and SDL3; Python 3 for the
+tools).
+
+```sh
+git clone --recursive https://github.com/vs-sr-dev/pc-immercenary
+python tools/operafs.py "Immercenary (USA).img" -x extracted
+
+# Recompile the five programs to C++, then build the runtime and pfboot
+python -m 3dokit.recomp --out build/recomp \
+  "p=extracted/p" "launchme=extracted/launchme" "p1e=extracted/p1e" \
+  "CinepakSubroutine=extracted/Perfect/Film/CinepakSubroutine"
+cmake -G Ninja -S build/recomp -B build/recomp-build -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=clang++
+ninja -C build/recomp-build pfboot
+
+# Boot the disc as the console does, in a window, with the pad on the keyboard
+build/recomp-build/pfboot extracted --boot --window
+# ...or headless, with the sound to a WAV and recorded presses replayed
+build/recomp-build/pfboot extracted --boot --wav out.wav --pad a@3103+7 --pad start@3612+1
+```
+
 ## What is here
 
 | Path | Contents |
 |---|---|
-| `3dokit/` | Git submodule (`D:/Homebrew6/3dokit`), shared with pc-crashnburn: Opera disc images, AIF executables, the ARM60 decoder, interpreter and static recompiler to C++, the Portfolio runtime the recompiled code runs on (`pfboot`), cels, the DataStream with Cinepak and SDX2, AIFF, the DSP. Its own [README](3dokit/README.md) is the reference |
+| `3dokit/` | Git submodule ([vs-sr-dev/3dokit](https://github.com/vs-sr-dev/3dokit)), shared with [pc-crashnburn](https://github.com/vs-sr-dev/pc-crashnburn): Opera disc images, AIF executables, the ARM60 decoder, interpreter and static recompiler to C++, the Portfolio runtime the recompiled code runs on (`pfboot`), cels, the DataStream with Cinepak and SDX2, AIFF, the DSP. Its own [README](3dokit/README.md) is the reference |
 | `native/` | A walkable viewer of the overworld, props, item spawns and *walking* rithms included: SDL2, a software span rasteriser, ~84 fps at 960x600 with 1,594 sprites in the world, the game's own radar-map collision, and pixel-identical to the Python reference renderer over a swept grid of cameras and mover tick counts |
 | `tools/` | Opera (3DO) filesystem reader, CEL/anim decoder, CEL bank reader, B3D world parser, ground tile map reader, OBJ exporter, textured software renderer, font decoder, DataStream demuxer with Cinepak and SDX2 decoders, HUD radar map decoder, ARM cross-referencer and call-graph reader, symbol-file builder, OS-surface scanner, DSP instrument reader, library-versus-game classifier, the hand-written ARM math module reimplemented and self-checking, the 512-byte game state read out of the code, a function-level pairing of the two game executables, a reachability pass over the call graph, the placed-prop reader, a reimplementation of the three mover spawners, the radar-map probe they place against and the walk they then do, a scene packer for the native viewer and a frame differ |
 | `docs/` | Findings: disc layout, file formats, executables, roadmap, B3D format, code map, CEL banks, the ground, the OS surface, the second B3D family, the fonts, the DataStream, the HUD maps, the DSP instruments, library versus game code, the DOA system and its lip sync, the front end, the save game, the DOAsys spire, the final encounter, the call graph, the props, the item spawns, the cast, where the movers are, the decision, the DOA field, what 3dokit found, the pipeline pivot |
@@ -132,13 +189,22 @@ python tools/armxref.py extracted/p1e -S tools/p1e.sym -d 162a4
 
 ## Status
 
-Early, but moving. Nothing is playable yet.
+**Playable.** The recompiled game boots the disc as the console does and
+plays it through: the logos and the intro film, the title and the main
+menu with its music, the jump film and the loading tube, the city with its
+people, shots, spires and sound, the death and the debrief, and a second
+jump after the first. Side by side with a real console the user found it
+substantially the same -- smoother in the window, at the right speed.
 
-- **The pipeline pivoted.** The game's own ARM60 code is to run statically
-  recompiled on 3dokit's Portfolio runtime, the route pc-crashnburn took to
-  the end. `p` already boots on it as far as its 27th OS call. The rewrite
-  below stays as the oracle the recompiled game is checked against.
-  [30](docs/30-pipeline-pivot.md).
+- **The pipeline pivoted** ([30](docs/30-pipeline-pivot.md)): the game's
+  own ARM60 code runs statically recompiled on 3dokit's Portfolio runtime,
+  the route pc-crashnburn took to the end. Each OS call the game made on
+  the way was added to the kit as the disc's own OS code (Portfolio 23.10)
+  does it: programs loaded beside each other and run as tasks of their
+  own, the drive's reading time, 23.10's DSP instruments and, last, an
+  interpreter of the DSP that plays the game's own instruments (the
+  spires' sound) and holds every hand-written one to its code, frame for
+  frame. The rewrite below stays as the oracle.
 - **The 3DO half is its own toolkit now.** [`3dokit/`](3dokit/) holds what
   in this port is 3DO rather than Immercenary, checked on a second disc
   (the OMF2097 port's) and with a C runtime that decodes every cel, film and
