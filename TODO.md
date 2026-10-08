@@ -127,8 +127,15 @@ worth doing, but after the run.
   task beside `launchme`, which stays alive and talks to it over
   "ShellMsgPort". `pfboot extracted/p` alone runs to call 99
   (`SetAudioItemInfo` of item -1) -- a shortcut, not the console's path.
-- **To look at on Phoenix and the console** (the user's eyes; what the
-  runtime decided without the hardware's word):
+- **Seen on the console (session 23)**, side by side with `pfboot --window`:
+  everything to the last film the same, the title and menu cels included,
+  but the menu's music, which the console plays and the runtime did not.
+  That was `launchme`'s SoundSpooler streaming `$Music/Intro.music` through
+  23.10's `fixedmonosample` and `directout`, which had no model (kit
+  5d008e9: now sample for sample the AIFF's). Then the console goes on into
+  the game and the runtime stops at `LoadProgramPrio`.
+- **What the runtime still decides without the hardware's word** (the
+  list from before the console's look, kept for a closer one):
   1. The title and menu cels (PRE0's LITERAL bit passed over).
   2. The intro's sound: SDX2 stereo and mono as transliterated (the stereo
      sum has no CLIP: clicks on loud passages?), the envelope's fades, the
