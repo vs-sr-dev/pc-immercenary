@@ -64,7 +64,28 @@ the one that was wrong*, below.
 
 ## The work
 
-Do these in order.
+**The pipeline pivoted** ([30](docs/30-pipeline-pivot.md)): the game's own
+code runs recompiled on 3dokit's Portfolio runtime, as Crash 'n Burn does.
+That is the work now. Items 0 onwards are the oracle's: the native rewrite
+stays as what the recompiled game is checked against, so they are still
+worth doing, but after the run.
+
+### R. Boot `p` on `pfboot`, one OS call at a time
+
+`3dokit/` is the submodule since session 22. The baseline, reproduced on it
+(c6a174b, clang++ from msys64's mingw64; commands in
+[30](docs/30-pipeline-pivot.md)):
+
+- `python -m 3dokit.recomp --out build/recomp --optest "p=extracted/p"
+  "launchme=extracted/launchme"`: `p` 1,240 functions, 80,388
+  instructions; `launchme` 74 and 2,142. Self-test: 891 functions, 10,580
+  vectors, 0 failures.
+- `pfboot extracted/p --max-calls 50000` stops at call 27, `04C1C4 swi
+  0x30008 GetDirectory` (`r0=001FFEB0 r1=000000FF r2=00000001`): **the first
+  piece of work**. Read it in Portfolio 23.10's own code on this disc, do it
+  in the kit as that code does it, run on. Each kit change: commit in
+  `D:\Homebrew6\3dokit`, the kit's regression set (Crash 'n Burn included)
+  before and after, `git pull --ff-only` here.
 
 ### 0. Move the tools onto `3dokit/`, and the ground gets its palettes back
 
@@ -659,6 +680,16 @@ What is still missing:
 ## History
 
 Session logs, newest first. Nothing below this line is work to do.
+
+## Done in session 22
+
+- **The pipeline pivot** ([30](docs/30-pipeline-pivot.md)), with the
+  user's OK: the in-tree `3dokit/` replaced by the submodule
+  `D:/Homebrew6/3dokit` at c6a174b. Nothing in `tools/` or `native/`
+  imported the old copy, so nothing broke; `3dokit.check` over the image,
+  `3dokit.dsp --used` and `behave.py --verify` (156/156) all run on it.
+- **The native rewrite is the oracle**, the user's call.
+- The recompiler's baseline reproduced here: all of item R's numbers.
 
 ## Done in session 21
 

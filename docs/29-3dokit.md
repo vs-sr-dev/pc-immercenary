@@ -10,6 +10,12 @@ way ps2kit lives inside pc-extermination: until a second 3DO game is
 ported, one game does not make a platform. When one is, it comes out with
 its history (`git subtree split --prefix=3dokit`) and becomes a submodule.
 
+*It has come out.* pc-crashnburn was the second game: the kit was split
+from this repository at 76bf14d into `D:\Homebrew6\3dokit`, grew there the
+ARM60 recompiler and the Portfolio runtime, and is a submodule here since
+session 22. What this page says is about the kit as it was at the split;
+[30](30-pipeline-pivot.md) is what it is now and what this port does with it.
+
 Its own [README](../3dokit/README.md) is the reference: what each module
 does, what a 3DO disc looks like, and what every claim was checked on.
 
