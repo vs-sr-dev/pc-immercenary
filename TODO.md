@@ -276,6 +276,15 @@ worth doing, but after the run.
   (471,859,208 bytes) is the same byte for byte.
 - **Kit 5d23270** (pc-doctorhauzer's session 5): the README only --
   pc-doctorhauzer among the ports, and the README swept.
+- **Kit b1b7739** (pc-escapefrommonstermanor's session 1): discovery finds a
+  frameless function reached only by a pointer from a literal pool;
+  Operamath's `MulMat33Mat33_F16`, Graphics' `FillRect`; cels with CCBPRE
+  clear and DataStreams with no `SHDR` in the file readers. The generated
+  C++ gains four functions (the C library's `return 0` stub reached by
+  pointer in `p`, `p1e`, `launchme` and `CinepakSubroutine`); `p`'s self-test
+  with them 0 failures. **Nothing moves**: `p`'s trace and the `--boot`
+  replay to 300,000 calls are 5d23270's byte for byte, and this disc's 48
+  streams and 460 cel files read the same (Python and C).
 - pc-crashnburn's submodule follows the kit too (at ea1b2e5 since its
   f274f3f, the user's wish): after each kit commit, `git pull --ff-only` in
   both ports' submodules, regenerate pc-crashnburn's `build/recomp` when the
