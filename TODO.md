@@ -285,6 +285,13 @@ worth doing, but after the run.
   with them 0 failures. **Nothing moves**: `p`'s trace and the `--boot`
   replay to 300,000 calls are 5d23270's byte for byte, and this disc's 48
   streams and 460 cel files read the same (Python and C).
+- **Kit 45a81b0** (pc-escapefrommonstermanor's session 2): the audio
+  folio's envelopes -- AUDIOFOLIO 21.10's code, which is this disc's 23.10
+  instruction for instruction; GRAPHIX's font keyed by build as well as
+  version; `pfcheck` for GRAPHIX 20.45 build 419. **Nothing moves**: `p`'s
+  trace (539,774 lines) and the `--boot` replay to 300,000 calls (810,154
+  lines) are b1b7739's byte for byte -- the game makes no envelope so far,
+  and GRAPHIX 23.10 has no font table here.
 - pc-crashnburn's submodule follows the kit too (at ea1b2e5 since its
   f274f3f, the user's wish): after each kit commit, `git pull --ff-only` in
   both ports' submodules, regenerate pc-crashnburn's `build/recomp` when the
