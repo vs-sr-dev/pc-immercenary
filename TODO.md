@@ -292,6 +292,9 @@ worth doing, but after the run.
   trace (539,774 lines) and the `--boot` replay to 300,000 calls (810,154
   lines) are b1b7739's byte for byte -- the game makes no envelope so far,
   and GRAPHIX 23.10 has no font table here.
+- **Kit 42a44c2**: the README only (pc-escapefrommonstermanor among the
+  ports; the cel engine's missing time among the gaps). Nothing to build
+  or run.
 - pc-crashnburn's submodule follows the kit too (at ea1b2e5 since its
   f274f3f, the user's wish): after each kit commit, `git pull --ff-only` in
   both ports' submodules, regenerate pc-crashnburn's `build/recomp` when the
