@@ -274,6 +274,8 @@ worth doing, but after the run.
   differ only in the `sample N: ... rate` lines, now right (0x56220000,
   0x56ee0000, 0xac440000); the replay's sound to 1,500,000 calls
   (471,859,208 bytes) is the same byte for byte.
+- **Kit 5d23270** (pc-doctorhauzer's session 5): the README only --
+  pc-doctorhauzer among the ports, and the README swept.
 - pc-crashnburn's submodule follows the kit too (at ea1b2e5 since its
   f274f3f, the user's wish): after each kit commit, `git pull --ff-only` in
   both ports' submodules, regenerate pc-crashnburn's `build/recomp` when the
