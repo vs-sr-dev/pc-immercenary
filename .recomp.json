@@ -1,0 +1,11 @@
+{
+  "$schema": "https://recomp.fyi/schema/v1.json",
+  "game": "Immercenary",
+  "system": "3DO",
+  "type": "recomp",
+  "toolchain": "3dokit",
+  "status": "in-progress",
+  "targets": [
+    "Windows"
+  ]
+}
